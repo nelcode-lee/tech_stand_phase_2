@@ -1,0 +1,11 @@
+# RAG ingestion & API
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# Vector store: Supabase (pgvector via vecs)
+vecs>=0.4.0
+
+# Embeddings
+openai>=1.12.0
