@@ -39,6 +39,9 @@ ENV/
 # Local data (ChromaDB if ever used locally)
 chroma_data/
 
+# Proprietary/sensitive documents (keep local only)
+src/*.doc
+
 # OS
 .DS_Store
 Thumbs.db

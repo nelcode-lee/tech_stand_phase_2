@@ -9,3 +9,6 @@ vecs>=0.4.0
 
 # Embeddings
 openai>=1.12.0
+
+# Local dev (load .env for scripts)
+python-dotenv>=1.0.0

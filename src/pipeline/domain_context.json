@@ -1,0 +1,22 @@
+{
+  "food_safety_haccp": {
+    "severity_floor": 4,
+    "note": "Food safety / HACCP requirements — Severity always ≥ 4"
+  },
+  "environmental_health": {
+    "severity_floor": 3,
+    "note": "Environmental health requirements — Severity always ≥ 3"
+  },
+  "allergen_controls": {
+    "severity_floor": 5,
+    "note": "Allergen controls — Severity = 5 (regulatory + safety)"
+  },
+  "operational_efficiency": {
+    "severity_cap": 2,
+    "note": "Operational efficiency only — Severity ≤ 2"
+  },
+  "labelling_documentation": {
+    "severity_range": [2, 3],
+    "note": "Labelling / documentation — Severity 2–3 depending on regulatory applicability"
+  }
+}

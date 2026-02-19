@@ -1,6 +1,14 @@
-"""Tech standards Phase 2 — FastAPI app. RAG ingest (Workato) + future /analyse pipeline."""
+"""Tech standards Phase 2 — FastAPI app. RAG ingest (Workato) + agent pipeline /analyse."""
+from pathlib import Path
+try:
+    from dotenv import load_dotenv
+    load_dotenv(Path(__file__).resolve().parent / ".env")
+except ImportError:
+    pass
+
 from fastapi import FastAPI
 from src.rag.routes import router as ingest_router
+from src.pipeline.routes import router as pipeline_router
 
 app = FastAPI(
     title="Tech Standards RAG",
@@ -9,6 +17,7 @@ app = FastAPI(
 )
 
 app.include_router(ingest_router)
+app.include_router(pipeline_router)
 
 
 @app.get("/health")

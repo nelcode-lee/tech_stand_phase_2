@@ -1,0 +1,22 @@
+SOP-001: Hand Washing Procedure
+
+Scope
+This procedure applies to all production areas at Cranswick sites.
+
+Responsibilities
+- Site Managers: ensure compliance
+- Operatives: follow the procedure
+
+Procedure
+1. Wet hands under running water.
+2. Apply soap and scrub for at least 20 seconds.
+3. Rinse thoroughly under clean water.
+4. Dry hands with disposable paper towels.
+5. Use hand sanitiser before entering production area.
+
+Records
+Complete the Hand Washing Log after each wash.
+
+Related Documents
+- Policy P-001: Food Safety
+- Work Instruction WI-012: Hand Sanitiser Application

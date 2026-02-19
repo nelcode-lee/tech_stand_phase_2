@@ -16,6 +16,17 @@ def get_embedding_client() -> OpenAI:
     return OpenAI(api_key=os.environ.get("OPENAI_API_KEY", ""), **kwargs)
 
 
+def embed_text(text: str, client: OpenAI | None = None) -> list[float]:
+    """Embed a single text string for retrieval query."""
+    if not text or not text.strip():
+        return []
+    client = client or get_embedding_client()
+    response = client.embeddings.create(model=EMBEDDING_MODEL, input=[text.strip()])
+    if response.data:
+        return response.data[0].embedding
+    return []
+
+
 def embed_chunks(chunks: list[DocumentChunk], client: OpenAI | None = None) -> list[list[float]]:
     """
     Embed all chunk texts; returns list of vectors in same order as chunks.

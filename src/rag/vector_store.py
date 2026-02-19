@@ -4,7 +4,7 @@ import os
 
 import vecs
 
-from src.rag.models import DocumentChunk
+from src.rag.models import DocumentChunk, DocLayer
 
 COLLECTION_NAME = "document_chunks"
 # text-embedding-3-small dimension
@@ -14,8 +14,9 @@ SUPABASE_DB_URL = os.environ.get("SUPABASE_DB_URL", "")
 
 
 def _chunk_to_metadata(chunk: DocumentChunk) -> dict:
-    """vecs metadata: scalar or JSON string for lists."""
+    """vecs metadata: scalar or JSON string for lists. Includes text for retrieval."""
     return {
+        "text": chunk.text,
         "doc_layer": chunk.doc_layer.value,
         "sites": json.dumps(chunk.sites),
         "policy_ref": chunk.policy_ref or "",
@@ -66,3 +67,76 @@ def delete_by_document_id(document_id: str, collection=None) -> None:
         return
     coll = collection or get_collection()
     coll.delete(filters={"document_id": {"$eq": document_id}})
+
+
+def _metadata_to_chunk(record_id: str, metadata: dict) -> DocumentChunk | None:
+    """Convert vecs record metadata back to DocumentChunk."""
+    text = metadata.get("text", "")
+    if not text:
+        return None
+    try:
+        sites_raw = metadata.get("sites", "[]")
+        sites = json.loads(sites_raw) if isinstance(sites_raw, str) else (sites_raw or [])
+    except (json.JSONDecodeError, TypeError):
+        sites = []
+    layer_val = metadata.get("doc_layer", "sop")
+    return DocumentChunk(
+        text=text,
+        doc_layer=DocLayer(layer_val) if layer_val in ("policy", "principle", "sop", "work_instruction") else DocLayer.sop,
+        sites=sites,
+        policy_ref=metadata.get("policy_ref") or None,
+        document_id=metadata.get("document_id") or None,
+        source_path=metadata.get("source_path") or None,
+        title=metadata.get("title") or None,
+        library=metadata.get("library") or None,
+        chunk_index=int(metadata.get("chunk_index", 0)),
+    )
+
+
+def query_chunks(
+    embedding: list[float],
+    doc_layer: str | None = None,
+    policy_ref: str | None = None,
+    sites: list[str] | None = None,
+    limit: int = 20,
+    collection=None,
+) -> list[DocumentChunk]:
+    """
+    Query the vector store for similar chunks. Returns DocumentChunks with metadata.
+    Filters by doc_layer, policy_ref; sites filter uses $contains on stored JSON string.
+    """
+    if not embedding:
+        return []
+    coll = collection or get_collection()
+    # Skip vecs filters (vecs has "max 1 entry per filter" constraint); filter in Python
+    fetch_limit = limit * 3 if (doc_layer or policy_ref or sites) else limit
+    results = coll.query(
+        data=embedding,
+        limit=fetch_limit,
+        filters=None,
+        include_value=True,
+        include_metadata=True,
+    )
+    chunks: list[DocumentChunk] = []
+    for rec in results:
+        if isinstance(rec, tuple):
+            # (id, value, metadata) when include_metadata and include_value
+            rec_id = rec[0]
+            metadata = rec[2] if len(rec) > 2 else {}
+        elif hasattr(rec, "id"):
+            rec_id = rec.id
+            metadata = getattr(rec, "metadata", {}) or {}
+        else:
+            continue
+        chunk = _metadata_to_chunk(rec_id, metadata)
+        if chunk:
+            if doc_layer and (chunk.doc_layer.value if hasattr(chunk.doc_layer, "value") else str(chunk.doc_layer)) != doc_layer:
+                continue
+            if policy_ref and (chunk.policy_ref or "") != policy_ref:
+                continue
+            if sites and chunk.sites and not any(s in chunk.sites for s in sites):
+                continue
+            chunks.append(chunk)
+            if len(chunks) >= limit:
+                break
+    return chunks
