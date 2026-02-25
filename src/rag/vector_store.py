@@ -41,6 +41,15 @@ def get_collection(client: vecs.Client | None = None):
     return client.get_or_create_collection(name=COLLECTION_NAME, dimension=EMBEDDING_DIMENSION)
 
 
+def create_index(collection=None) -> None:
+    """
+    Create a vector index on the collection for faster similarity search.
+    Uses default cosine_distance (matches embedding similarity). Call after bulk ingest.
+    """
+    coll = collection or get_collection()
+    coll.create_index()
+
+
 def add_chunks(
     chunks: list[DocumentChunk],
     embeddings: list[list[float]],

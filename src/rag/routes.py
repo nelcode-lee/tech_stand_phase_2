@@ -1,15 +1,71 @@
 """FastAPI routes for RAG ingest (called by Workato)."""
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from src.rag.models import (
+    DocLayer,
+    IngestDocumentMetadata,
     IngestDocumentRequest,
     IngestBatchRequest,
     IngestResponse,
     IngestBatchResponse,
 )
 from src.rag.ingest import ingest_document, ingest_batch as do_ingest_batch
+from src.rag.file_extract import extract_text, supported_extensions
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
+
+ALLOWED_EXTENSIONS = tuple(f".{ext}" for ext in supported_extensions() if ext)
+
+def _parse_doc_layer(s: str) -> DocLayer:
+    if s and s in ("policy", "principle", "sop", "work_instruction"):
+        return DocLayer(s)
+    return DocLayer.sop
+
+
+@router.post("/file", response_model=IngestResponse)
+async def post_ingest_file(
+    file: UploadFile = File(..., description="DOCX or PDF file to ingest"),
+    document_id: str = Form(..., description="Unique document ID"),
+    doc_layer: str = Form("sop", description="Document layer: policy, principle, sop, work_instruction"),
+    sites: str = Form("", description="Comma-separated site codes"),
+    policy_ref: str | None = Form(None),
+    title: str | None = Form(None),
+    library: str | None = Form(None),
+) -> IngestResponse:
+    """
+    Ingest a DOCX or PDF file. Extracts plain text and processes via the standard ingest pipeline.
+    """
+    if not file.filename or not file.filename.lower().endswith(ALLOWED_EXTENSIONS):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only {', '.join(ALLOWED_EXTENSIONS)} files are accepted",
+        )
+
+    raw = await file.read()
+    content = extract_text(raw, file.filename)
+    if not content or not content.strip():
+        raise HTTPException(status_code=400, detail="Could not extract text from file")
+
+    site_list = [s.strip() for s in sites.split(",") if s.strip()] if sites else []
+    metadata = IngestDocumentMetadata(
+        doc_layer=_parse_doc_layer(doc_layer),
+        sites=site_list,
+        policy_ref=policy_ref if policy_ref else None,
+        document_id=document_id,
+        source_path=file.filename,
+        title=title or file.filename,
+        library=library or "Uploads",
+    )
+    req = IngestDocumentRequest(content=content, metadata=metadata)
+    chunks_ingested, err = ingest_document(req)
+    if err:
+        raise HTTPException(status_code=500, detail=err)
+    return IngestResponse(
+        ok=True,
+        chunks_ingested=chunks_ingested,
+        document_id=document_id,
+        message=f"Ingested {chunks_ingested} chunks from {file.filename}",
+    )
 
 
 @router.post("", response_model=IngestResponse)

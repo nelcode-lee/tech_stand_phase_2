@@ -12,3 +12,8 @@ openai>=1.12.0
 
 # Local dev (load .env for scripts)
 python-dotenv>=1.0.0
+
+# File text extraction for upload (DOCX, PDF, legacy .doc on Windows)
+python-docx>=1.1.0
+pypdf>=4.0.0
+pywin32>=306; sys_platform == "win32"

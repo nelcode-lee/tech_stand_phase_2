@@ -5,14 +5,22 @@ Place sample documents here for local RAG ingestion testing (without Workato/Sha
 ## Supported formats
 
 - **.txt** — plain text (no extraction needed)
-- **.docx** — Word documents (requires `python-docx` for text extraction)
-- **.pdf** — PDF (requires `pypdf` or similar for text extraction)
+- **.docx** — Word documents (extracted via `python-docx`)
+- **.pdf** — PDF (extracted via `pypdf`)
 
 ## How to use
 
-1. Add sample files to this folder.
-2. Run the local ingest script (see `scripts/` when available) or `POST /ingest` manually with the file content.
-3. Or use the Python API: the ingest module accepts `content` (plain text) + `metadata`; extract text from files as needed.
+1. Add .txt, .docx, or .pdf files to this folder.
+2. **Ingest all files in folder:**
+   ```bash
+   python scripts/ingest_folder.py
+   # or: python scripts/ingest_folder.py /path/to/other/folder
+   ```
+3. **Ingest a single file (API):**
+   ```bash
+   python scripts/ingest_docx.py sample_docs/your_file.docx doc-id
+   python scripts/ingest_docx.py sample_docs/your_file.pdf doc-id
+   ```
 
 ## Metadata for ingest
 

@@ -89,7 +89,7 @@ The Tech Standards platform is a RAG-based document authoring system for Cranswi
 
 - [ ] **Tests** — `pytest tests/`
 - [ ] **Deployment** — Railway or equivalent
-- [ ] **vecs index** — `create_index()` for better query performance (warning currently logged)
+- [x] **vecs index** — `create_index()` in vector_store; called by ingest_folder.py and via scripts/create_vecs_index.py
 
 ---
 
@@ -132,7 +132,7 @@ uvicorn main:app --reload
 ## Next Steps (Recommended Order)
 
 1. **Workato ingest recipe** — SharePoint → `/ingest` for initial backfill
-2. **Create vecs index** — Call `collection.create_index()` after ingest for better performance
+2. **Create vecs index** — Done: `create_index()` in vector_store; run `python scripts/create_vecs_index.py` after API bulk ingest.
 3. **Workato Genie + Recipe** — Intake, routing, HITL
 4. **Graph API + SharePoint** — Direct retrieval/publish if needed
 5. **`POST /draft`** — DOCX generation and upload

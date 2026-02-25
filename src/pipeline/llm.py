@@ -46,9 +46,9 @@ def parse_json_array(text: str, max_items: int | None = None) -> list[dict]:
         lines = text.split("\n")
         start = 1 if lines[0].startswith("```") else 0
         end = len(lines)
-        for i, line in enumerate(lines[start:], start):
-            if line.strip() == "```":
-                end = start + i
+        for i in range(start, len(lines)):
+            if lines[i].strip() == "```":
+                end = i
                 break
         text = "\n".join(lines[start:end])
     try:
@@ -71,9 +71,9 @@ def parse_json_object(text: str) -> dict | None:
         lines = text.split("\n")
         start = 1 if lines[0].startswith("```") else 0
         end = len(lines)
-        for i, line in enumerate(lines[start:], start):
-            if line.strip() == "```":
-                end = start + i
+        for i in range(start, len(lines)):
+            if lines[i].strip() == "```":
+                end = i
                 break
         text = "\n".join(lines[start:end])
     try:

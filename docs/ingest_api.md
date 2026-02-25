@@ -6,9 +6,38 @@ Workato uses the **SharePoint connector** to list and download documents, then P
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/ingest` | Ingest a single document |
+| POST | `/ingest` | Ingest a single document (JSON with plain text) |
+| POST | `/ingest/file` | Ingest a DOCX or PDF file (multipart upload) |
 | POST | `/ingest/batch` | Ingest multiple documents in one request |
 | GET | `/health` | Health check |
+
+## File upload: POST /ingest/file
+
+Upload a `.docx` or `.pdf` file. Text is extracted and processed via the standard ingest pipeline.
+
+**Request:** `multipart/form-data`
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `file` | File | Yes | DOCX or PDF file |
+| `document_id` | Form | Yes | Unique document ID |
+| `doc_layer` | Form | No (default: sop) | policy, principle, sop, work_instruction |
+| `sites` | Form | No | Comma-separated site codes |
+| `policy_ref` | Form | No | Parent policy reference |
+| `title` | Form | No | Document title (default: filename) |
+| `library` | Form | No | Library name (default: Uploads) |
+
+**Example (curl):**
+```bash
+curl -X POST http://localhost:8000/ingest/file \
+  -F "file=@/path/to/document.docx" \
+  -F "document_id=doc-001" \
+  -F "doc_layer=sop" \
+  -F "sites=site_north,site_south" \
+  -F "policy_ref=P-001"
+```
+
+**Response (200):** Same as POST /ingest.
 
 ## Single document: POST /ingest
 

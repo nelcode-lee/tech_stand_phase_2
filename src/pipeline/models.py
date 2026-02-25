@@ -33,6 +33,7 @@ class TerminologyFlag(BaseModel):
     term: str
     issue: str
     recommendation: str
+    location: str | None = None  # Exact quote from document where term appears (evidence)
 
 
 class Conflict(BaseModel):
