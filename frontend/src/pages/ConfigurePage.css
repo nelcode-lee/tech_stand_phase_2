@@ -1,0 +1,212 @@
+.configure-page {
+  max-width: 640px;
+}
+
+.configure-header {
+  margin-bottom: var(--space-xl);
+}
+
+.configure-title {
+  margin: 0 0 var(--space-xs);
+  font-size: 1.375rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+
+.configure-subtitle {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+}
+
+/* Sections */
+.config-section {
+  background: #ffffff;
+  border: 1px solid var(--border-card);
+  border-radius: 10px;
+  padding: var(--space-xl);
+  box-shadow: var(--shadow-card);
+  margin-bottom: var(--space-lg);
+}
+
+.config-section-title {
+  margin: 0 0 var(--space-md);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--yb-blue);
+}
+
+/* Request type */
+.request-type-grid {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+}
+
+.request-type-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  padding: 0.75rem var(--space-md);
+  background: transparent;
+  border: 1px solid var(--border-card);
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.12s, background 0.12s;
+}
+
+.request-type-btn:hover {
+  border-color: var(--cranswick-di-serria);
+}
+
+.request-type-btn.active {
+  border-color: var(--yb-blue);
+  background: rgba(230,211,181,0.35);
+}
+
+.rt-label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.rt-desc {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+/* Fields */
+.config-fields {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.form-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.form-row label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.form-row input,
+.form-row select {
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--border-card);
+  border-radius: 6px;
+  font-size: 0.9375rem;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.form-row input:focus,
+.form-row select:focus {
+  outline: none;
+  border-color: var(--yb-blue);
+  box-shadow: 0 0 0 3px rgba(50,65,87,0.1);
+}
+
+/* Mode buttons */
+.mode-buttons {
+  display: flex;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+}
+
+.mode-btn {
+  flex: 1;
+  min-width: 130px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  padding: var(--space-md);
+  background: transparent;
+  border: 1px solid var(--border-card);
+  border-radius: 8px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s;
+}
+
+.mode-btn .mode-desc {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.mode-btn:hover {
+  border-color: var(--cranswick-di-serria);
+  color: var(--yb-blue);
+}
+
+.mode-btn.active {
+  border-color: var(--yb-blue);
+  color: var(--yb-blue);
+  background: rgba(230,211,181,0.35);
+}
+
+/* Agent grid */
+.agent-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--space-sm);
+}
+
+.agent-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: transparent;
+  border: 1px solid var(--border-card);
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color 0.12s, color 0.12s;
+}
+
+.agent-btn:hover {
+  border-color: var(--cranswick-di-serria);
+  color: var(--yb-blue);
+}
+
+.agent-btn.selected {
+  border-color: var(--yb-blue);
+  color: var(--yb-blue);
+  background: rgba(230,211,181,0.35);
+}
+
+/* Footer */
+.configure-footer {
+  padding-top: var(--space-md);
+}
+
+.configure-next-btn {
+  padding: var(--space-sm) var(--space-xl);
+  background: var(--yb-blue);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s, box-shadow 0.15s;
+}
+
+.configure-next-btn:hover {
+  opacity: 0.92;
+  box-shadow: 0 4px 12px rgba(50,65,87,0.3);
+}

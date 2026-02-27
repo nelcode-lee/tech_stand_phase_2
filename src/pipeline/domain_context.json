@@ -1,22 +1,110 @@
 {
-  "food_safety_haccp": {
-    "severity_floor": 4,
-    "note": "Food safety / HACCP requirements — Severity always ≥ 4"
+  "_comment": "Cranswick domain context — injected into Risk agent prompt. Edit here; no code change needed.",
+
+  "severity_rules": {
+    "description": "FMEA severity calibration by topic. Values 1–5. Used to set a floor or cap when the LLM scores a gap.",
+    "categories": {
+      "food_safety_haccp": {
+        "severity_floor": 4,
+        "note": "Food safety / HACCP requirements — Severity always ≥ 4"
+      },
+      "allergen_controls": {
+        "severity_floor": 5,
+        "note": "Allergen controls — Severity = 5 (regulatory + safety)"
+      },
+      "ccp_control": {
+        "severity_floor": 4,
+        "note": "CCP monitoring or corrective action gaps — Severity always ≥ 4"
+      },
+      "environmental_health": {
+        "severity_floor": 3,
+        "note": "Environmental health requirements — Severity always ≥ 3"
+      },
+      "traceability": {
+        "severity_floor": 3,
+        "note": "Traceability gaps — Severity ≥ 3 (regulatory recall risk)"
+      },
+      "foreign_body": {
+        "severity_floor": 3,
+        "note": "Foreign body control gaps — Severity ≥ 3"
+      },
+      "labelling_documentation": {
+        "severity_range": [2, 3],
+        "note": "Labelling / documentation — Severity 2–3 depending on regulatory applicability"
+      },
+      "operational_efficiency": {
+        "severity_cap": 2,
+        "note": "Operational efficiency only — Severity ≤ 2"
+      }
+    }
   },
-  "environmental_health": {
-    "severity_floor": 3,
-    "note": "Environmental health requirements — Severity always ≥ 3"
+
+  "fmea_scoring": {
+    "description": "FMEA model: Risk Score = Severity × Scope × (1 / Detectability). All scales 1–5.",
+    "severity_scale": {
+      "5": "Regulatory breach or safety incident — consumer harm, enforcement action",
+      "4": "Serious non-conformance — food safety risk, audit failure likely",
+      "3": "Significant non-conformance — operational disruption, rework required",
+      "2": "Minor non-conformance — process inefficiency, limited impact",
+      "1": "Administrative inconvenience — no operational or safety impact"
+    },
+    "scope_scale": {
+      "5": "All sites affected",
+      "4": "Multiple sites affected",
+      "3": "Single site, multiple departments",
+      "2": "Single site, single department",
+      "1": "Single site, single team or shift"
+    },
+    "detectability_scale": {
+      "5": "Very unlikely to be caught before causing harm — no monitoring in place",
+      "4": "Unlikely to be caught — monitoring is informal or infrequent",
+      "3": "May be caught — monitoring exists but not robust",
+      "2": "Likely to be caught — monitoring is regular and documented",
+      "1": "Almost certain to be caught immediately — automated or verified control"
+    },
+    "risk_bands": {
+      "critical": { "min_score": 20, "max_score": 25, "action": "Auto-escalate to Standards Manager, block draft" },
+      "high":     { "min_score": 12, "max_score": 19, "action": "Flag prominently in review, require SME sign-off" },
+      "medium":   { "min_score": 6,  "max_score": 11, "action": "Surface as amber warning in review" },
+      "low":      { "min_score": 1,  "max_score": 5,  "action": "Log in report, note in draft" }
+    }
   },
-  "allergen_controls": {
-    "severity_floor": 5,
-    "note": "Allergen controls — Severity = 5 (regulatory + safety)"
+
+  "escalation_contacts": {
+    "description": "Who to escalate to by risk band — used in prompt context.",
+    "critical": "Standards Manager (immediate escalation)",
+    "high": "Site Technical Manager + SME sign-off required",
+    "medium": "Document author to review and confirm",
+    "low": "Log and monitor at next scheduled review"
   },
-  "operational_efficiency": {
-    "severity_cap": 2,
-    "note": "Operational efficiency only — Severity ≤ 2"
+
+  "regulatory_references": {
+    "description": "Key regulatory frameworks applicable across Cranswick sites.",
+    "frameworks": [
+      "UK Food Safety Act 1990 (as amended)",
+      "Regulation (EC) 852/2004 — Food Hygiene",
+      "Regulation (EC) 853/2004 — Specific hygiene rules for food of animal origin",
+      "BRCGS Food Safety Standard (current issue)",
+      "CODEX HACCP principles (CAC/RCP 1-1969)",
+      "UK Food Information Regulations 2014 (allergen labelling)",
+      "Weights and Measures Act 1985"
+    ]
   },
-  "labelling_documentation": {
-    "severity_range": [2, 3],
-    "note": "Labelling / documentation — Severity 2–3 depending on regulatory applicability"
+
+  "standard_document_sections": {
+    "description": "Group document template — canonical section order. Edit here to adjust what CleansingAgent checks. 'required' sections generate high-severity omission flags; optional sections generate low-severity advisory flags.",
+    "template": [
+      {"name": "Purpose / Objective",  "required": true,  "aliases": ["purpose", "objective", "aim", "intent"]},
+      {"name": "Scope",                "required": true,  "aliases": ["scope", "applicability", "applies to"]},
+      {"name": "References",           "required": true,  "aliases": ["references", "related documents", "associated documents", "see also"]},
+      {"name": "Responsibilities",     "required": true,  "aliases": ["responsibilities", "accountabilities", "roles", "ownership"]},
+      {"name": "Definitions",          "required": false, "aliases": ["definitions", "glossary", "terms", "abbreviations"]},
+      {"name": "Procedure / Method",   "required": true,  "aliases": ["procedure", "method", "process", "instructions", "steps", "how to"]},
+      {"name": "Frequency",            "required": false, "aliases": ["frequency", "schedule", "periodicity", "how often"]},
+      {"name": "Record Keeping",       "required": true,  "aliases": ["record keeping", "records", "documentation", "forms", "logs"]},
+      {"name": "Corrective Actions",   "required": true,  "aliases": ["corrective action", "non-conformance", "deviation", "failure response"]},
+      {"name": "Review Schedule",      "required": false, "aliases": ["review", "review date", "review schedule", "next review"]},
+      {"name": "Approval / Sign-off",  "required": false, "aliases": ["approval", "approved by", "sign-off", "authorisation", "authorization"]}
+    ]
   }
 }

@@ -7,6 +7,9 @@ pydantic-settings>=2.1.0
 # Vector store: Supabase (pgvector via vecs)
 vecs>=0.4.0
 
+# Document registry: raw SQL for documents table
+psycopg2-binary>=2.9.0
+
 # Embeddings
 openai>=1.12.0
 

@@ -1,5 +1,6 @@
-"""FastAPI routes for RAG ingest (called by Workato)."""
+"""FastAPI routes for RAG ingest (called by Workato) and document listing."""
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from pydantic import BaseModel
 
 from src.rag.models import (
     DocLayer,
@@ -13,6 +14,50 @@ from src.rag.ingest import ingest_document, ingest_batch as do_ingest_batch
 from src.rag.file_extract import extract_text, supported_extensions
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
+
+
+# ---------------------------------------------------------------------------
+# GET /documents — list documents from the document registry
+# ---------------------------------------------------------------------------
+
+class DocumentSummary(BaseModel):
+    document_id: str
+    title: str
+    doc_layer: str
+    sites: list[str]
+    library: str
+    source_path: str | None = None
+    chunk_count: int = 0
+
+
+@router.get("/documents", tags=["documents"])
+def list_documents() -> list[DocumentSummary]:
+    """
+    Return all documents from the document registry.
+    If registry is empty but vector store has chunks, backfill from vector store and return.
+    """
+    try:
+        from src.rag.document_registry import list_documents as registry_list, fetch_all_from_vector_store, upsert_document
+        rows = registry_list()
+        # Fallback: if registry empty but vector store has docs, backfill and return
+        if not rows:
+            from_vec = fetch_all_from_vector_store()
+            if from_vec:
+                for d in from_vec:
+                    upsert_document(
+                        document_id=d["document_id"],
+                        title=d["title"],
+                        doc_layer=d["doc_layer"],
+                        sites=d["sites"],
+                        library=d["library"],
+                        chunk_count=d["chunk_count"],
+                        policy_ref=d.get("policy_ref"),
+                        source_path=d.get("source_path"),
+                    )
+                rows = registry_list()
+        return [DocumentSummary(**r) for r in rows]
+    except Exception:
+        return []
 
 ALLOWED_EXTENSIONS = tuple(f".{ext}" for ext in supported_extensions() if ext)
 

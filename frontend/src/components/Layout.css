@@ -1,0 +1,189 @@
+/* App shell: left sidebar + main content */
+
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+  background: #f5f6f8;
+}
+
+/* ── Sidebar ───────────────────────────────────────────── */
+.app-sidebar {
+  width: 220px;
+  flex-shrink: 0;
+  background: var(--yb-blue);
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  position: sticky;
+  top: 0;
+  overflow-y: auto;
+}
+
+/* Brand / logo block */
+.sidebar-brand {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.4rem;
+  padding: 1.25rem 1rem 1rem;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.sidebar-logo {
+  height: 47px;
+  width: auto;
+  object-fit: contain;
+}
+
+.sidebar-brand-sub {
+  font-size: 0.6875rem;
+  font-weight: 500;
+  color: rgba(255,255,255,0.6);
+}
+
+/* Nav */
+.sidebar-nav {
+  flex: 1;
+  padding: 1rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.sidebar-section-label {
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.45);
+  padding: 0.75rem 0.5rem 0.25rem;
+  display: block;
+}
+
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.45rem 0.625rem;
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: rgba(255,255,255,0.75);
+  text-decoration: none;
+  transition: background 0.12s, color 0.12s;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+}
+
+.sidebar-link:hover {
+  background: rgba(255,255,255,0.1);
+  color: white;
+}
+
+.sidebar-link.active {
+  background: rgba(255,255,255,0.15);
+  color: white;
+}
+
+.sidebar-link-muted {
+  color: rgba(255,255,255,0.45);
+}
+
+.sidebar-link-muted:hover {
+  color: rgba(255,255,255,0.75);
+}
+
+/* Session steps (in-session sub-nav) */
+.session-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 0 0.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  border-left: 2px solid rgba(255,255,255,0.1);
+  margin-left: 0.5rem;
+}
+
+.session-step {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.session-step-num {
+  width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.625rem;
+  font-weight: 700;
+  flex-shrink: 0;
+  background: rgba(255,255,255,0.12);
+  color: rgba(255,255,255,0.6);
+  margin-left: -0.7rem;
+}
+
+.session-step.active .session-step-num {
+  background: var(--cranswick-di-serria);
+  color: white;
+}
+
+.session-step.done .session-step-num {
+  background: rgba(255,255,255,0.2);
+  color: rgba(255,255,255,0.9);
+  font-size: 0.7rem;
+}
+
+.session-step-label {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.35rem 0.5rem;
+  border-radius: 5px;
+  font-size: 0.78125rem;
+  font-weight: 500;
+  color: rgba(255,255,255,0.6);
+  text-decoration: none;
+  transition: background 0.12s, color 0.12s;
+  width: 100%;
+}
+
+.session-step-label:hover {
+  background: rgba(255,255,255,0.08);
+  color: rgba(255,255,255,0.9);
+}
+
+.session-step.active .session-step-label {
+  color: white;
+}
+
+.session-step.done .session-step-label {
+  color: rgba(255,255,255,0.7);
+}
+
+/* Footer */
+.sidebar-footer {
+  padding: 0.75rem;
+  border-top: 1px solid rgba(255,255,255,0.08);
+}
+
+/* ── Content area ──────────────────────────────────────── */
+.app-content {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-main {
+  flex: 1;
+  padding: var(--space-xl);
+  overflow-y: auto;
+  background: #ffffff;
+}

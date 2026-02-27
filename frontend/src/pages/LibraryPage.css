@@ -1,0 +1,293 @@
+.library-page {
+  max-width: 1100px;
+  padding: 0;
+}
+
+.library-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: var(--space-xl);
+  gap: var(--space-md);
+}
+
+.library-title {
+  margin: 0 0 var(--space-xs);
+  font-size: 1.375rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+}
+
+.library-subtitle {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.library-create-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-lg);
+  background: var(--yb-blue);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity 0.15s, box-shadow 0.15s;
+}
+
+.library-create-btn:hover {
+  opacity: 0.92;
+  box-shadow: 0 4px 12px rgba(50,65,87,0.3);
+}
+
+.library-create-btn.secondary {
+  background: transparent;
+  color: var(--yb-blue);
+  border: 1px solid var(--border-card);
+}
+
+.library-create-btn.secondary:hover {
+  background: rgba(50,65,87,0.05);
+  border-color: var(--yb-blue);
+  box-shadow: none;
+}
+
+/* Alerts */
+.library-alerts {
+  display: flex;
+  gap: var(--space-md);
+  margin-bottom: var(--space-xl);
+  flex-wrap: wrap;
+}
+
+.alert {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.alert-overdue {
+  background: rgba(185,28,28,0.07);
+  color: #b91c1c;
+  border: 1px solid rgba(185,28,28,0.15);
+}
+
+.alert-due {
+  background: rgba(180,83,9,0.07);
+  color: #b45309;
+  border: 1px solid rgba(180,83,9,0.15);
+}
+
+/* Table */
+.library-table-wrap {
+  border: 1px solid var(--border-card);
+  border-radius: 10px;
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+
+.library-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.8125rem;
+}
+
+.library-table thead {
+  background: #f8f9fb;
+}
+
+.library-table th {
+  padding: 0.625rem var(--space-md);
+  text-align: left;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--border-card);
+}
+
+.library-row {
+  border-bottom: 1px solid var(--border-subtle);
+  transition: background 0.1s;
+}
+
+.library-row:last-child {
+  border-bottom: none;
+}
+
+.library-row:hover {
+  background: #f9fafb;
+}
+
+.library-table td {
+  padding: 0.75rem var(--space-md);
+  vertical-align: middle;
+}
+
+.doc-id {
+  font-family: monospace;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.doc-title {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.doc-site, .doc-date {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.doc-none {
+  color: var(--text-muted);
+}
+
+/* Layer badge */
+.layer-badge {
+  display: inline-block;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: rgba(50,65,87,0.08);
+  color: var(--yb-blue);
+  white-space: nowrap;
+}
+
+/* Status badge */
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.25rem 0.55rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.status-current  { background: rgba(5,150,105,0.08);  color: #059669; }
+.status-due      { background: rgba(180,83,9,0.08);   color: #b45309; }
+.status-overdue  { background: rgba(185,28,28,0.08);  color: #b91c1c; }
+.status-draft    { background: rgba(50,65,87,0.08);   color: var(--yb-blue); }
+
+/* Risk pill */
+.risk-pill {
+  display: inline-block;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.risk-low      { background: rgba(5,150,105,0.08);  color: #059669; }
+.risk-medium   { background: rgba(180,83,9,0.08);   color: #b45309; }
+.risk-high     { background: rgba(185,28,28,0.08);  color: #b91c1c; }
+.risk-critical { background: rgba(127,0,0,0.1);     color: #7f0000; }
+
+/* Findings chip */
+.findings-chip {
+  display: inline-block;
+  padding: 0.2rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  background: rgba(50,65,87,0.07);
+  color: var(--text-secondary);
+}
+
+/* Loading / empty state */
+.library-loading,
+.library-empty {
+  padding: 3rem;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.library-error {
+  padding: 1rem var(--space-md);
+  margin-bottom: var(--space-xl);
+  background: rgba(185,28,28,0.06);
+  border: 1px solid rgba(185,28,28,0.15);
+  border-radius: 6px;
+  color: #b91c1c;
+  font-size: 0.8125rem;
+}
+
+/* Filter bar */
+.library-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+  flex-wrap: wrap;
+}
+
+.library-search {
+  flex: 1 1 220px;
+  min-width: 160px;
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--border-card);
+  border-radius: 6px;
+  font-size: 0.875rem;
+  background: #fff;
+  color: var(--text-primary);
+}
+
+.library-search:focus {
+  outline: none;
+  border-color: var(--yb-blue);
+  box-shadow: 0 0 0 3px rgba(50,65,87,0.1);
+}
+
+.library-filter-select {
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--border-card);
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  background: #fff;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+/* Row action */
+.doc-actions-cell {
+  text-align: right;
+}
+
+.row-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.35rem 0.75rem;
+  background: transparent;
+  border: 1px solid var(--border-card);
+  border-radius: 5px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--yb-blue);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s;
+}
+
+.row-action-btn:hover {
+  background: rgba(50,65,87,0.05);
+  border-color: var(--yb-blue);
+}

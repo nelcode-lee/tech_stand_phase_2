@@ -1,0 +1,38 @@
+/* Yorkshire Baker / Cranswick brand palette + spacing */
+:root {
+  --yb-blue: #324157;
+  --cranswick-di-serria: #D29F50;
+  --cranswick-spanish-white: #E6D3B5;
+  --cranswick-black-bean: #030909;
+  --surface: #fefefe;
+  --surface-elevated: #ffffff;
+  --text-primary: #1a1a1a;
+  --text-secondary: #5c5c5c;
+  --text-muted: #8a8a8a;
+  --border-subtle: rgba(0,0,0,0.06);
+  --border-card: rgba(0,0,0,0.12);
+  --shadow-card: 0 2px 8px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
+  --space-xs: 0.25rem;
+  --space-sm: 0.5rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2rem;
+  --space-2xl: 3rem;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  line-height: 1.6;
+  font-weight: 400;
+  color: var(--text-primary);
+  background-color: #ffffff;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}

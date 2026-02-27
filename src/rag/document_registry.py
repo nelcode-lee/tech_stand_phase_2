@@ -1,0 +1,212 @@
+"""Document registry: SQL table for listing documents without vector similarity search."""
+import json
+import os
+from contextlib import contextmanager
+
+import psycopg2
+from psycopg2.extras import RealDictCursor
+
+SUPABASE_DB_URL = os.environ.get("SUPABASE_DB_URL", "")
+TABLE_NAME = "documents"
+
+
+def _get_conn():
+    """Create a connection using SUPABASE_DB_URL."""
+    if not SUPABASE_DB_URL:
+        raise ValueError("SUPABASE_DB_URL environment variable is required")
+    return psycopg2.connect(SUPABASE_DB_URL)
+
+
+@contextmanager
+def _cursor():
+    """Context manager for a database cursor."""
+    conn = _get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            yield cur
+            conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def ensure_table():
+    """
+    Create the documents table if it does not exist.
+    Idempotent; safe to call on every startup.
+    Uses public schema explicitly for Supabase compatibility.
+    """
+    with _cursor() as cur:
+        cur.execute(f"""
+            CREATE TABLE IF NOT EXISTS public.{TABLE_NAME} (
+                document_id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                doc_layer TEXT NOT NULL DEFAULT 'sop',
+                sites JSONB NOT NULL DEFAULT '[]',
+                library TEXT NOT NULL DEFAULT 'Uploads',
+                policy_ref TEXT,
+                source_path TEXT,
+                chunk_count INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+
+
+def upsert_document(
+    document_id: str,
+    title: str,
+    doc_layer: str,
+    sites: list[str],
+    library: str,
+    chunk_count: int,
+    policy_ref: str | None = None,
+    source_path: str | None = None,
+) -> None:
+    """
+    Insert or update a document in the registry.
+    Called at ingest time (after chunking, so chunk_count is known).
+    """
+    if not document_id:
+        return
+    ensure_table()
+    sites_json = json.dumps(sites) if isinstance(sites, list) else "[]"
+    with _cursor() as cur:
+        cur.execute(f"""
+            INSERT INTO public.{TABLE_NAME} (
+                document_id, title, doc_layer, sites, library,
+                policy_ref, source_path, chunk_count, created_at, updated_at
+            ) VALUES (%s, %s, %s, %s::jsonb, %s, %s, %s, %s, NOW(), NOW())
+            ON CONFLICT (document_id) DO UPDATE SET
+                title = EXCLUDED.title,
+                doc_layer = EXCLUDED.doc_layer,
+                sites = EXCLUDED.sites,
+                library = EXCLUDED.library,
+                policy_ref = EXCLUDED.policy_ref,
+                source_path = EXCLUDED.source_path,
+                chunk_count = EXCLUDED.chunk_count,
+                updated_at = NOW()
+        """, (
+            document_id,
+            title or document_id,
+            doc_layer or "sop",
+            sites_json,
+            library or "Uploads",
+            policy_ref,
+            source_path,
+            chunk_count,
+        ))
+
+
+def list_documents() -> list[dict]:
+    """
+    Return all documents from the registry, sorted by title.
+    Each dict has: document_id, title, doc_layer, sites, library, source_path, chunk_count.
+    """
+    try:
+        ensure_table()
+    except Exception:
+        return []
+
+    with _cursor() as cur:
+        cur.execute(f"""
+            SELECT document_id, title, doc_layer, sites, library,
+                   source_path, chunk_count
+            FROM public.{TABLE_NAME}
+            ORDER BY LOWER(title)
+        """)
+        rows = cur.fetchall()
+
+    result = []
+    for r in rows:
+        sites = r.get("sites")
+        if isinstance(sites, str):
+            try:
+                sites = json.loads(sites) if sites else []
+            except json.JSONDecodeError:
+                sites = []
+        elif sites is None:
+            sites = []
+        result.append({
+            "document_id": r["document_id"],
+            "title": r["title"] or r["document_id"],
+            "doc_layer": r["doc_layer"] or "sop",
+            "sites": sites,
+            "library": r["library"] or "Uploads",
+            "source_path": r["source_path"],
+            "chunk_count": r["chunk_count"] or 0,
+        })
+    return result
+
+
+def delete_document(document_id: str) -> None:
+    """Remove a document from the registry (e.g. when re-ingesting or deleting)."""
+    if not document_id:
+        return
+    with _cursor() as cur:
+        cur.execute(f"DELETE FROM public.{TABLE_NAME} WHERE document_id = %s", (document_id,))
+
+
+def fetch_all_from_vector_store() -> list[dict]:
+    """
+    Fetch all distinct documents from the vecs.document_chunks table via raw SQL.
+    Returns full coverage without semantic query limits.
+    """
+    if not SUPABASE_DB_URL:
+        return []
+    # Try vecs schema first (standard vecs layout), then public
+    for table in ("vecs.document_chunks", "document_chunks"):
+        try:
+            with _cursor() as cur:
+                cur.execute(f"""
+                    SELECT
+                        metadata->>'document_id' AS document_id,
+                        metadata->>'title' AS title,
+                        metadata->>'doc_layer' AS doc_layer,
+                        metadata->>'sites' AS sites,
+                        metadata->>'library' AS library,
+                        metadata->>'policy_ref' AS policy_ref,
+                        metadata->>'source_path' AS source_path,
+                        COUNT(*)::int AS chunk_count
+                    FROM {table}
+                    WHERE metadata->>'document_id' IS NOT NULL
+                      AND metadata->>'document_id' != ''
+                    GROUP BY
+                        metadata->>'document_id',
+                        metadata->>'title',
+                        metadata->>'doc_layer',
+                        metadata->>'sites',
+                        metadata->>'library',
+                        metadata->>'policy_ref',
+                        metadata->>'source_path'
+                """)
+                rows = cur.fetchall()
+                break
+        except Exception:
+            continue
+    else:
+        return []
+
+    result = []
+    for r in rows:
+        sites = r.get("sites")
+        if isinstance(sites, str):
+            try:
+                sites = json.loads(sites) if sites else []
+            except json.JSONDecodeError:
+                sites = []
+        elif sites is None:
+            sites = []
+        result.append({
+            "document_id": r["document_id"],
+            "title": r["title"] or r["document_id"],
+            "doc_layer": r["doc_layer"] or "sop",
+            "sites": sites,
+            "library": r["library"] or "Uploads",
+            "source_path": r["source_path"],
+            "policy_ref": r["policy_ref"],
+            "chunk_count": r["chunk_count"] or 0,
+        })
+    return result

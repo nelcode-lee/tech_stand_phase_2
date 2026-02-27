@@ -64,6 +64,11 @@ class RiskGap(BaseModel):
     issue: str
     risk: str
     recommendation: str
+    severity: int = 0          # FMEA severity 1–5 (0 = not scored)
+    scope: int = 0             # FMEA scope 1–5
+    detectability: int = 0     # FMEA detectability 1–5
+    fmea_score: int = 0        # severity × scope × (1 / detectability) normalised
+    fmea_band: str = ""        # low | medium | high | critical
 
 
 class SpecifyingFlag(BaseModel):
@@ -72,6 +77,38 @@ class SpecifyingFlag(BaseModel):
     current_text: str
     issue: str
     recommendation: str
+
+
+class StructureFlag(BaseModel):
+    """Group template compliance issue identified during cleansing."""
+    flag_type: str       # omission | ordering | unexpected
+    section: str         # Template section name (or detected heading for ordering)
+    detail: str          # Human-readable description of the issue
+    recommendation: str  # Suggested action
+    severity: str = "medium"  # low | medium | high
+
+
+class ContentIntegrityFlag(BaseModel):
+    """
+    Non-text element, content integrity, spelling, or encoding issue detected during cleansing.
+
+    flag_type values:
+      non_text_element    — image, table, diagram, or figure marker found in the text;
+                            the element may carry operational meaning that cannot be read
+      fragmented_sentence — sentence appears to have been cut mid-clause (extraction artefact)
+      truncated_step      — a numbered or bulleted procedural step ends abruptly
+      incomplete_list     — a list item ends with a colon or continuation marker with no
+                            following items (list was cut)
+      us_spelling         — US English spelling detected; Cranswick requires UK English
+      encoding_anomaly    — non-UTF-8 character, replacement character, mojibake, or
+                            control character detected in the raw document text
+    """
+    flag_type: str    # non_text_element | fragmented_sentence | truncated_step | incomplete_list
+    location: str     # Best-effort location: line number or nearby heading
+    excerpt: str      # The offending text (truncated to 200 chars)
+    detail: str       # What the problem is
+    recommendation: str
+    severity: str = "medium"  # low | medium | high
 
 
 class SequencingFlag(BaseModel):
@@ -140,6 +177,8 @@ class PipelineContext(BaseModel):
     risk_scores: list[RiskScore] = Field(default_factory=list)
     risk_gaps: list[RiskGap] = Field(default_factory=list)
     specifying_flags: list[SpecifyingFlag] = Field(default_factory=list)
+    structure_flags: list[StructureFlag] = Field(default_factory=list)
+    content_integrity_flags: list[ContentIntegrityFlag] = Field(default_factory=list)
     sequencing_flags: list[SequencingFlag] = Field(default_factory=list)
     formatting_flags: list[FormattingFlag] = Field(default_factory=list)
     compliance_flags: list[ComplianceFlag] = Field(default_factory=list)

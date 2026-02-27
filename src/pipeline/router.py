@@ -30,6 +30,9 @@ AGENTS = {
 
 
 class PipelineRouter:
+    def __init__(self, agents_override: list[str] | None = None):
+        self.agents_override = agents_override
+
     async def run(self, ctx: PipelineContext) -> PipelineContext:
         agents = self._select_agents(ctx)
         for agent in agents:
@@ -42,6 +45,11 @@ class PipelineRouter:
         return ctx
 
     def _select_agents(self, ctx: PipelineContext) -> list[BaseAgent]:
+        # Explicit agent list (Targeted mode or Quick Check)
+        if self.agents_override:
+            names = [n for n in self.agents_override if n in AGENTS]
+            return [AGENTS[n] for n in names] if names else list(AGENTS.values())
+
         request_type = ctx.request_type
         doc_layer = ctx.doc_layer
 
