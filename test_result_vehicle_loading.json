@@ -1,0 +1,581 @@
+{
+  "tracking_id": "sop-vehicle-loading-001",
+  "draft_ready": true,
+  "overall_risk": "critical",
+  "conflict_count": 2,
+  "blocker_count": 0,
+  "conflicts": [
+    {
+      "conflict_type": "UNSANCTIONED_CONFLICT",
+      "severity": "medium",
+      "layer": "Temperature Control",
+      "sites": [],
+      "document_refs": [],
+      "description": "The Despatch Manifest Sheet requires vehicle temperature to be <5\u00b0C for chilled products and below -18\u00b0C for frozen products prior to loading. However, the loading procedure document specifies chilled products must be <5\u00b0C and frozen products <-12\u00b0C.",
+      "recommendation": "Align the temperature requirements for frozen products in both documents to ensure consistency.",
+      "blocks_draft": false
+    },
+    {
+      "conflict_type": "UNSANCTIONED_CONFLICT",
+      "severity": "medium",
+      "layer": "Temperature Monitoring",
+      "sites": [],
+      "document_refs": [],
+      "description": "The Despatch Manifest Sheet requires vehicle temperature checks prior to loading, while the Test document for RAG states temperature checks are required every 30 minutes.",
+      "recommendation": "Clarify and align the frequency of temperature checks required for vehicles to ensure consistent monitoring.",
+      "blocks_draft": false
+    }
+  ],
+  "terminology_flags": [
+    {
+      "term": "Despatch/dispatch",
+      "issue": "The document uses both 'Despatch' and 'dispatch' interchangeably without clarification on whether they have different meanings or if one is preferred.",
+      "recommendation": "Standardize the term to either 'Despatch' or 'dispatch' throughout the document to ensure consistency.",
+      "location": "Despatch/dispatch The point at which the product leaves the factory site or is no longer the responsibility of the company."
+    },
+    {
+      "term": "Vehicle Temperature",
+      "issue": "The term 'Vehicle Temperature' is used without a clear definition or explanation of how it is consistently measured across different contexts in the document.",
+      "recommendation": "Provide a clear definition or standard procedure for measuring 'Vehicle Temperature' to ensure consistent interpretation.",
+      "location": "Vehicle Temperature  -  this MUST be <5\u25e6c for chilled products and below -18\u00b0C for frozen product PRIOR to loading the vehicle."
+    },
+    {
+      "term": "CMEX",
+      "issue": "The term 'CMEX' is used multiple times without a definition or explanation of what it specifically refers to.",
+      "recommendation": "Include a definition or description of 'CMEX' to clarify its role and function in the process.",
+      "location": "Once this has been completed for all Dollies/pallets: 5a. On CMEX, the Despatch tab is used to print of the load documents."
+    },
+    {
+      "term": "QUOR",
+      "issue": "The term 'QUOR' is mentioned without any definition or context about what it is or its purpose.",
+      "recommendation": "Provide a definition or context for 'QUOR' to clarify its role in the process.",
+      "location": "The first, middle and last dolly or pallet loaded onto the vehicle must be temperature checked and the results recorded on the loading temp check sheet FSR014GD09 on QUOR."
+    },
+    {
+      "term": "SSCC",
+      "issue": "The term 'SSCC' is used without any explanation or definition.",
+      "recommendation": "Include a definition or explanation of 'SSCC' to ensure clarity.",
+      "location": "A SSCC is then printed off and attached to the front/side of the Dolly/pallet."
+    }
+  ],
+  "risk_scores": [],
+  "risk_gaps": [
+    {
+      "location": "Despatch Manifest Sheet",
+      "issue": "Unstated assumption about operator's ability to use a calibrated temperature probe.",
+      "risk": "Incorrect temperature readings could lead to loading products at unsafe temperatures.",
+      "recommendation": "Include detailed instructions or training requirements for using a calibrated temperature probe.",
+      "severity": 3,
+      "scope": 3,
+      "detectability": 3,
+      "fmea_score": 27,
+      "fmea_band": "critical"
+    },
+    {
+      "location": "Despatch Manifest Sheet",
+      "issue": "Missing corrective action for when vehicle temperature is out of range.",
+      "risk": "Products may be loaded onto vehicles that are not at the correct temperature, compromising product safety.",
+      "recommendation": "Specify corrective actions to take if vehicle temperature is out of range, beyond just not loading the vehicle.",
+      "severity": 4,
+      "scope": 4,
+      "detectability": 2,
+      "fmea_score": 64,
+      "fmea_band": "critical"
+    },
+    {
+      "location": "Despatch Manifest Sheet",
+      "issue": "No escalation procedure defined for when a trailer cannot reach the required temperature.",
+      "risk": "Lack of clear escalation could delay resolution and impact product safety.",
+      "recommendation": "Define an escalation procedure including who to contact and how to escalate if a trailer cannot reach the required temperature.",
+      "severity": 3,
+      "scope": 3,
+      "detectability": 3,
+      "fmea_score": 27,
+      "fmea_band": "critical"
+    },
+    {
+      "location": "Despatch Manifest Sheet",
+      "issue": "Unstated assumption that vehicle cleanliness and odour checks are subjective.",
+      "risk": "Inconsistent checks could lead to products being loaded onto unsuitable vehicles.",
+      "recommendation": "Provide explicit criteria or a checklist for assessing vehicle cleanliness and odour.",
+      "severity": 3,
+      "scope": 3,
+      "detectability": 3,
+      "fmea_score": 27,
+      "fmea_band": "critical"
+    },
+    {
+      "location": "Despatch Manifest Sheet",
+      "issue": "No verification method or record-keeping requirement for vehicle cleanliness and odour checks.",
+      "risk": "Lack of records could lead to disputes or inability to verify compliance.",
+      "recommendation": "Specify how vehicle cleanliness and odour checks should be recorded and retained.",
+      "severity": 3,
+      "scope": 3,
+      "detectability": 3,
+      "fmea_score": 27,
+      "fmea_band": "critical"
+    },
+    {
+      "location": "Despatch Manifest Sheet",
+      "issue": "Frequency of vehicle temperature checks not aligned with Test document for RAG.",
+      "risk": "Inconsistent temperature monitoring could lead to non-compliance with safety standards.",
+      "recommendation": "Align the frequency of vehicle temperature checks with the Test document for RAG or clarify the discrepancy.",
+      "severity": 3,
+      "scope": 4,
+      "detectability": 2,
+      "fmea_score": 48,
+      "fmea_band": "critical"
+    },
+    {
+      "location": "Despatch Manifest Sheet",
+      "issue": "No reference to HACCP plan or CCP monitoring requirements.",
+      "risk": "Potential gaps in critical control point monitoring could compromise food safety.",
+      "recommendation": "Include references to the HACCP plan and specify CCP monitoring requirements.",
+      "severity": 4,
+      "scope": 4,
+      "detectability": 2,
+      "fmea_score": 64,
+      "fmea_band": "critical"
+    },
+    {
+      "location": "Despatch Manifest Sheet",
+      "issue": "No link to relevant customer specification or retailer code of practice.",
+      "risk": "Non-compliance with customer or retailer requirements could lead to rejected deliveries.",
+      "recommendation": "Include references to relevant customer specifications or retailer codes of practice.",
+      "severity": 3,
+      "scope": 3,
+      "detectability": 3,
+      "fmea_score": 27,
+      "fmea_band": "critical"
+    },
+    {
+      "location": "Despatch Manifest Sheet",
+      "issue": "No reference to related site technical documentation such as cleaning schedule or pest control log.",
+      "risk": "Lack of reference could lead to oversight of critical site maintenance activities.",
+      "recommendation": "Include references to related site technical documentation.",
+      "severity": 3,
+      "scope": 3,
+      "detectability": 3,
+      "fmea_score": 27,
+      "fmea_band": "critical"
+    },
+    {
+      "location": "Despatch Manifest Sheet",
+      "issue": "Regulatory reference absent (e.g. Food Safety Act, BRC/BRCGS standard, CODEX).",
+      "risk": "Non-compliance with regulatory standards could lead to legal issues and product recalls.",
+      "recommendation": "Include references to relevant regulatory standards and guidelines.",
+      "severity": 4,
+      "scope": 4,
+      "detectability": 2,
+      "fmea_score": 64,
+      "fmea_band": "critical"
+    },
+    {
+      "location": "Despatch Manifest Sheet",
+      "issue": "Unstated assumption about operator's ability to determine if load is free of debris, glass, insects, rodent droppings, and signs of damp.",
+      "risk": "Inconsistent checks could lead to contamination of products.",
+      "recommendation": "Provide explicit criteria or a checklist for assessing the load for debris and contamination.",
+      "severity": 4,
+      "scope": 3,
+      "detectability": 3,
+      "fmea_score": 36,
+      "fmea_band": "critical"
+    },
+    {
+      "location": "Despatch Manifest Sheet",
+      "issue": "No specific instructions for securing loads on pallets to prevent movement during transit.",
+      "risk": "Improperly secured loads could lead to product damage during transit.",
+      "recommendation": "Include detailed instructions for securing loads on pallets.",
+      "severity": 3,
+      "scope": 3,
+      "detectability": 3,
+      "fmea_score": 27,
+      "fmea_band": "critical"
+    },
+    {
+      "location": "Despatch Manifest Sheet",
+      "issue": "No explicit criteria for determining if a vehicle is suitably maintained to prevent damage to products during transit.",
+      "risk": "Inconsistent assessments could lead to product damage.",
+      "recommendation": "Provide explicit criteria or a checklist for assessing vehicle maintenance.",
+      "severity": 3,
+      "scope": 3,
+      "detectability": 3,
+      "fmea_score": 27,
+      "fmea_band": "critical"
+    },
+    {
+      "location": "Despatch Manifest Sheet",
+      "issue": "No reference to procedures for handling vehicle breakdowns, accidents, or refrigeration failures.",
+      "risk": "Lack of procedures could lead to inadequate response to incidents, compromising product safety.",
+      "recommendation": "Include procedures for handling vehicle breakdowns, accidents, or refrigeration failures.",
+      "severity": 4,
+      "scope": 4,
+      "detectability": 2,
+      "fmea_score": 64,
+      "fmea_band": "critical"
+    }
+  ],
+  "specifying_flags": [
+    {
+      "location": "Vehicle Temperature Check",
+      "current_text": "this MUST be <5\u25e6c for chilled products and below -18\u00b0C for frozen product",
+      "issue": "Missing units for temperature",
+      "recommendation": "Specify the temperature units as \u00b0C or \u00b0F."
+    },
+    {
+      "location": "Vehicle Cleanliness",
+      "current_text": "The vehicle must be clean, free from any odours that may cause a taint",
+      "issue": "Subjective quality descriptor",
+      "recommendation": "Define specific cleaning standards and acceptable odour levels."
+    },
+    {
+      "location": "Vehicle Maintenance",
+      "current_text": "Suitably maintained to prevent damage to products during transit.",
+      "issue": "Subjective quality descriptor",
+      "recommendation": "Specify maintenance standards and criteria for 'suitably maintained'."
+    },
+    {
+      "location": "Temperature Maintenance",
+      "current_text": "Equipped to ensure temperature can be maintained throughout transit.",
+      "issue": "Vague requirement",
+      "recommendation": "Specify the temperature range that must be maintained during transit."
+    },
+    {
+      "location": "Loading Procedure",
+      "current_text": "Carefully load the dollies and take time to check trays have retained their labels.",
+      "issue": "Operator judgement without criteria",
+      "recommendation": "Provide specific steps or criteria for 'carefully load' and 'take time'."
+    },
+    {
+      "location": "Temperature Checks",
+      "current_text": "Temperature checks required every 30 minutes.",
+      "issue": "Missing units for time",
+      "recommendation": "Specify the time units as minutes or hours."
+    },
+    {
+      "location": "Vehicle Inspection",
+      "current_text": "All vehicles or containers used for the transport of raw materials and the dispatch of products shall be fit for purpose.",
+      "issue": "Subjective quality descriptor",
+      "recommendation": "Define specific criteria for 'fit for purpose'."
+    },
+    {
+      "location": "Temperature Control",
+      "current_text": "Where temperature control is required, the transport shall be capable of maintaining product temperature within specification, under minimum and maximum load.",
+      "issue": "Undefined specification",
+      "recommendation": "Provide the specific temperature range that must be maintained."
+    },
+    {
+      "location": "Maintenance Systems",
+      "current_text": "Maintenance systems and documented cleaning procedures shall be available for all vehicles and equipment used for loading/unloading.",
+      "issue": "Vague requirement",
+      "recommendation": "Specify the maintenance and cleaning procedures that must be documented."
+    },
+    {
+      "location": "Vehicle loading procedure",
+      "current_text": "The load must be free of debris, glass, insects, rodent droppings and signs of damp.",
+      "issue": "subjective quality descriptor",
+      "recommendation": "Provide measurable criteria for 'free of debris, glass, insects, rodent droppings and signs of damp', such as visual inspection standards or specific cleaning procedures."
+    },
+    {
+      "location": "Vehicle loading procedure",
+      "current_text": "The vehicle must be clean, free from any odours that may cause a taint",
+      "issue": "subjective quality descriptor",
+      "recommendation": "Provide measurable criteria for 'clean' and 'free from any odours', such as specific cleaning protocols or odour detection methods."
+    },
+    {
+      "location": "Vehicle loading procedure",
+      "current_text": "Suitably maintained to prevent damage to products during transit.",
+      "issue": "subjective quality descriptor",
+      "recommendation": "Specify what 'suitably maintained' entails, such as maintenance schedules or inspection checklists."
+    },
+    {
+      "location": "Vehicle loading procedure",
+      "current_text": "Equipped to ensure temperature can be maintained throughout transit.",
+      "issue": "vague frequency term",
+      "recommendation": "Specify the equipment required to maintain temperature, such as refrigeration units, and provide maintenance or operation standards."
+    },
+    {
+      "location": "Temperature checks",
+      "current_text": "Temperature checks required every 30 minutes.",
+      "issue": "missing units or tolerances",
+      "recommendation": "Specify the acceptable temperature range or tolerance for the checks."
+    },
+    {
+      "location": "Loading Procedure Product information",
+      "current_text": "The first, middle and last dolly or pallet loaded onto the vehicle must be temperature checked",
+      "issue": "undefined quantities",
+      "recommendation": "Specify the exact temperature range that is considered acceptable for the products."
+    },
+    {
+      "location": "Loading Procedure Product information",
+      "current_text": "Chilled products must be <5\u25e6C and frozen <-12\u25e6C",
+      "issue": "missing units or tolerances",
+      "recommendation": "Provide a specific temperature range or tolerance for chilled and frozen products."
+    },
+    {
+      "location": "Loading Procedure Product information",
+      "current_text": "If the product temperatures are outside of this range, the product must not be loaded",
+      "issue": "undefined quantities",
+      "recommendation": "Specify the corrective actions or procedures to follow if temperatures are outside the specified range."
+    },
+    {
+      "location": "Site Standards",
+      "current_text": "in a clean condition",
+      "issue": "subjective quality descriptor",
+      "recommendation": "Provide measurable criteria for 'clean condition', such as specific cleaning protocols or inspection standards."
+    },
+    {
+      "location": "Site Standards",
+      "current_text": "free from strong odours which may cause taint to products",
+      "issue": "subjective quality descriptor",
+      "recommendation": "Provide measurable criteria for 'free from strong odours', such as specific detection methods or thresholds."
+    },
+    {
+      "location": "Site Standards",
+      "current_text": "in a suitable condition to prevent damage to products during transit",
+      "issue": "subjective quality descriptor",
+      "recommendation": "Specify what 'suitable condition' entails, such as specific vehicle maintenance or inspection criteria."
+    }
+  ],
+  "structure_flags": [
+    {
+      "flag_type": "omission",
+      "section": "Purpose / Objective",
+      "detail": "Required section \"Purpose / Objective\" is absent from the document.",
+      "recommendation": "Add a \"Purpose / Objective\" section. Refer to the group document template for expected content.",
+      "severity": "high"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Scope",
+      "detail": "Required section \"Scope\" is absent from the document.",
+      "recommendation": "Add a \"Scope\" section. Refer to the group document template for expected content.",
+      "severity": "high"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Responsibilities",
+      "detail": "Required section \"Responsibilities\" is absent from the document.",
+      "recommendation": "Add a \"Responsibilities\" section. Refer to the group document template for expected content.",
+      "severity": "high"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Definitions",
+      "detail": "Recommended section \"Definitions\" is not present.",
+      "recommendation": "Add a \"Definitions\" section. Refer to the group document template for expected content.",
+      "severity": "low"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Record Keeping",
+      "detail": "Required section \"Record Keeping\" is absent from the document.",
+      "recommendation": "Add a \"Record Keeping\" section. Refer to the group document template for expected content.",
+      "severity": "high"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Corrective Actions",
+      "detail": "Required section \"Corrective Actions\" is absent from the document.",
+      "recommendation": "Add a \"Corrective Actions\" section. Refer to the group document template for expected content.",
+      "severity": "high"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Review Schedule",
+      "detail": "Recommended section \"Review Schedule\" is not present.",
+      "recommendation": "Add a \"Review Schedule\" section. Refer to the group document template for expected content.",
+      "severity": "low"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Approval / Sign-off",
+      "detail": "Recommended section \"Approval / Sign-off\" is not present.",
+      "recommendation": "Add a \"Approval / Sign-off\" section. Refer to the group document template for expected content.",
+      "severity": "low"
+    },
+    {
+      "flag_type": "ordering",
+      "section": "Frequency",
+      "detail": "Section \"Frequency\" appears at position 1 in the document but should follow \"References\" per the group template.",
+      "recommendation": "Consider reordering sections to match the group template sequence: References \u2192 Procedure / Method \u2192 Frequency",
+      "severity": "low"
+    }
+  ],
+  "content_integrity_flags": [
+    {
+      "flag_type": "truncated_step",
+      "location": "Near \"The site shall have a clear procedure for handling rejected packs to ensure they do not re-enter the product flow. Rejected packs shall be reworked in a controlled manner to ensure product safety, legality, quality and authenticity has not been compromised. SECTION 6: PROCESS CONTROL 92 CRANSWICK MANUFACTURING STANDARD 93 CRANSWICK MANUFACTURING STANDARD SECTION 7: PERSONNEL 7 PERSONNEL 7.1 TRAINING: RAW MATERIAL HANDLING, PREPARATION, PROCESSING, PACKING AND STORAGE AREAS FUNDAMENTAL: The company shall ensure that all personnel performing work that affects product safety, legality and quality are demonstrably competent to carry out their activity, through training, work experience or qualification. CLAUSE REQUIREMENTS 7.1.1 \u25cf The site shall have a documented and effective training and development programme in place to ensure that all employees including agency/temporary staff, are fully trained and competent to carry out their role. 7.1 . 2 \u25cf All food handlers; both permanent and agency staff; shall undergo an induction process prior to commencing work. These shall cover staff safety, food safety, product quality, legality, food fraud and\"",
+      "excerpt": "2.\tCheck all pallets and Dolavs (wooden and plastic) for damage:",
+      "detail": "A procedural step ends with a colon but has no following content. The body of this step may have been lost during extraction.",
+      "recommendation": "Verify the source document. If this step should have sub-points or a description, add them explicitly.",
+      "severity": "high"
+    },
+    {
+      "flag_type": "truncated_step",
+      "location": "Near \"2.\tCheck all pallets and Dolavs (wooden and plastic) for damage:\"",
+      "excerpt": "3.\tIf severe damage is found during unloading:",
+      "detail": "A procedural step ends with a colon but has no following content. The body of this step may have been lost during extraction.",
+      "recommendation": "Verify the source document. If this step should have sub-points or a description, add them explicitly.",
+      "severity": "high"
+    },
+    {
+      "flag_type": "truncated_step",
+      "location": "Near \"3.\tIf severe damage is found during unloading:\"",
+      "excerpt": "4.\tThe Area Manager will:",
+      "detail": "A procedural step ends with a colon but has no following content. The body of this step may have been lost during extraction.",
+      "recommendation": "Verify the source document. If this step should have sub-points or a description, add them explicitly.",
+      "severity": "high"
+    },
+    {
+      "flag_type": "truncated_step",
+      "location": "Near \"5.\tIf no contamination is found, transfer product to a safe pallet/Dolav to prevent future risk.\"",
+      "excerpt": "6.\tIf the load is rejected:",
+      "detail": "A procedural step ends with a colon but has no following content. The body of this step may have been lost during extraction.",
+      "recommendation": "Verify the source document. If this step should have sub-points or a description, add them explicitly.",
+      "severity": "high"
+    },
+    {
+      "flag_type": "encoding_anomaly",
+      "location": "Near \"Responsibility\"",
+      "excerpt": "'ion\\n\\nResponsibility\\n\\x07\\n\\x07The Despatch Manag'",
+      "detail": "Encoding anomaly detected: non-printable control character. Found 58 occurrences in this document. All occurrences share the same root cause and are reported here once.",
+      "recommendation": "Control characters in procedural text indicate a corrupt or mis-encoded export. Strip these characters and verify the content is intact.",
+      "severity": "medium"
+    }
+  ],
+  "sequencing_flags": [
+    {
+      "location": "Pre-loading checks",
+      "issue": "Vehicle temperature check is mentioned twice, once in the pre-loading checks and once during loading procedure.",
+      "impact": "Redundant step, potential for confusion or oversight.",
+      "recommendation": "Consolidate temperature checks to occur once, ensuring it is clear whether it is a pre-loading or during loading check."
+    },
+    {
+      "location": "Loading Procedure",
+      "issue": "Temperature checks of the first, middle, and last dolly/pallet occur after loading has begun.",
+      "impact": "Potential for loading non-compliant product, CCP verification too late.",
+      "recommendation": "Move temperature verification to occur before loading begins."
+    },
+    {
+      "location": "Despatch Manifest Sheet",
+      "issue": "Manifest is signed by the driver before pre-loading checks are completed.",
+      "impact": "Driver's signature may not reflect accurate conditions if checks are not completed first.",
+      "recommendation": "Ensure pre-loading checks are completed and recorded before the driver signs the manifest."
+    },
+    {
+      "location": "Loading Procedure",
+      "issue": "Temperature checks required every 30 minutes are mentioned twice.",
+      "impact": "Redundant information, potential for confusion.",
+      "recommendation": "Remove duplicate mention of 30-minute temperature checks."
+    }
+  ],
+  "formatting_flags": [
+    {
+      "location": "Document",
+      "issue": "Missing mandatory sections",
+      "recommendation": "Include mandatory sections such as Scope, CCPs, and Related Documents as per the Golden Template."
+    },
+    {
+      "location": "Document",
+      "issue": "Incorrect heading hierarchy",
+      "recommendation": "Ensure headings follow a consistent hierarchy, e.g., H1 for main sections, H2 for subsections."
+    },
+    {
+      "location": "Despatch Manifest Sheet section",
+      "issue": "Steps not numbered",
+      "recommendation": "Number the steps for clarity, e.g., 1, 2, 3..."
+    },
+    {
+      "location": "Despatch Manifest Sheet section",
+      "issue": "Inconsistent list format",
+      "recommendation": "Use a consistent format for lists, such as bullet points or numbered lists."
+    },
+    {
+      "location": "Despatch Manifest Sheet section",
+      "issue": "Dense text block",
+      "recommendation": "Break down the text into smaller paragraphs or use bullet points for better readability."
+    },
+    {
+      "location": "Responsibility section",
+      "issue": "Missing white space",
+      "recommendation": "Add white space between paragraphs to improve readability."
+    },
+    {
+      "location": "Procedure section",
+      "issue": "Dense text block",
+      "recommendation": "Break down the text into smaller paragraphs or use bullet points for better readability."
+    },
+    {
+      "location": "Procedure section",
+      "issue": "Missing cross-references",
+      "recommendation": "Include cross-references to related Cranswick procedures or forms where applicable."
+    },
+    {
+      "location": "History of Change section",
+      "issue": "Inconsistent table layout",
+      "recommendation": "Ensure the table layout is consistent and aligned properly for readability."
+    },
+    {
+      "location": "References section",
+      "issue": "Missing white space",
+      "recommendation": "Add white space between entries to improve readability."
+    }
+  ],
+  "compliance_flags": [
+    {
+      "location": "Despatch Manifest Sheet",
+      "issue": "Missing refrigeration/chill-chain compliance steps",
+      "requirement_reference": "UK food regulatory",
+      "recommendation": "Include detailed steps for maintaining refrigeration/chill-chain compliance throughout the transportation process."
+    },
+    {
+      "location": "Despatch Manifest Sheet",
+      "issue": "Missing temperature data-logging devices",
+      "requirement_reference": "BRCGS Clause 4.16.3",
+      "recommendation": "Implement temperature data-logging devices to confirm time/temperature conditions during transport."
+    },
+    {
+      "location": "Despatch Manifest Sheet",
+      "issue": "Missing allergen handling requirements",
+      "requirement_reference": "BRCGS Food Safety",
+      "recommendation": "Include allergen handling requirements in the despatch procedure."
+    },
+    {
+      "location": "Despatch Manifest Sheet",
+      "issue": "Missing corrective action documentation",
+      "requirement_reference": "BRCGS Clause 2.x.x",
+      "recommendation": "Document corrective actions for when product temperatures are outside the specified range."
+    },
+    {
+      "location": "Despatch Manifest Sheet",
+      "issue": "Missing traceability details",
+      "requirement_reference": "BRCGS Food Safety",
+      "recommendation": "Ensure traceability details are included for all products being despatched."
+    },
+    {
+      "location": "Despatch Manifest Sheet",
+      "issue": "Missing meat-species segregation controls",
+      "requirement_reference": "UK food regulatory",
+      "recommendation": "Include controls for segregation of different meat species during transport."
+    },
+    {
+      "location": "Despatch Manifest Sheet",
+      "issue": "Missing mandatory references to customer requirements",
+      "requirement_reference": "Customer specification",
+      "recommendation": "Include references to specific customer requirements in the despatch procedure."
+    }
+  ],
+  "warnings": [],
+  "errors": [],
+  "agents_run": [
+    "cleansing",
+    "terminology",
+    "conflict",
+    "risk",
+    "specifying",
+    "sequencing",
+    "formatting",
+    "validation"
+  ]
+}

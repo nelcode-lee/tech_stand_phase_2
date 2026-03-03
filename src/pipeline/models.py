@@ -9,7 +9,10 @@ class RequestType(str, Enum):
     new_document = "new_document"
     update_existing = "update_existing"
     contradiction_flag = "contradiction_flag"
-    review_request = "review_request"
+    review_request = "review_request"  # Legacy; prefer single_document_review, harmonisation_review, principle_layer_review
+    single_document_review = "single_document_review"      # All agents
+    harmonisation_review = "harmonisation_review"          # Alignment with existing policies
+    principle_layer_review = "principle_layer_review"      # Principle layer: capture enough of the What
 
 
 class RiskLevel(str, Enum):
@@ -34,6 +37,7 @@ class TerminologyFlag(BaseModel):
     issue: str
     recommendation: str
     location: str | None = None  # Exact quote from document where term appears (evidence)
+    glossary_candidate: bool = False  # True when term is vague/undefined — route to HITL, add to glossary
 
 
 class Conflict(BaseModel):

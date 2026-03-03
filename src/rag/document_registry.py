@@ -141,6 +141,102 @@ def list_documents() -> list[dict]:
     return result
 
 
+def update_document_metadata(
+    document_id: str,
+    *,
+    sites: list[str] | None = None,
+    title: str | None = None,
+    doc_layer: str | None = None,
+    library: str | None = None,
+    policy_ref: str | None = None,
+) -> bool:
+    """
+    Update document metadata in the registry.
+    Only updates fields that are not None.
+    Returns True if the document was found and updated.
+    """
+    if not document_id:
+        return False
+    ensure_table()
+    updates = []
+    params = []
+    if sites is not None:
+        updates.append("sites = %s::jsonb")
+        params.append(json.dumps(sites) if isinstance(sites, list) else "[]")
+    if title is not None:
+        updates.append("title = %s")
+        params.append(title)
+    if doc_layer is not None:
+        updates.append("doc_layer = %s")
+        params.append(doc_layer)
+    if library is not None:
+        updates.append("library = %s")
+        params.append(library)
+    if policy_ref is not None:
+        updates.append("policy_ref = %s")
+        params.append(policy_ref)
+    if not updates:
+        return True
+    updates.append("updated_at = NOW()")
+    params.append(document_id)
+    with _cursor() as cur:
+        cur.execute(
+            f"UPDATE public.{TABLE_NAME} SET {', '.join(updates)} WHERE document_id = %s",
+            tuple(params),
+        )
+        return cur.rowcount > 0
+
+
+def update_vector_store_chunk_metadata(
+    document_id: str,
+    *,
+    sites: list[str] | None = None,
+    title: str | None = None,
+    doc_layer: str | None = None,
+    library: str | None = None,
+    policy_ref: str | None = None,
+) -> int:
+    """
+    Update metadata in vector store chunks for a document.
+    Returns the number of chunks updated.
+    """
+    if not document_id or not SUPABASE_DB_URL:
+        return 0
+    changes = []
+    if sites is not None:
+        changes.append(("sites", json.dumps(sites), "jsonb"))
+    if title is not None:
+        changes.append(("title", title, "text"))
+    if doc_layer is not None:
+        changes.append(("doc_layer", doc_layer, "text"))
+    if library is not None:
+        changes.append(("library", library, "text"))
+    if policy_ref is not None:
+        changes.append(("policy_ref", policy_ref, "text"))
+    if not changes:
+        return 0
+    for table in ("vecs.document_chunks", "public.document_chunks", "document_chunks"):
+        try:
+            with _cursor() as cur:
+                rowcount = 0
+                for key, val, typ in changes:
+                    if typ == "jsonb":
+                        cur.execute(
+                            f"UPDATE {table} SET metadata = jsonb_set(COALESCE(metadata, '{{}}'::jsonb), %s, %s::jsonb) WHERE metadata->>'document_id' = %s",
+                            ("{" + key + "}", val, document_id),
+                        )
+                    else:
+                        cur.execute(
+                            f"UPDATE {table} SET metadata = jsonb_set(COALESCE(metadata, '{{}}'::jsonb), %s, to_jsonb(%s::text)) WHERE metadata->>'document_id' = %s",
+                            ("{" + key + "}", val, document_id),
+                        )
+                    rowcount = cur.rowcount
+                return rowcount
+        except Exception:
+            continue
+    return 0
+
+
 def delete_document(document_id: str) -> None:
     """Remove a document from the registry (e.g. when re-ingesting or deleting)."""
     if not document_id:
@@ -156,8 +252,8 @@ def fetch_all_from_vector_store() -> list[dict]:
     """
     if not SUPABASE_DB_URL:
         return []
-    # Try vecs schema first (standard vecs layout), then public
-    for table in ("vecs.document_chunks", "document_chunks"):
+    # Try vecs schema first (standard vecs layout), then public, then unqualified
+    for table in ("vecs.document_chunks", "public.document_chunks", "document_chunks"):
         try:
             with _cursor() as cur:
                 cur.execute(f"""

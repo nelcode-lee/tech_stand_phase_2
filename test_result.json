@@ -1,0 +1,27 @@
+{
+  "tracking_id": "test-fbp-001",
+  "draft_ready": true,
+  "overall_risk": "low",
+  "conflict_count": 0,
+  "blocker_count": 0,
+  "conflicts": [],
+  "terminology_flags": [],
+  "risk_scores": [],
+  "risk_gaps": [],
+  "specifying_flags": [],
+  "sequencing_flags": [],
+  "formatting_flags": [],
+  "compliance_flags": [],
+  "warnings": [],
+  "errors": [],
+  "agents_run": [
+    "cleansing",
+    "terminology",
+    "conflict",
+    "risk",
+    "specifying",
+    "sequencing",
+    "formatting",
+    "validation"
+  ]
+}

@@ -1,8 +1,10 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { FileSearch, FilePlus2, Clock, CheckCircle2, AlertTriangle, XCircle, RefreshCw, Upload } from 'lucide-react';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { FileSearch, FilePlus2, Clock, CheckCircle2, AlertTriangle, XCircle, RefreshCw, Upload, Pencil, Trash2 } from 'lucide-react';
 import { useAnalysis } from '../context/AnalysisContext';
-import { listDocuments } from '../api';
+import { listDocuments, updateDocumentMetadata, deleteDocument } from '../api';
+import SitesSelect from '../components/SitesSelect';
+import { ALL_SITES_VALUES, resolveSitesForApi, formatSitesForDisplay } from '../constants/sites';
 import './LibraryPage.css';
 
 const LAYER_ORDER = { policy: 0, principle: 1, sop: 2, work_instruction: 3 };
@@ -40,6 +42,7 @@ function deriveStatus(/* doc */) {
 
 export default function LibraryPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { setWorkflowMode, setConfig, sessionLog } = useAnalysis();
 
   const [docs, setDocs] = useState([]);
@@ -47,6 +50,11 @@ export default function LibraryPage() {
   const [error, setError] = useState(null);
   const [search, setSearch] = useState('');
   const [layerFilter, setLayerFilter] = useState('all');
+  const [editDoc, setEditDoc] = useState(null);
+  const [editForm, setEditForm] = useState({ sites: [], title: '', doc_layer: 'sop', library: 'Uploads', policy_ref: '' });
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
 
   async function fetchDocs() {
     setLoading(true);
@@ -64,6 +72,15 @@ export default function LibraryPage() {
   useEffect(() => {
     fetchDocs();
   }, []);
+
+  // Refetch when returning from upload (handles DB commit timing)
+  useEffect(() => {
+    if (location.state?.fromUpload) {
+      const t = setTimeout(() => fetchDocs(), 500);
+      navigate(location.pathname, { replace: true, state: {} });
+      return () => clearTimeout(t);
+    }
+  }, [location.state?.fromUpload]);
 
   // Build a merged view: one row per document.
   // If a document has been analysed this session, overlay its risk/findings.
@@ -158,12 +175,13 @@ export default function LibraryPage() {
 
   function startReview(doc) {
     setWorkflowMode('review');
+    const sitesArr = Array.isArray(doc.sites) ? doc.sites : (doc.sites ? String(doc.sites).split(/[,\s]+/).filter(Boolean) : []);
     setConfig(c => ({
       ...c,
-      requestType: 'review_request',
+      requestType: 'single_document_review',
       documentId: doc.document_id,
       docLayer:   doc.doc_layer,
-      sites:      Array.isArray(doc.sites) ? doc.sites.join(', ') : (doc.sites || ''),
+      sites:      sitesArr,
     }));
     navigate('/review/configure');
   }
@@ -172,6 +190,58 @@ export default function LibraryPage() {
     setWorkflowMode('create');
     setConfig(c => ({ ...c, requestType: 'new_document', documentId: '' }));
     navigate('/create/configure');
+  }
+
+  function openEdit(doc) {
+    if (!doc.fromBackend) return;
+    const sitesArr = Array.isArray(doc.sites) ? doc.sites : (doc.sites ? String(doc.sites).split(/[,\s]+/).filter(Boolean) : []);
+    const hasAllSites = sitesArr.length >= ALL_SITES_VALUES.length && ALL_SITES_VALUES.every(s => sitesArr.includes(s));
+    setEditDoc(doc);
+    setEditForm({
+      sites: hasAllSites ? ['all'] : sitesArr.filter(s => ALL_SITES_VALUES.includes(s)),
+      title: doc.title || doc.document_id || '',
+      doc_layer: doc.doc_layer || 'sop',
+      library: doc.library || 'Uploads',
+      policy_ref: doc.policy_ref || '',
+    });
+    setEditError(null);
+  }
+
+  async function saveEdit(e) {
+    e.preventDefault();
+    if (!editDoc) return;
+    setEditSaving(true);
+    setEditError(null);
+    try {
+      const sitesForApi = resolveSitesForApi(editForm.sites);
+      await updateDocumentMetadata(editDoc.document_id, {
+        sites: sitesForApi,
+        title: editForm.title || undefined,
+        doc_layer: editForm.doc_layer || undefined,
+        library: editForm.library || undefined,
+        policy_ref: editForm.policy_ref || undefined,
+      });
+      setEditDoc(null);
+      fetchDocs();
+    } catch (err) {
+      setEditError(err.message || 'Failed to save');
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  async function handleDelete(doc) {
+    if (!doc.fromBackend) return;
+    if (!confirm(`Delete "${doc.title || doc.document_id}"? This cannot be undone.`)) return;
+    setDeletingId(doc.document_id);
+    try {
+      await deleteDocument(doc.document_id);
+      fetchDocs();
+    } catch (err) {
+      setError(err.message || 'Failed to delete document');
+    } finally {
+      setDeletingId(null);
+    }
   }
 
   return (
@@ -263,16 +333,21 @@ export default function LibraryPage() {
             {!loading && displayed.length === 0 && (
               <tr>
                 <td colSpan={9} className="library-empty">
-                  {merged.length === 0
-                    ? 'No documents found. Ingest a document or run an analysis to see results here.'
-                    : 'No documents match the current filter.'}
+                  {merged.length === 0 ? (
+                    <>
+                      No documents found. Add a document via the upload page or run an analysis.
+                      {location.state?.fromUpload && ' Click Refresh above to reload.'}
+                    </>
+                  ) : (
+                    'No documents match the current filter.'
+                  )}
                 </td>
               </tr>
             )}
             {!loading && displayed.map(doc => {
               const statusMeta = STATUS_META[doc.status] || STATUS_META.current;
               const StatusIcon = statusMeta.icon;
-              const siteLabel = Array.isArray(doc.sites) ? doc.sites.join(', ') : (doc.sites || '—');
+              const siteLabel = formatSitesForDisplay(doc.sites) ?? '—';
               const analysedAt = doc.completedAt
                 ? new Date(doc.completedAt).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
                 : null;
@@ -304,14 +379,39 @@ export default function LibraryPage() {
                     {analysedAt || <span className="doc-none">—</span>}
                   </td>
                   <td className="doc-actions-cell">
-                    <button
-                      type="button"
-                      className="row-action-btn"
-                      onClick={() => startReview(doc)}
-                    >
-                      <FileSearch size={14} />
-                      Review
-                    </button>
+                    <div className="doc-actions-wrap">
+                      {doc.fromBackend && (
+                        <>
+                          <button
+                            type="button"
+                            className="row-action-btn"
+                            onClick={() => openEdit(doc)}
+                            title="Edit metadata"
+                          >
+                            <Pencil size={14} />
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            className="row-action-btn row-action-btn-danger"
+                            onClick={() => handleDelete(doc)}
+                            disabled={deletingId === doc.document_id}
+                            title="Delete document"
+                          >
+                            <Trash2 size={14} />
+                            {deletingId === doc.document_id ? 'Deleting…' : 'Delete'}
+                          </button>
+                        </>
+                      )}
+                      <button
+                        type="button"
+                        className="row-action-btn"
+                        onClick={() => startReview(doc)}
+                      >
+                        <FileSearch size={14} />
+                        Review
+                      </button>
+                    </div>
                   </td>
                 </tr>
               );
@@ -319,6 +419,73 @@ export default function LibraryPage() {
           </tbody>
         </table>
       </div>
+
+      {editDoc && (
+        <div className="library-modal-overlay" onClick={() => !editSaving && setEditDoc(null)}>
+          <div className="library-modal" onClick={e => e.stopPropagation()}>
+            <h2 className="library-modal-title">Edit document metadata</h2>
+            <p className="library-modal-subtitle">{editDoc.document_id}</p>
+            <form onSubmit={saveEdit} className="library-modal-form">
+              <div className="library-modal-row">
+                <label htmlFor="edit-title">Title</label>
+                <input
+                  id="edit-title"
+                  type="text"
+                  value={editForm.title}
+                  onChange={e => setEditForm(f => ({ ...f, title: e.target.value }))}
+                />
+              </div>
+              <div className="library-modal-row">
+                <label htmlFor="edit-layer">Layer</label>
+                <select
+                  id="edit-layer"
+                  value={editForm.doc_layer}
+                  onChange={e => setEditForm(f => ({ ...f, doc_layer: e.target.value }))}
+                >
+                  {Object.entries(LAYER_LABEL).map(([v, l]) => (
+                    <option key={v} value={v}>{l}</option>
+                  ))}
+                </select>
+              </div>
+              <div className="library-modal-row">
+                <label>Sites</label>
+                <SitesSelect
+                  id="edit-sites"
+                  value={editForm.sites}
+                  onChange={v => setEditForm(f => ({ ...f, sites: v }))}
+                />
+              </div>
+              <div className="library-modal-row">
+                <label htmlFor="edit-library">Library</label>
+                <input
+                  id="edit-library"
+                  type="text"
+                  value={editForm.library}
+                  onChange={e => setEditForm(f => ({ ...f, library: e.target.value }))}
+                />
+              </div>
+              <div className="library-modal-row">
+                <label htmlFor="edit-policy">Policy Reference</label>
+                <input
+                  id="edit-policy"
+                  type="text"
+                  value={editForm.policy_ref}
+                  onChange={e => setEditForm(f => ({ ...f, policy_ref: e.target.value }))}
+                />
+              </div>
+              {editError && <div className="library-modal-error">{editError}</div>}
+              <div className="library-modal-actions">
+                <button type="button" className="row-action-btn" onClick={() => !editSaving && setEditDoc(null)}>
+                  Cancel
+                </button>
+                <button type="submit" className="library-create-btn" disabled={editSaving}>
+                  {editSaving ? 'Saving…' : 'Save'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

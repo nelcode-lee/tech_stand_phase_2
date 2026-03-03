@@ -35,6 +35,17 @@ Normalises all retrieved document content before any analysis occurs. Downstream
 - Sections marked as "DRAFT" or "PLACEHOLDER"
 - `[TBC]`, `[TO BE CONFIRMED]`, `[INSERT X]` patterns
 - Incomplete sentences (ends mid-clause)
+- Complex words, jargon, or undefined abbreviations that require prior company or technical knowledge (readers should understand without domain expertise)
+
+---
+
+## Glossary (domain_context.json)
+
+A standard glossary is maintained in `src/pipeline/domain_context.json` under `glossary.terms`. Example entries:
+- **CMEX**: Cranswick Manufacturing Execution software
+- **SSCC**: Serial Shipping Container Code
+
+These terms are injected as ambiguities into the cleansing and terminology agent prompts. When they appear in documents without definition, agents flag them. Add new terms to the glossary to extend coverage.
 
 ---
 
@@ -81,13 +92,15 @@ ctx.warnings               # appended with any placeholder/incomplete flags
 
 Cleansing is primarily rule-based (regex + python-docx parsing). Only invoke LLM if structural ambiguity cannot be resolved by rules — e.g. determining whether a heading is a section title or a callout box label.
 
-If LLM used:
+If LLM used for structural ambiguity:
 ```
 You are a document normalisation assistant. Your only task is to clean and 
 structure the following document text. Do not change any meaning. Do not 
 add content. Do not remove content unless it is purely formatting artefact 
 (page numbers, headers, footers). Return only the cleaned text.
 ```
+
+The specification analysis prompt (CLEANSING_SPEC_PROMPT) identifies vague language and **complex words/jargon** that would confuse readers without prior company or technical knowledge. Documents must be understandable by readers with no domain expertise.
 
 ---
 

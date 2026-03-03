@@ -1,5 +1,6 @@
 .library-upload-page {
-  max-width: 560px;
+  width: 100%;
+  max-width: var(--content-max-narrow, 560px);
 }
 
 .library-upload-header {
@@ -63,6 +64,11 @@
 
 .lib-upload-row .required {
   color: #b91c1c;
+}
+
+.lib-upload-hint {
+  font-size: 0.75rem;
+  color: var(--text-muted);
 }
 
 .lib-upload-row input,

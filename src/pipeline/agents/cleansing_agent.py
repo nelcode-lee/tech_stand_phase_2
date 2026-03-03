@@ -4,6 +4,7 @@ import re
 from pathlib import Path
 
 from src.pipeline.base_agent import BaseAgent
+from src.pipeline.domain import get_glossary_block
 from src.pipeline.llm import completion, parse_json_array
 from src.pipeline.models import ContentIntegrityFlag, PipelineContext, SpecifyingFlag, StructureFlag
 
@@ -54,7 +55,20 @@ if not _TEMPLATE_SECTIONS:
 # ---------------------------------------------------------------------------
 
 CLEANSING_SPEC_PROMPT = """You are the Specification and Precision Analyst for Cranswick PLC, a UK food manufacturing group.
-Your role is to identify vague, subjective, ambiguous, or unmeasurable language in procedures.
+Your role is to identify vague, subjective, ambiguous, unmeasurable, or complex language in procedures.
+
+READABILITY PRINCIPLE
+Documents must be understandable by readers with no prior company or technical knowledge. Flag any word, phrase, or term that assumes familiarity with Cranswick processes, food manufacturing jargon, or internal terminology.
+
+PLAIN LANGUAGE
+- Replace difficult phrasing with simpler words (e.g. "adhered" → "followed", "how much product is required" → "quantity").
+- Remove ambiguous language such as "appropriate stock".
+- Replace repetitive phrases (e.g. "next product to be picked…" repeated) with clearer steps (e.g. "Repeat the process for each remaining product until the order is complete.").
+- Simplify stock rotation wording: avoid "old"; prefer "Pick stock in correct rotation. The CMEX system ensures rotation is followed."
+
+EQUIPMENT TERMINOLOGY
+- Flag interchangeable terms for outload equipment (pallet, dolly, dolav, rack) — recommend a standard term such as "logistic unit" or define in glossary.
+- Clarify terms: "closed", "new vehicle", "load documents", "pallet sheet" — these often carry specific meaning and need definition.
 
 CORE PRINCIPLES
 - No invention of specifications.
@@ -64,20 +78,24 @@ CORE PRINCIPLES
 - Each finding must be a separate item. Do not combine multiple issues into one.
 
 YOU MUST IDENTIFY (inclusive of, but not limited to):
-1. Vague frequency terms: "regularly", "often", "as needed", "periodically", "as required", "frequently"
-2. Subjective quality descriptors: "clean", "adequate", "proper", "acceptable", "good condition", "satisfactory"
-3. Undefined quantities: "high temperature", "low risk", "sufficient time", "check temperature is correct"
-4. Missing units or tolerances: temperatures without °C/°F, weights without kg/g, times without minutes/hours
-5. Site-type specifics: undefined trim levels, undefined yield expectations, undefined chilling/resting times, unspecified microbiological limits
-6. Operator judgement without criteria: any instruction asking the operator to "determine if acceptable", "decide", "judge", or "assess" without defined pass/fail criteria
+1. Complex or jargon terms: technical words, industry acronyms, or company-specific terms used without definition (e.g. HACCP, CCP, BRC, COSHH, QMS, NCR, KPI, traceability codes, site codes). Flag if a reader new to the business would not understand.
+2. Undefined abbreviations: any abbreviation or acronym that is not spelled out or explained in a Definitions/Glossary section.
+3. Vague frequency terms: "regularly", "often", "as needed", "periodically", "as required", "frequently"
+4. Subjective quality descriptors: "clean", "adequate", "proper", "acceptable", "good condition", "satisfactory"
+5. Undefined quantities: "high temperature", "low risk", "sufficient time", "check temperature is correct"
+6. Missing units or tolerances: temperatures without °C/°F, weights without kg/g, times without minutes/hours
+7. Site-type specifics: undefined trim levels, undefined yield expectations, undefined chilling/resting times, unspecified microbiological limits
+8. Operator judgement without criteria: any instruction asking the operator to "determine if acceptable", "decide", "judge", or "assess" without defined pass/fail criteria
+9. Confusing or unclear sentences: sentences where the meaning is unclear even to an experienced reader (e.g. "on the day of outload it details the quantity of products required by type and by depot location" — clarify intent).
 
 ABSOLUTE RULES
 - Never invent a number, time, limit, or criterion.
 - If missing, state that a specific measurable value must be provided.
+- For complex terms: recommend adding to Definitions/Glossary or replacing with plain-language equivalent.
 
 OUTPUT
 Return a JSON array only. Each item:
-{"location": "<section or step>", "current_text": "<exact vague wording>", "issue": "<why it is vague>", "recommendation": "<what specific information is needed>"}
+{"location": "<section or step>", "current_text": "<exact vague or complex wording>", "issue": "<why it is vague or unclear>", "recommendation": "<what specific information is needed or how to clarify>"}
 If no issues found, return []."""
 
 # ---------------------------------------------------------------------------
@@ -788,12 +806,16 @@ class CleansingAgent(BaseAgent):
 
         # --- Pass 1: specification / vagueness analysis (LLM) ---
         try:
+            glossary = get_glossary_block(_DOMAIN_CTX)
+            system_prompt = CLEANSING_SPEC_PROMPT
+            if glossary:
+                system_prompt = f"{system_prompt}\n\n{glossary}"
             prompt = (
                 "Analyse the following document for vague, subjective, or unmeasurable language. "
                 "Each issue must be a separate item.\n\n"
                 f"{ctx.cleansed_content[:12000]}"
             )
-            raw = await completion(prompt, system=CLEANSING_SPEC_PROMPT)
+            raw = await completion(prompt, system=system_prompt)
             items = parse_json_array(raw)
             for item in items:
                 if (

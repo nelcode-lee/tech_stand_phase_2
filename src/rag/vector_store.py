@@ -107,29 +107,35 @@ def query_chunks(
     doc_layer: str | None = None,
     policy_ref: str | None = None,
     sites: list[str] | None = None,
+    document_id: str | None = None,
     limit: int = 20,
     collection=None,
 ) -> list[DocumentChunk]:
     """
     Query the vector store for similar chunks. Returns DocumentChunks with metadata.
-    Filters by doc_layer, policy_ref; sites filter uses $contains on stored JSON string.
+    Filters by doc_layer, policy_ref, document_id; sites filter uses $contains on stored JSON string.
+    When document_id is set, fetches more results to ensure all chunks from that document are returned.
     """
     if not embedding:
         return []
     coll = collection or get_collection()
-    # Skip vecs filters (vecs has "max 1 entry per filter" constraint); filter in Python
-    fetch_limit = limit * 3 if (doc_layer or policy_ref or sites) else limit
+    # When document_id specified: fetch more to get all chunks from that doc; otherwise standard fetch
+    if document_id:
+        fetch_limit = 150  # enough to capture all chunks of a typical document
+    else:
+        fetch_limit = limit * 3 if (doc_layer or policy_ref or sites) else limit
+    # Apply document_id filter at query level so we only retrieve chunks from the specified doc
+    filters = {"document_id": {"$eq": document_id}} if document_id else None
     results = coll.query(
         data=embedding,
         limit=fetch_limit,
-        filters=None,
+        filters=filters,
         include_value=True,
         include_metadata=True,
     )
     chunks: list[DocumentChunk] = []
     for rec in results:
         if isinstance(rec, tuple):
-            # (id, value, metadata) when include_metadata and include_value
             rec_id = rec[0]
             metadata = rec[2] if len(rec) > 2 else {}
         elif hasattr(rec, "id"):
@@ -139,6 +145,8 @@ def query_chunks(
             continue
         chunk = _metadata_to_chunk(rec_id, metadata)
         if chunk:
+            if document_id and (chunk.document_id or "") != document_id:
+                continue
             if doc_layer and (chunk.doc_layer.value if hasattr(chunk.doc_layer, "value") else str(chunk.doc_layer)) != doc_layer:
                 continue
             if policy_ref and (chunk.policy_ref or "") != policy_ref:
@@ -146,6 +154,9 @@ def query_chunks(
             if sites and chunk.sites and not any(s in chunk.sites for s in sites):
                 continue
             chunks.append(chunk)
-            if len(chunks) >= limit:
+            if not document_id and len(chunks) >= limit:
                 break
+    # When scoped to one document, sort by chunk_index so content is in document order
+    if document_id and chunks:
+        chunks.sort(key=lambda c: c.chunk_index)
     return chunks

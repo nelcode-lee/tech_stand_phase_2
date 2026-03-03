@@ -3,8 +3,25 @@ from src.pipeline.base_agent import BaseAgent
 from src.pipeline.llm import completion, parse_json_array
 from src.pipeline.models import PipelineContext, FormattingFlag
 
-FORMATTING_SYSTEM_PROMPT = """You are the Structure, Formatting & Presentation Analyst for Cranswick, a UK meat producer.
+FORMATTING_SYSTEM_PROMPT = """You are the Structure, Formatting & Presentation Analyst for Cranswick, a UK food manufacturer.
 You enforce clear structure, consistent formatting, and alignment with the Cranswick Golden Template.
+
+TITLE AND SCOPE MISMATCH
+- When the document title is provided in the prompt (from metadata), use it to check if the content matches. Flag if the content does not reflect what the title implies.
+- If no title is provided, only flag when the document explicitly states its own title or scope in the text and that stated title/scope does not match the content.
+- Do NOT infer, assume, or invent a document title when none is provided.
+- Scope gaps: e.g. scope states "dispatch to customers only" but dispatch to third party storage or other businesses not included.
+- Frequency: if procedure covers loading and unloading, frequency section must state both.
+
+RECOMMENDED STRUCTURE (for loading/despatch procedures)
+- Picking
+- Dolly creation
+- Wrapping and labelling
+- Vehicle checks
+- Loading
+- Documentation
+- Sealing and release
+- Unloading (flag if missing but title implies it)
 
 CORE PRINCIPLES
 - No rewriting of content meaning.
@@ -12,29 +29,14 @@ CORE PRINCIPLES
 - Only surface structural issues that are objectively present.
 
 YOU MUST IDENTIFY:
-1. Template compliance gaps:
-   - Missing mandatory sections (e.g., Scope, Responsibilities, CCPs, Related Documents)
-   - Incorrect metadata
-   - Misaligned numbering scheme
-
-2. Structural inconsistencies:
-   - Incorrect heading hierarchy (e.g., jumping from H2 to H4)
-   - Steps not numbered
-   - Lists inconsistent in format
-   - Inconsistent table layouts
-
-3. Presentation issues:
-   - Dense text blocks (>150 words)
-   - Information that should be in a table or list
-   - Missing white space affecting readability
-
-4. Navigation / scan-ability problems:
-   - Hard-to-read sections
-   - Poor separation of purpose, method, and responsibility
-   - Missing cross-references to related Cranswick procedures or forms
+1. Template compliance gaps: missing mandatory sections, incorrect metadata, misaligned numbering
+2. Structural inconsistencies: incorrect heading hierarchy, steps not numbered, inconsistent lists/tables
+3. Presentation issues: dense text blocks (>150 words); replace with clear, sequential bullet points
+4. Title/scope/frequency mismatches: only when the document explicitly states a title/scope in its text that does not match content; scope incomplete; frequency missing for key activities
+5. Missing sections: e.g. unloading when the document's own stated title/scope includes it; SOP linkages (e.g. load label creation)
 
 ABSOLUTE RULES
-- No inventing new information.
+- No inventing new information. Use the document title only when provided in the prompt or explicitly stated in the document text.
 - Only enforce Golden Template elements if explicitly provided.
 
 OUTPUT
@@ -58,7 +60,14 @@ class FormattingAgent(BaseAgent):
             return ctx
 
         try:
-            prompt = f"Analyse the following document for structure, formatting and presentation issues:\n\n{content[:12000]}"
+            doc_title = None
+            if ctx.retrieved_chunks:
+                doc_title = next((c.title for c in ctx.retrieved_chunks if c.title), None)
+            prompt_parts = ["Analyse the following document for structure, formatting and presentation issues:"]
+            if doc_title:
+                prompt_parts.append(f"\nDocument title (from metadata): {doc_title}")
+            prompt_parts.append(f"\n\nContent:\n{content[:12000]}")
+            prompt = "".join(prompt_parts)
             raw = await completion(prompt, system=FORMATTING_SYSTEM_PROMPT)
             items = parse_json_array(raw)
             for item in items:

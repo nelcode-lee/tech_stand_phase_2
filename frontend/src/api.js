@@ -58,10 +58,64 @@ export async function listDocuments() {
 }
 
 /**
+ * Update document metadata (sites, title, doc_layer, library, policy_ref).
+ * Persists to both registry and vector store chunks.
+ */
+export async function updateDocumentMetadata(documentId, body) {
+  return request(`/ingest/documents/${encodeURIComponent(documentId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+}
+
+/**
+ * Delete a document from the registry and vector store.
+ */
+export async function deleteDocument(documentId) {
+  return request(`/ingest/documents/${encodeURIComponent(documentId)}`, {
+    method: 'DELETE',
+  });
+}
+
+/**
  * Fetch recent analysis sessions for dashboard metrics.
  * Returns an array of { trackingId, documentId, title, docLayer, sites, overallRisk,
  *   totalFindings, agentsRun, agentFindings, workflowType, completedAt }.
  */
 export async function listAnalysisSessions(limit = 50) {
   return request(`/analysis/sessions?limit=${limit}`);
+}
+
+/**
+ * Fetch a single analysis session with full result (findings, flags, etc.).
+ */
+export async function getAnalysisSession(trackingId) {
+  return request(`/analysis/sessions/${encodeURIComponent(trackingId)}`);
+}
+
+/**
+ * Save analysis session (captures changes, ensures state is persisted).
+ */
+export async function saveAnalysisSession(body) {
+  return request('/analysis/save', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+/**
+ * Export draft content as DOCX. Returns a Blob.
+ */
+export async function exportDraftDocx(content, filename = 'draft') {
+  const url = `${BASE}/draft`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content, filename }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || err.message || res.statusText || `HTTP ${res.status}`);
+  }
+  return res.blob();
 }

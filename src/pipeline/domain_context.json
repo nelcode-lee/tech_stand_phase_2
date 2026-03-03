@@ -91,6 +91,30 @@
     ]
   },
 
+  "glossary": {
+    "description": "Standard terms and abbreviations used across Cranswick. When these appear in documents without definition, agents flag them as ambiguities. Add to Definitions/Glossary or spell out on first use.",
+    "terms": [
+      {"abbreviation": "CMEX", "definition": "Cranswick Manufacturing Execution software"},
+      {"abbreviation": "SSCC", "definition": "Serial Shipping Container Code — unique identifier for logistic units; specify how printed and where attached (front or side)"},
+      {"abbreviation": "HACCP", "definition": "Hazard Analysis and Critical Control Points"},
+      {"abbreviation": "CCP", "definition": "Critical Control Point"},
+      {"abbreviation": "BRC", "definition": "BRCGS (Brand Reputation Compliance Global Standards) — food safety certification"},
+      {"abbreviation": "NCR", "definition": "Non-Conformance Report"},
+      {"abbreviation": "SOP", "definition": "Standard Operating Procedure"},
+      {"abbreviation": "QMS", "definition": "Quality Management System"},
+      {"abbreviation": "COSHH", "definition": "Control of Substances Hazardous to Health"},
+      {"abbreviation": "KPI", "definition": "Key Performance Indicator"},
+      {"abbreviation": "TEL", "definition": "Tray End Label"},
+      {"term": "Dolly", "definition": "Logistic unit for despatch; standardise with pallet/dolav/rack where context allows"},
+      {"term": "Logistic unit", "definition": "Standard term for pallet, dolly, dolav, rack when used as outload equipment"},
+      {"term": "Load sheet", "definition": "Document detailing load contents; clarify if synonymous with manifest"},
+      {"term": "Manifest", "definition": "Load documentation; driver signs after loading; clarify vs load sheet"},
+      {"term": "Pallet sheet", "definition": "Sheet for dolly/pallet; clarify vs dolly sheet"},
+      {"term": "Stock rotation", "definition": "Pick stock in correct rotation; CMEX ensures rotation is followed"},
+      {"term": "Load documents", "definition": "Clarify which documents; whether synonymous with manifest"}
+    ]
+  },
+
   "standard_document_sections": {
     "description": "Group document template — canonical section order. Edit here to adjust what CleansingAgent checks. 'required' sections generate high-severity omission flags; optional sections generate low-severity advisory flags.",
     "template": [

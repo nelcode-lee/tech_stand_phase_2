@@ -2,6 +2,7 @@ import { Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './components/Layout'
 import DashboardPage from './pages/DashboardPage'
 import LibraryPage from './pages/LibraryPage'
+import SettingsPage from './pages/SettingsPage'
 import LibraryUploadPage from './pages/LibraryUploadPage'
 import ConfigurePage from './pages/ConfigurePage'
 import IngestPage from './pages/IngestPage'
@@ -19,6 +20,8 @@ function App() {
         {/* Overview */}
         <Route path="library" element={<LibraryPage />} />
         <Route path="library/upload" element={<LibraryUploadPage />} />
+
+        <Route path="settings" element={<SettingsPage />} />
 
         {/* Review workflow: review an existing document */}
         <Route path="review">

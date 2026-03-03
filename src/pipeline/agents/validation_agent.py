@@ -10,7 +10,7 @@ from src.pipeline.models import (
     ComplianceFlag,
 )
 
-VALIDATION_COMPLIANCE_PROMPT = """You are the Regulatory, Compliance & Audit Integrity Analyst for Cranswick, a UK meat manufacturer.
+VALIDATION_COMPLIANCE_PROMPT = """You are the Regulatory, Compliance & Audit Integrity Analyst for Cranswick, a UK food manufacturer.
 Your role is to identify explicit misalignments with BRCGS Food Safety, customer requirements, UK regulatory expectations, or Cranswick compliance standards—ONLY where the text clearly shows a mismatch.
 
 CORE PRINCIPLES
@@ -19,26 +19,19 @@ CORE PRINCIPLES
 - Only flag compliance issues that are directly observable.
 - If no clause text or requirement is provided, you cannot validate it.
 
+BRC EXPECTATIONS (for loading/despatch procedures)
+- Vehicle hygiene checks: vehicle "free from debris, glass, pests, signs of damp"
+- Temperature monitoring: equipment must maintain temperature; site can only verify vehicle is at correct temperature at arrival
+- Seal verification and documentation of checks (including record IDs)
+- Food vs non-food segregation: reflect practical rules — empty dollies are permitted
+- Load documents: must carry document control identifiers (version, date, reviewer)
+
 YOU MUST IDENTIFY:
-1. BRCGS Food Safety alignment issues (based on text provided):
-   - Missing corrective action documentation (Clause 2.x.x)
-   - Missing CCP verification records
-   - Missing traceability details
-   - Missing allergen handling requirements
-
-2. Customer specification compliance gaps:
-   - Frequencies, limits, or tests that differ from the provided spec
-   - Missing mandatory references to customer requirements
-
-3. UK food regulatory gaps:
-   - Missing allergen declaration workflow (Natasha's Law)
-   - Missing refrigeration/chill-chain compliance steps
-   - Missing meat-species segregation controls
-
-4. Cranswick Golden Template & internal compliance gaps:
-   - Required evidence not stated
-   - Required sign-offs missing
-   - Record forms referenced incorrectly or missing
+1. BRCGS Food Safety alignment: missing corrective action documentation, CCP verification records, traceability, allergen handling
+2. Customer specification compliance: frequencies, limits, tests differing from spec; missing mandatory references
+3. UK food regulatory gaps: allergen declaration (Natasha's Law), refrigeration/chill-chain, meat-species segregation
+4. Cranswick Golden Template: required evidence not stated; sign-offs missing; record forms incorrect or missing
+5. Document control: load documents without version, date, reviewer; vehicle seal tags without document control
 
 ABSOLUTE RULES
 - Only identify gaps visible in the text.
@@ -90,6 +83,16 @@ class ValidationAgent(BaseAgent):
         if ctx.draft_content:
             result.placeholder_count = len(
                 re.findall(r"\[TBC\]|\[PLACEHOLDER\]", ctx.draft_content, re.I)
+            )
+
+        # Vague terminology: route to HITL and surface for glossary addition (advisory, do not block)
+        glossary_candidates = [t for t in ctx.terminology_flags if getattr(t, "glossary_candidate", False)]
+        if glossary_candidates:
+            terms_list = ", ".join(f'"{t.term}"' for t in glossary_candidates[:5])
+            if len(glossary_candidates) > 5:
+                terms_list += f" (+{len(glossary_candidates) - 5} more)"
+            result.advisory_issues.append(
+                f"Vague terminology detected — route to HITL and add to glossary: {terms_list}"
             )
 
         # Block on critical errors

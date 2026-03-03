@@ -1,5 +1,6 @@
 .ingest-page {
-  max-width: 580px;
+  width: 100%;
+  max-width: var(--content-max-narrow, 580px);
 }
 
 .ingest-header {
@@ -115,6 +116,30 @@
   font-weight: 500;
 }
 
+/* Progress bar during ingest */
+.ingest-progress-wrap {
+  margin-bottom: var(--space-lg);
+}
+
+.ingest-progress-bar {
+  height: 6px;
+  background: linear-gradient(90deg, var(--yb-blue) 0%, var(--cranswick-di-serria) 50%, var(--yb-blue) 100%);
+  background-size: 200% 100%;
+  border-radius: 3px;
+  animation: ingest-progress 1.5s ease-in-out infinite;
+}
+
+.ingest-progress-text {
+  margin: var(--space-sm) 0 0;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+@keyframes ingest-progress {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
 /* Status */
 .upload-status {
   padding: var(--space-md);
@@ -198,4 +223,8 @@
 .ingest-btn-primary:hover {
   opacity: 0.92;
   box-shadow: 0 4px 12px rgba(50,65,87,0.3);
+}
+
+.ingest-btn-primary.ingest-skip-highlight {
+  border: 2px dashed rgba(255,255,255,0.6);
 }

@@ -1,0 +1,217 @@
+{
+  "tracking_id": "internal-audit-001",
+  "draft_ready": true,
+  "overall_risk": "low",
+  "conflict_count": 0,
+  "blocker_count": 0,
+  "conflicts": [],
+  "terminology_flags": [],
+  "risk_scores": [],
+  "risk_gaps": [],
+  "specifying_flags": [
+    {
+      "location": "Objective",
+      "current_text": "All reasonable measures are taken",
+      "issue": "The term 'reasonable measures' is subjective and lacks specificity.",
+      "recommendation": "Specify what measures are considered reasonable and how they are implemented."
+    },
+    {
+      "location": "Objective",
+      "current_text": "to ensure that raw materials are delivered to site to the agreed specification",
+      "issue": "The phrase 'agreed specification' is vague without a reference to specific documents or criteria.",
+      "recommendation": "Provide a reference to the specific document or criteria that outlines the agreed specification."
+    },
+    {
+      "location": "GOODS IN CHECKS",
+      "current_text": "ensure that they are free from MOULD, FOREIGN BODIES, LEAKS, DAMP, and PESTS OR EVIDENCE OF PESTS OR PEST DAMAGE, ALLERGENS",
+      "issue": "The terms 'MOULD', 'FOREIGN BODIES', 'LEAKS', 'DAMP', 'PESTS', and 'PEST DAMAGE' are subjective without specific criteria or thresholds.",
+      "recommendation": "Define specific criteria or thresholds for what constitutes mould, foreign bodies, leaks, damp, pests, and pest damage."
+    },
+    {
+      "location": "GOODS IN CHECKS",
+      "current_text": "The packaging is also checked to ensure that is it intact.",
+      "issue": "The term 'intact' is subjective and lacks specific criteria.",
+      "recommendation": "Provide specific criteria for what constitutes intact packaging."
+    },
+    {
+      "location": "Sampling of incoming raw materials",
+      "current_text": "Further testing may be required which will involve the co-operation of all the relevant Managers.",
+      "issue": "The phrase 'may be required' is vague and does not specify under what conditions further testing is needed.",
+      "recommendation": "Specify the conditions or criteria that would necessitate further testing."
+    },
+    {
+      "location": "Objective",
+      "current_text": "All reasonable measures are taken",
+      "issue": "vague frequency term",
+      "recommendation": "Specify the exact measures and frequency of checks required to ensure compliance"
+    },
+    {
+      "location": "GOODS IN CHECKS",
+      "current_text": "checked to ensure that they are free from MOULD, FOREIGN BODIES, LEAKS, DAMP, and PESTS OR EVIDENCE OF PESTS OR PEST DAMAGE, ALLERGENS",
+      "issue": "subjective quality descriptor",
+      "recommendation": "Provide measurable criteria for what constitutes 'free from' each listed issue, such as specific inspection methods or thresholds"
+    },
+    {
+      "location": "GOODS IN CHECKS",
+      "current_text": "packaging is also checked to ensure that is it intact",
+      "issue": "subjective quality descriptor",
+      "recommendation": "Define what 'intact' means, such as no visible tears or punctures, and specify inspection procedures"
+    },
+    {
+      "location": "Sampling of incoming raw materials",
+      "current_text": "Further testing may be required",
+      "issue": "vague frequency term",
+      "recommendation": "Specify the conditions under which further testing is required and the types of tests to be conducted"
+    }
+  ],
+  "structure_flags": [
+    {
+      "flag_type": "omission",
+      "section": "Purpose / Objective",
+      "detail": "Required section \"Purpose / Objective\" is absent from the document.",
+      "recommendation": "Add a \"Purpose / Objective\" section. Refer to the group document template for expected content.",
+      "severity": "high"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Scope",
+      "detail": "Required section \"Scope\" is absent from the document.",
+      "recommendation": "Add a \"Scope\" section. Refer to the group document template for expected content.",
+      "severity": "high"
+    },
+    {
+      "flag_type": "omission",
+      "section": "References",
+      "detail": "Required section \"References\" is absent from the document.",
+      "recommendation": "Add a \"References\" section. Refer to the group document template for expected content.",
+      "severity": "high"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Responsibilities",
+      "detail": "Required section \"Responsibilities\" is absent from the document.",
+      "recommendation": "Add a \"Responsibilities\" section. Refer to the group document template for expected content.",
+      "severity": "high"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Definitions",
+      "detail": "Recommended section \"Definitions\" is not present.",
+      "recommendation": "Add a \"Definitions\" section. Refer to the group document template for expected content.",
+      "severity": "low"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Procedure / Method",
+      "detail": "Required section \"Procedure / Method\" is absent from the document.",
+      "recommendation": "Add a \"Procedure / Method\" section. Refer to the group document template for expected content.",
+      "severity": "high"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Frequency",
+      "detail": "Recommended section \"Frequency\" is not present.",
+      "recommendation": "Add a \"Frequency\" section. Refer to the group document template for expected content.",
+      "severity": "low"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Record Keeping",
+      "detail": "Required section \"Record Keeping\" is absent from the document.",
+      "recommendation": "Add a \"Record Keeping\" section. Refer to the group document template for expected content.",
+      "severity": "high"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Corrective Actions",
+      "detail": "Required section \"Corrective Actions\" is absent from the document.",
+      "recommendation": "Add a \"Corrective Actions\" section. Refer to the group document template for expected content.",
+      "severity": "high"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Review Schedule",
+      "detail": "Recommended section \"Review Schedule\" is not present.",
+      "recommendation": "Add a \"Review Schedule\" section. Refer to the group document template for expected content.",
+      "severity": "low"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Approval / Sign-off",
+      "detail": "Recommended section \"Approval / Sign-off\" is not present.",
+      "recommendation": "Add a \"Approval / Sign-off\" section. Refer to the group document template for expected content.",
+      "severity": "low"
+    }
+  ],
+  "content_integrity_flags": [
+    {
+      "flag_type": "encoding_anomaly",
+      "location": "Near \"Relevant Documentation: In-house Audit Schedule GEN-OP-28 \t\tTraceability Procedure QBY-OP-28 \t\tTraceability Procedure GEN-QA-41\t\tTraceability Log Sheet QBY-QA-33\t\tTraceability Log Sheet GEN-OP-52\t\tCorrective Action Procedure GEN-QA-25\t\tCCP Internal Audit Report Form GEN-QA-72 \t\tCCP Auditing and Validation Schedule GEN-QA-77        CCP Validations QBY-QA-41\t\tCCP Validations QBY-QA-42\t\tCCP Internal Auditing Report Form GEN-QA-75        Raw Material Mass balance Traceability Log GEN-QA-76        Packaging Mass Balance Traceability Log GEN-QA-59 \t\tProcess Audits QBY-QA-50 \t\tProduct Audit Report GEN-ENG-01 \t\tMaintenance Record GMP Audit Information CCP Risk Assessment Tracker BRC - Global Standard for Food Safety Tesco Food Manufacturing Standard GTC029\t\tGroup Internal Audit Procedure Cranswick Manufacturing Standard QUOR Audits Module (Audits, GMP and Hygiene Calendars) QUOR Non-Conformances Module APPENDIX 1- NON -CONFORMANCE DECISION TREE Departments: Production, Warehouse, Technical, Engineering Objective:\"",
+      "excerpt": "'tive:\\n\\nDepartments: \\x07ALL \\x07 \\x07Objective: \\x07A'",
+      "detail": "Encoding anomaly detected: non-printable control character. Found 33 occurrences in this document. All occurrences share the same root cause and are reported here once.",
+      "recommendation": "Control characters in procedural text indicate a corrupt or mis-encoded export. Strip these characters and verify the content is intact.",
+      "severity": "medium"
+    }
+  ],
+  "sequencing_flags": [],
+  "formatting_flags": [
+    {
+      "location": "Relevant Documentation",
+      "issue": "Dense text block",
+      "recommendation": "Break into a list format for better readability."
+    },
+    {
+      "location": "Departments",
+      "issue": "Duplicate entry",
+      "recommendation": "Remove duplicate 'Departments' entry to avoid confusion."
+    },
+    {
+      "location": "Objective",
+      "issue": "Dense text block",
+      "recommendation": "Break into smaller paragraphs or bullet points for clarity."
+    },
+    {
+      "location": "Detail",
+      "issue": "Missing section heading",
+      "recommendation": "Add a heading for 'Detail' to maintain consistency with other sections."
+    },
+    {
+      "location": "INCOMING RAW MATERIALS",
+      "issue": "Dense text block",
+      "recommendation": "Break into smaller paragraphs or bullet points for clarity."
+    },
+    {
+      "location": "RAW MATERIALS & RAW MATERIAL SUPPLIERS",
+      "issue": "Dense text block",
+      "recommendation": "Break into smaller paragraphs or bullet points for clarity."
+    },
+    {
+      "location": "GOODS IN CHECKS",
+      "issue": "Dense text block",
+      "recommendation": "Break into smaller paragraphs or bullet points for clarity."
+    },
+    {
+      "location": "GOODS IN CHECKS",
+      "issue": "Information that should be in a list",
+      "recommendation": "Convert the list of checks (MOULD, FOREIGN BODIES, etc.) into a bullet list."
+    },
+    {
+      "location": "Sampling of incoming raw materials",
+      "issue": "Dense text block",
+      "recommendation": "Break into smaller paragraphs or bullet points for clarity."
+    }
+  ],
+  "compliance_flags": [],
+  "warnings": [],
+  "errors": [],
+  "agents_run": [
+    "cleansing",
+    "terminology",
+    "conflict",
+    "risk",
+    "specifying",
+    "sequencing",
+    "formatting",
+    "validation"
+  ]
+}

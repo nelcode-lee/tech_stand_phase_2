@@ -56,6 +56,10 @@ _SITE_TYPE_CATEGORIES: dict[str, list[str]] = {
         "Segregation of allergen or high-risk products not referenced",
         "Driver / operative training requirements not stated",
         "Chain of custody or traceability during transit not addressed",
+        "Missing Unloading procedure — significant omission if title includes unloading",
+        "No corrective action when vehicle is unsuitable (dirty, damaged, temperature out of range)",
+        "Temperature checks only on last dolly — forces complete unloading if out of spec; add preventative step (e.g. random checks before loading)",
+        "Seal requirements unclear: trailers only or vehicles too? Which document records this?",
     ],
     "default": [
         "Process-specific hazard controls not defined",
@@ -72,6 +76,11 @@ _CROSS_DOC_CATEGORIES = [
     "Conflict with or missing reference to parent policy/principle",
     "No reference to related site technical documentation (e.g. cleaning schedule, pest control log)",
     "Regulatory reference absent (e.g. Food Safety Act, BRC/BRCGS standard, CODEX)",
+    "No section on unloading when title or scope implies it",
+    "Product returns incorrectly included in procedure where not applicable",
+    "No guidance on SOP linkages (e.g. load label creation)",
+    "No defined process for CMEX update confirming full order completion",
+    "Document control for vehicle seal tags not clarified",
 ]
 
 _SYSTEM_PROMPT_TEMPLATE = """You are the Risk and Assumption Gap Analyst for Cranswick PLC, a UK food manufacturing group operating across multiple site types including meat processing, bakery, prepared foods, and distribution.

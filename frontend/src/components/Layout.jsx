@@ -66,7 +66,7 @@ function Sidebar() {
       </nav>
 
       <div className="sidebar-footer">
-        <NavLink to="/settings" className="sidebar-link sidebar-link-muted">
+        <NavLink to="/settings" className={({ isActive }) => `sidebar-link sidebar-link-muted ${isActive ? 'active' : ''}`}>
           <Settings size={16} />
           Settings
         </NavLink>

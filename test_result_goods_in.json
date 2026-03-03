@@ -1,0 +1,302 @@
+{
+  "tracking_id": "goods-in-001",
+  "draft_ready": true,
+  "overall_risk": "critical",
+  "conflict_count": 0,
+  "blocker_count": 0,
+  "conflicts": [],
+  "terminology_flags": [],
+  "risk_scores": [],
+  "risk_gaps": [
+    {
+      "location": "INCOMING RAW MATERIALS",
+      "issue": "Corrective actions for non-conforming raw materials are not specified.",
+      "risk": "Non-conforming materials may be used, leading to product quality issues or safety hazards.",
+      "recommendation": "Include specific corrective actions to be taken when raw materials do not meet specifications.",
+      "severity": 4,
+      "scope": 4,
+      "detectability": 3,
+      "fmea_score": 48,
+      "fmea_band": "critical"
+    },
+    {
+      "location": "GOODS IN CHECKS",
+      "issue": "Escalation procedure for issues found during goods in checks is not defined.",
+      "risk": "Issues may not be addressed promptly, leading to potential quality or safety risks.",
+      "recommendation": "Define an escalation procedure, including who to contact and how, when issues are identified during goods in checks.",
+      "severity": 4,
+      "scope": 3,
+      "detectability": 3,
+      "fmea_score": 36,
+      "fmea_band": "critical"
+    },
+    {
+      "location": "GOODS IN CHECKS",
+      "issue": "Verification methods and record-keeping requirements for goods in checks are not specified.",
+      "risk": "Lack of documentation could lead to untraceable quality issues and non-compliance with audits.",
+      "recommendation": "Specify what records must be kept for goods in checks, where they should be stored, and for how long.",
+      "severity": 3,
+      "scope": 4,
+      "detectability": 2,
+      "fmea_score": 48,
+      "fmea_band": "critical"
+    },
+    {
+      "location": "GOODS IN CHECKS",
+      "issue": "Frequency of goods in checks is not defined.",
+      "risk": "Inconsistent checks could lead to missed quality or safety issues.",
+      "recommendation": "Define the frequency at which goods in checks should be conducted (e.g., every delivery, daily).",
+      "severity": 3,
+      "scope": 3,
+      "detectability": 3,
+      "fmea_score": 27,
+      "fmea_band": "critical"
+    },
+    {
+      "location": "GOODS IN CHECKS",
+      "issue": "Criteria for 'integrity of the vehicle and product pallets' are not explicitly defined.",
+      "risk": "Ambiguity could lead to inconsistent assessments and overlooked issues.",
+      "recommendation": "Provide explicit criteria or a checklist for assessing the integrity of vehicles and product pallets.",
+      "severity": 3,
+      "scope": 3,
+      "detectability": 3,
+      "fmea_score": 27,
+      "fmea_band": "critical"
+    },
+    {
+      "location": "GOODS IN CHECKS",
+      "issue": "Responsible person or role for conducting goods in checks is not clearly named.",
+      "risk": "Unclear responsibility could lead to checks being missed or improperly conducted.",
+      "recommendation": "Clearly specify the role or person responsible for conducting goods in checks.",
+      "severity": 3,
+      "scope": 3,
+      "detectability": 2,
+      "fmea_score": 36,
+      "fmea_band": "critical"
+    },
+    {
+      "location": "RAW MATERIALS & RAW MATERIAL SUPPLIERS",
+      "issue": "Communication process to relevant departments after supplier approval is not detailed.",
+      "risk": "Lack of communication could lead to the use of unapproved suppliers or materials.",
+      "recommendation": "Detail the process and method for communicating supplier approvals to relevant departments.",
+      "severity": 3,
+      "scope": 3,
+      "detectability": 3,
+      "fmea_score": 27,
+      "fmea_band": "critical"
+    }
+  ],
+  "specifying_flags": [
+    {
+      "location": "Objective",
+      "current_text": "All reasonable measures are taken",
+      "issue": "The term 'reasonable measures' is subjective and lacks specificity.",
+      "recommendation": "Specify the exact measures that are considered reasonable."
+    },
+    {
+      "location": "Detail",
+      "current_text": "ensure that Katsouris Brothers Limited receives the correct product of the specification agreed",
+      "issue": "The phrase 'correct product of the specification agreed' is vague without specifying what the correct product specifications are.",
+      "recommendation": "Provide detailed specifications for what constitutes the 'correct product'."
+    },
+    {
+      "location": "GOODS IN CHECKS",
+      "current_text": "integrity of the vehicle and product pallets are checked",
+      "issue": "The term 'integrity' is subjective and lacks specific criteria for assessment.",
+      "recommendation": "Define specific criteria for assessing the integrity of vehicles and product pallets."
+    },
+    {
+      "location": "GOODS IN CHECKS",
+      "current_text": "packaging is also checked to ensure that is it intact",
+      "issue": "The term 'intact' is subjective and lacks specific criteria for assessment.",
+      "recommendation": "Provide specific criteria for what constitutes 'intact' packaging."
+    },
+    {
+      "location": "Sampling of incoming raw materials",
+      "current_text": "Further testing may be required",
+      "issue": "The phrase 'may be required' is vague and does not specify under what conditions further testing is necessary.",
+      "recommendation": "Specify the conditions or criteria that would necessitate further testing."
+    },
+    {
+      "location": "Objective",
+      "current_text": "All reasonable measures",
+      "issue": "vague frequency term",
+      "recommendation": "Specify the exact measures and criteria for reasonableness"
+    },
+    {
+      "location": "Goods In Checks",
+      "current_text": "integrity of the vehicle and product pallets are checked",
+      "issue": "subjective quality descriptor",
+      "recommendation": "Provide measurable criteria for checking integrity, e.g., visual inspection standards or specific tests"
+    },
+    {
+      "location": "Goods In Checks",
+      "current_text": "packaging is also checked to ensure that is it intact",
+      "issue": "subjective quality descriptor",
+      "recommendation": "Define what constitutes 'intact' packaging, e.g., no tears, holes, or signs of tampering"
+    },
+    {
+      "location": "Sampling of incoming raw materials",
+      "current_text": "Further testing may be required",
+      "issue": "vague frequency term",
+      "recommendation": "Specify the conditions under which further testing is required"
+    }
+  ],
+  "structure_flags": [
+    {
+      "flag_type": "omission",
+      "section": "Purpose / Objective",
+      "detail": "Required section \"Purpose / Objective\" is absent from the document.",
+      "recommendation": "Add a \"Purpose / Objective\" section. Refer to the group document template for expected content.",
+      "severity": "high"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Scope",
+      "detail": "Required section \"Scope\" is absent from the document.",
+      "recommendation": "Add a \"Scope\" section. Refer to the group document template for expected content.",
+      "severity": "high"
+    },
+    {
+      "flag_type": "omission",
+      "section": "References",
+      "detail": "Required section \"References\" is absent from the document.",
+      "recommendation": "Add a \"References\" section. Refer to the group document template for expected content.",
+      "severity": "high"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Responsibilities",
+      "detail": "Required section \"Responsibilities\" is absent from the document.",
+      "recommendation": "Add a \"Responsibilities\" section. Refer to the group document template for expected content.",
+      "severity": "high"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Definitions",
+      "detail": "Recommended section \"Definitions\" is not present.",
+      "recommendation": "Add a \"Definitions\" section. Refer to the group document template for expected content.",
+      "severity": "low"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Procedure / Method",
+      "detail": "Required section \"Procedure / Method\" is absent from the document.",
+      "recommendation": "Add a \"Procedure / Method\" section. Refer to the group document template for expected content.",
+      "severity": "high"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Frequency",
+      "detail": "Recommended section \"Frequency\" is not present.",
+      "recommendation": "Add a \"Frequency\" section. Refer to the group document template for expected content.",
+      "severity": "low"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Record Keeping",
+      "detail": "Required section \"Record Keeping\" is absent from the document.",
+      "recommendation": "Add a \"Record Keeping\" section. Refer to the group document template for expected content.",
+      "severity": "high"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Corrective Actions",
+      "detail": "Required section \"Corrective Actions\" is absent from the document.",
+      "recommendation": "Add a \"Corrective Actions\" section. Refer to the group document template for expected content.",
+      "severity": "high"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Review Schedule",
+      "detail": "Recommended section \"Review Schedule\" is not present.",
+      "recommendation": "Add a \"Review Schedule\" section. Refer to the group document template for expected content.",
+      "severity": "low"
+    },
+    {
+      "flag_type": "omission",
+      "section": "Approval / Sign-off",
+      "detail": "Recommended section \"Approval / Sign-off\" is not present.",
+      "recommendation": "Add a \"Approval / Sign-off\" section. Refer to the group document template for expected content.",
+      "severity": "low"
+    }
+  ],
+  "content_integrity_flags": [
+    {
+      "flag_type": "encoding_anomaly",
+      "location": "Line 1",
+      "excerpt": "'Departments: \\x07ALL \\x07 \\x07Objective: \\x07A'",
+      "detail": "Encoding anomaly detected: non-printable control character. Found 33 occurrences in this document. All occurrences share the same root cause and are reported here once.",
+      "recommendation": "Control characters in procedural text indicate a corrupt or mis-encoded export. Strip these characters and verify the content is intact.",
+      "severity": "medium"
+    }
+  ],
+  "sequencing_flags": [
+    {
+      "location": "GOODS IN CHECKS",
+      "issue": "Integrity and packaging checks occur before sampling and testing",
+      "impact": "Potential for undetected non-conformances if sampling reveals issues not visible during initial checks",
+      "recommendation": "Ensure sampling and testing are conducted immediately after initial integrity and packaging checks to confirm compliance before further processing"
+    }
+  ],
+  "formatting_flags": [
+    {
+      "location": "Objective",
+      "issue": "Dense text block",
+      "recommendation": "Break the text into shorter sentences or bullet points for better readability."
+    },
+    {
+      "location": "Detail",
+      "issue": "Dense text block",
+      "recommendation": "Break the text into shorter sentences or bullet points for better readability."
+    },
+    {
+      "location": "Responsibility",
+      "issue": "Dense text block",
+      "recommendation": "Break the text into shorter sentences or bullet points for better readability."
+    },
+    {
+      "location": "INCOMING RAW MATERIALS",
+      "issue": "Dense text block",
+      "recommendation": "Break the text into shorter sentences or bullet points for better readability."
+    },
+    {
+      "location": "RAW MATERIALS & RAW MATERIAL SUPPLIERS",
+      "issue": "Dense text block",
+      "recommendation": "Break the text into shorter sentences or bullet points for better readability."
+    },
+    {
+      "location": "GOODS IN CHECKS",
+      "issue": "Dense text block",
+      "recommendation": "Break the text into shorter sentences or bullet points for better readability."
+    },
+    {
+      "location": "GOODS IN CHECKS",
+      "issue": "Information that should be in a list",
+      "recommendation": "Convert the list of checks (MOULD, FOREIGN BODIES, LEAKS, etc.) into a bullet point list for clarity."
+    },
+    {
+      "location": "General",
+      "issue": "Missing mandatory sections",
+      "recommendation": "Ensure all mandatory sections such as Scope, Responsibilities, CCPs, and Related Documents are included as per the Golden Template."
+    },
+    {
+      "location": "General",
+      "issue": "Inconsistent heading hierarchy",
+      "recommendation": "Ensure consistent use of heading levels, such as H2 for main sections and H3 for subsections."
+    }
+  ],
+  "compliance_flags": [],
+  "warnings": [],
+  "errors": [],
+  "agents_run": [
+    "cleansing",
+    "terminology",
+    "conflict",
+    "risk",
+    "specifying",
+    "sequencing",
+    "formatting",
+    "validation"
+  ]
+}

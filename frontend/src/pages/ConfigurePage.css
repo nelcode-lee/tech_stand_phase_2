@@ -1,5 +1,6 @@
 .configure-page {
-  max-width: 640px;
+  width: 100%;
+  max-width: var(--content-max-narrow, 640px);
 }
 
 .configure-header {
@@ -36,6 +37,52 @@
   font-weight: 600;
   letter-spacing: 0.02em;
   color: var(--yb-blue);
+}
+
+.config-section-hint {
+  margin: 0 0 var(--space-md);
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+
+.doc-type-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-sm);
+}
+
+.doc-type-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.2rem;
+  padding: 0.75rem var(--space-md);
+  background: transparent;
+  border: 1px solid var(--border-card);
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 0.12s, background 0.12s;
+}
+
+.doc-type-btn:hover {
+  border-color: var(--cranswick-di-serria);
+}
+
+.doc-type-btn.active {
+  border-color: var(--yb-blue);
+  background: rgba(230,211,181,0.35);
+}
+
+.doc-type-label {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.doc-type-desc {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
 }
 
 /* Request type */
@@ -191,7 +238,61 @@
 
 /* Footer */
 .configure-footer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
   padding-top: var(--space-md);
+}
+
+.configure-save-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: var(--space-sm) var(--space-md);
+  background: transparent;
+  color: var(--yb-blue);
+  border: 1px solid var(--yb-blue);
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.configure-save-btn:hover {
+  background: var(--yb-blue);
+  color: white;
+}
+
+.configure-save-btn.saved {
+  border-color: #059669;
+  color: #059669;
+}
+
+.configure-save-btn.saved:hover {
+  background: rgba(5,150,105,0.08);
+  color: #059669;
+}
+
+.configure-save-btn.error {
+  border-color: #b91c1c;
+  color: #b91c1c;
+}
+
+.configure-skip-btn {
+  padding: var(--space-sm) var(--space-lg);
+  background: transparent;
+  color: var(--yb-blue);
+  border: 1px dashed var(--yb-blue);
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.configure-skip-btn:hover {
+  background: rgba(50,65,87,0.06);
 }
 
 .configure-next-btn {

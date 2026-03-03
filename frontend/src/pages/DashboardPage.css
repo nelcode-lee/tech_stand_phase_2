@@ -1,5 +1,16 @@
 .dashboard {
-  max-width: 1100px;
+  width: 100%;
+  max-width: var(--content-max, 1100px);
+}
+
+.dash-error-banner {
+  padding: var(--space-md);
+  margin-bottom: var(--space-lg);
+  background: rgba(185,28,28,0.08);
+  border: 1px solid rgba(185,28,28,0.2);
+  border-radius: 6px;
+  color: #b91c1c;
+  font-size: 0.875rem;
 }
 
 /* Header */
@@ -175,6 +186,7 @@
 .alert-critical { background: rgba(185,28,28,0.06);  border-left-color: #b91c1c; }
 .alert-high     { background: rgba(180,83,9,0.06);   border-left-color: #b45309; }
 .alert-medium   { background: rgba(210,159,80,0.1);  border-left-color: var(--cranswick-di-serria); }
+.alert-low      { background: rgba(5,150,105,0.06);  border-left-color: #059669; }
 
 .dash-alert-body {
   flex: 1;
@@ -273,6 +285,12 @@
   align-items: center;
   gap: var(--space-sm);
   flex-shrink: 0;
+}
+
+.activity-findings {
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  font-weight: 500;
 }
 
 .activity-status {

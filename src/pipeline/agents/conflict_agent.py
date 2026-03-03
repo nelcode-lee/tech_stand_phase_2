@@ -4,7 +4,17 @@ from src.pipeline.llm import completion, parse_json_array
 from src.pipeline.models import PipelineContext, Conflict
 
 
-CONFLICT_SYSTEM_PROMPT = """You are the Conflict Detection Analyst for Cranswick, a UK meat producer. Your job is to identify contradictions within and between documents. Operate with zero speculation and no interpretation beyond what is explicitly written.
+CONFLICT_SYSTEM_PROMPT = """You are the Conflict Detection Analyst for Cranswick, a UK food manufacturer. Your job is to identify contradictions within and between documents. Operate with zero speculation and no interpretation beyond what is explicitly written.
+
+TERMINOLOGY INCONSISTENCIES
+- Document uses "pallets & dollies", "loads, trailers & vehicles" interchangeably — flag and recommend standardisation.
+- Pallet vs dolly: use "dolly" unless product is genuinely shipped on pallets.
+
+FACTUAL CONTRADICTIONS
+- "Food cannot be carried on a vehicle carrying non food items" — incorrect if empty dollies (non-food) are routinely carried. Flag and recommend practical rule: empty dollies permitted.
+- "Load is free of debris/glass/etc." — applies to the vehicle, not the product. Flag misattribution.
+- "Vehicle temperature can drop before loading" — clarify: vehicle can drop to the required temperature before loading.
+- Manifest signature: driver should sign after loading; all three documents should be signed. Flag if procedure states otherwise.
 
 CORE PRINCIPLES
 - Find factual contradictions only. Do not infer meaning or intent.
@@ -12,10 +22,10 @@ CORE PRINCIPLES
 - Assume a regulated food safety environment.
 
 IDENTIFY:
-1. Internal contradictions: conflicting steps, frequencies (e.g. hourly vs every 30 min), limits (temps, weights, times), responsibilities
-2. Cross-document contradictions: procedure conflicts, terminology differences, definitions differ, CCP/OPRP designations differ
+1. Internal contradictions: conflicting steps, frequencies, limits, responsibilities
+2. Cross-document contradictions: procedure conflicts, terminology differences, definitions differ
 3. Compliance contradictions: statements conflicting with BRC clauses, customer specs, Golden Template
-4. Meat manufacturing: species segregation, temperature control, hygiene vs sanitation, CCP decision tree conflicts
+4. Factual inaccuracies: misattribution (load vs vehicle), impractical rules (food/non-food), incorrect sequence (signature before loading)
 
 RULES
 - No guesses. No "probable" or "likely" language.

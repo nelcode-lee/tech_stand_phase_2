@@ -1,7 +1,11 @@
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Crosshair, Zap, Eye, Shield, Swords, Target, Link2, Square, LayoutGrid, Scale } from 'lucide-react';
+import { Search, Crosshair, Zap, Eye, Shield, Swords, Target, Link2, Square, LayoutGrid, Scale, Save } from 'lucide-react';
 import { useAnalysis } from '../context/AnalysisContext';
+import SitesSelect from '../components/SitesSelect';
 import './ConfigurePage.css';
+
+const CONFIG_STORAGE_KEY = 'tech-standards-review-config';
 
 const AGENT_ICONS = {
   cleansing: Eye,
@@ -16,23 +20,77 @@ const AGENT_ICONS = {
 
 const REQUEST_TYPES = {
   review: [
-    { value: 'review_request',     label: 'Review Existing',    desc: 'Check a current document against standards' },
-    { value: 'contradiction_flag', label: 'Contradiction Check', desc: 'Flag conflicts between this doc and others' },
-    { value: 'update_existing',    label: 'Update Document',     desc: 'Analyse and revise an existing document' },
+    { value: 'single_document_review',  label: 'Single Document Review',   desc: 'Full analysis using all agents' },
+    { value: 'harmonisation_review',    label: 'Harmonisation Review',     desc: 'How the document aligns with existing policies' },
+    { value: 'principle_layer_review', label: 'Principle Layer Review',   desc: 'Identify if we are capturing enough of the What' },
   ],
   create: [
     { value: 'new_document', label: 'New Document', desc: 'Draft a new SOP, Principle, or Policy from scratch' },
   ],
 };
 
+const DOC_LAYER_OPTIONS = [
+  { value: 'policy', label: 'Policy', desc: 'High-level governance and intent' },
+  { value: 'principle', label: 'Principle / Standard', desc: 'Standards and principles' },
+  { value: 'sop', label: 'SOP', desc: 'Standard Operating Procedure — full section template' },
+  { value: 'work_instruction', label: 'Work Instruction', desc: 'Step-by-step instructions' },
+];
+
 export default function ConfigurePage({ mode = 'review' }) {
   const navigate = useNavigate();
   const { config, setConfig, allAgentKeys, agentLabels } = useAnalysis();
   const base = `/${mode}`;
+  const [saveStatus, setSaveStatus] = useState(null);
 
   const requestTypes = REQUEST_TYPES[mode] || REQUEST_TYPES.review;
   const selectedAgents = config.agents?.length ? config.agents : [...allAgentKeys];
   const analysisMode = config.mode || 'full';
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(`${CONFIG_STORAGE_KEY}-${mode}`);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        setConfig(c => {
+          if (c.documentId) return c;
+          return { ...c, ...parsed };
+        });
+      }
+    } catch {
+      // Ignore parse errors
+    }
+  }, [mode, setConfig]);
+
+  useEffect(() => {
+    if (mode === 'create' && config.requestType !== 'new_document') {
+      setConfig(c => ({ ...c, requestType: 'new_document' }));
+    }
+    if (mode === 'review' && !['single_document_review', 'harmonisation_review', 'principle_layer_review'].includes(config.requestType)) {
+      setConfig(c => ({ ...c, requestType: 'single_document_review' }));
+    }
+  }, [mode, config.requestType, setConfig]);
+
+  function handleSave(e) {
+    e.preventDefault();
+    try {
+      const toStore = {
+        requestType: config.requestType,
+        documentId: config.documentId,
+        docLayer: config.docLayer,
+        sites: config.sites,
+        policyRef: config.policyRef,
+        requester: config.requester,
+        mode: config.mode,
+        agents: config.agents,
+      };
+      localStorage.setItem(`${CONFIG_STORAGE_KEY}-${mode}`, JSON.stringify(toStore));
+      setSaveStatus('saved');
+      setTimeout(() => setSaveStatus(null), 2500);
+    } catch {
+      setSaveStatus('error');
+      setTimeout(() => setSaveStatus(null), 2500);
+    }
+  }
 
   function setAnalysisMode(m) {
     setConfig(c => ({
@@ -59,6 +117,14 @@ export default function ConfigurePage({ mode = 'review' }) {
     navigate(`${base}/ingest`);
   }
 
+  function handleSkipToAnalyse(e) {
+    e.preventDefault();
+    // Put documentId in URL so Analyse page uses the correct document (never stale config)
+    const docId = config?.documentId || '';
+    const url = docId ? `${base}/analyse?documentId=${encodeURIComponent(docId)}` : `${base}/analyse`;
+    navigate(url);
+  }
+
   return (
     <div className="configure-page">
       <div className="configure-header">
@@ -67,7 +133,7 @@ export default function ConfigurePage({ mode = 'review' }) {
         </h1>
         <p className="configure-subtitle">
           {mode === 'create'
-            ? 'Configure the document type, layer, and which agents will draft it.'
+            ? 'Choose the document type and upload reference materials. The pipeline will draft from your standards and policies.'
             : 'Set the document context and choose your analysis mode.'}
         </p>
       </div>
@@ -94,33 +160,59 @@ export default function ConfigurePage({ mode = 'review' }) {
 
         {/* Document details */}
         <section className="config-section">
-          <h3 className="config-section-title">Document Details</h3>
+          <h3 className="config-section-title">
+            {mode === 'create' ? 'Document Type & Format' : 'Document Details'}
+          </h3>
+          {mode === 'create' && (
+            <p className="config-section-hint">
+              The document type determines the structure and which sections are required (Purpose, Scope, Procedure, etc.).
+            </p>
+          )}
           <div className="config-fields">
+            {mode === 'create' ? (
+              <div className="form-row">
+                <label>Document Type</label>
+                <div className="doc-type-grid">
+                  {DOC_LAYER_OPTIONS.map(opt => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      className={`doc-type-btn ${config.docLayer === opt.value ? 'active' : ''}`}
+                      onClick={() => setField('docLayer', opt.value)}
+                    >
+                      <span className="doc-type-label">{opt.label}</span>
+                      <span className="doc-type-desc">{opt.desc}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             <div className="form-row">
               <label>Document ID</label>
               <input
                 type="text"
-                placeholder="e.g. CMS-v2, BRCGS-FS-v9-meat, GEN-OP-01"
+                placeholder={mode === 'create' ? 'e.g. GEN-OP-01-Goods-In, CMS-v2' : 'e.g. CMS-v2, BRCGS-FS-v9-meat, GEN-OP-01'}
                 value={config.documentId || ''}
                 onChange={e => setField('documentId', e.target.value)}
               />
             </div>
-            <div className="form-row">
-              <label>Document Layer</label>
-              <select value={config.docLayer || 'sop'} onChange={e => setField('docLayer', e.target.value)}>
-                <option value="policy">Policy</option>
-                <option value="principle">Principle</option>
-                <option value="sop">SOP</option>
-                <option value="work_instruction">Work Instruction</option>
-              </select>
-            </div>
+            {mode !== 'create' && (
+              <div className="form-row">
+                <label>Document Layer</label>
+                <select value={config.docLayer || 'sop'} onChange={e => setField('docLayer', e.target.value)}>
+                  <option value="policy">Policy</option>
+                  <option value="principle">Principle</option>
+                  <option value="sop">SOP</option>
+                  <option value="work_instruction">Work Instruction</option>
+                </select>
+              </div>
+            )}
             <div className="form-row">
               <label>Sites</label>
-              <input
-                type="text"
-                placeholder="e.g. barnsley, hull (comma-separated)"
-                value={config.sites || ''}
-                onChange={e => setField('sites', e.target.value)}
+              <SitesSelect
+                id="config-sites"
+                value={config.sites}
+                onChange={v => setField('sites', v)}
               />
             </div>
             <div className="form-row">
@@ -132,10 +224,20 @@ export default function ConfigurePage({ mode = 'review' }) {
                 onChange={e => setField('policyRef', e.target.value)}
               />
             </div>
+            <div className="form-row">
+              <label>Requester</label>
+              <input
+                type="text"
+                placeholder="Your name (logged with findings)"
+                value={config.requester || ''}
+                onChange={e => setField('requester', e.target.value)}
+              />
+            </div>
           </div>
         </section>
 
-        {/* Analysis mode */}
+        {/* Analysis mode — only for review */}
+        {mode === 'review' && (
         <section className="config-section">
           <h3 className="config-section-title">Analysis Mode</h3>
           <div className="mode-buttons">
@@ -156,9 +258,10 @@ export default function ConfigurePage({ mode = 'review' }) {
             </button>
           </div>
         </section>
+        )}
 
-        {/* Agent selection (targeted only) */}
-        {analysisMode === 'targeted' && (
+        {/* Agent selection (targeted only) — review only */}
+        {mode === 'review' && analysisMode === 'targeted' && (
           <section className="config-section">
             <h3 className="config-section-title">Select Agents</h3>
             <div className="agent-grid">
@@ -182,8 +285,24 @@ export default function ConfigurePage({ mode = 'review' }) {
         )}
 
         <div className="configure-footer">
+          <button
+            type="button"
+            className={`configure-save-btn ${saveStatus === 'saved' ? 'saved' : ''} ${saveStatus === 'error' ? 'error' : ''}`}
+            onClick={handleSave}
+            title="Save amendments"
+          >
+            <Save size={16} />
+            {saveStatus === 'saved' ? 'Saved' : saveStatus === 'error' ? 'Save failed' : 'Save'}
+          </button>
+          {mode === 'review' && config.documentId ? (
+            <button type="button" className="configure-skip-btn" onClick={handleSkipToAnalyse} title="Document is already in Library — skip upload">
+              Skip to Analysis →
+            </button>
+          ) : null}
           <button type="submit" className="configure-next-btn">
-            Continue to Upload →
+            {mode === 'create'
+              ? 'Upload Reference Materials →'
+              : config.documentId ? 'Upload new version' : 'Continue to Upload'} →
           </button>
         </div>
       </form>

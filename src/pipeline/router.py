@@ -54,12 +54,23 @@ class PipelineRouter:
         doc_layer = ctx.doc_layer
 
         # Base set by request type
-        if request_type in (RequestType.new_document, RequestType.update_existing):
+        if request_type in (RequestType.new_document, RequestType.update_existing, RequestType.single_document_review):
+            # Full pipeline: all 8 agents
             names = [
                 "cleansing", "terminology", "conflict", "risk",
                 "specifying", "sequencing", "formatting", "validation",
             ]
-        else:  # contradiction_flag, review_request
+        elif request_type == RequestType.harmonisation_review:
+            # Alignment with existing policies: conflict, compliance, terminology
+            names = ["cleansing", "terminology", "conflict", "risk", "validation"]
+        elif request_type == RequestType.principle_layer_review:
+            # Principle layer: capture enough of the What (intent, rationale, requirements)
+            # Specifying + formatting; skip sequencing (not step logic)
+            names = [
+                "cleansing", "terminology", "conflict", "risk",
+                "specifying", "formatting", "validation",
+            ]
+        else:  # contradiction_flag, review_request (legacy)
             names = ["cleansing", "terminology", "conflict", "risk", "validation"]
 
         # Skip Sequencing for policy/principle

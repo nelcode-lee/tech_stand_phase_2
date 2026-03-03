@@ -18,6 +18,8 @@
   --space-lg: 1.5rem;
   --space-xl: 2rem;
   --space-2xl: 3rem;
+  --content-max: 1100px;
+  --content-max-narrow: 640px;
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   line-height: 1.6;
   font-weight: 400;
@@ -35,4 +37,19 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+}
+
+/* Larger screens: expand content to use available space */
+@media (min-width: 1400px) {
+  :root {
+    --content-max: 1400px;
+    --content-max-narrow: 880px;
+  }
+}
+
+@media (min-width: 1800px) {
+  :root {
+    --content-max: 1600px;
+    --content-max-narrow: 960px;
+  }
 }

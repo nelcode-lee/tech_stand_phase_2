@@ -11,7 +11,7 @@ except ImportError:
     print("Install requests: pip install requests")
     sys.exit(1)
 
-BASE = "http://127.0.0.1:8000"
+BASE = "http://127.0.0.1:8002"
 
 # SOP for vehicle loading & unloading — retrieve from vector store (FSP003)
 BODY = {

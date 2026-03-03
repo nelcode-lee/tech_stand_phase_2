@@ -2,22 +2,30 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Upload, ArrowLeft } from 'lucide-react';
 import { ingestFile } from '../api';
+import SitesSelect from '../components/SitesSelect';
+import { resolveSitesForApi } from '../constants/sites';
 import './LibraryUploadPage.css';
 
-const DOC_LAYERS = [
-  { value: 'policy', label: 'Policy' },
-  { value: 'principle', label: 'Principle' },
-  { value: 'sop', label: 'SOP' },
-  { value: 'work_instruction', label: 'Work Instruction' },
+/** Single category: maps to both doc_layer and library for the backend. */
+const CATEGORY_OPTIONS = [
+  { value: 'policy', label: 'Policy', docLayer: 'policy', library: 'Policies' },
+  { value: 'principle', label: 'Principle / Standard', docLayer: 'principle', library: 'Standards' },
+  { value: 'sop', label: 'SOP (Standards)', docLayer: 'sop', library: 'Standards' },
+  { value: 'sop_site', label: 'SOP (Site)', docLayer: 'sop', library: 'Site SOPs' },
+  { value: 'external', label: 'External Standard', docLayer: 'principle', library: 'External Standards' },
+  { value: 'work_instruction', label: 'Work Instruction', docLayer: 'work_instruction', library: 'Site SOPs' },
+  { value: 'upload', label: 'Upload / Other', docLayer: 'sop', library: 'Uploads' },
 ];
 
-const LIBRARY_OPTIONS = [
-  { value: 'Standards', label: 'Standards' },
-  { value: 'External Standards', label: 'External Standards' },
-  { value: 'Site SOPs', label: 'Site SOPs' },
-  { value: 'Uploads', label: 'Uploads' },
-  { value: 'Policies', label: 'Policies' },
-];
+/** Derive a stable document_id from title (slug-style for storage). */
+function slugFromTitle(title) {
+  if (!title || !title.trim()) return '';
+  return title.trim()
+    .replace(/\s+/g, '-')
+    .replace(/[~/#@]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
 
 export default function LibraryUploadPage() {
   const navigate = useNavigate();
@@ -26,12 +34,10 @@ export default function LibraryUploadPage() {
   const [loading, setLoading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [form, setForm] = useState({
-    documentId: '',
-    docLayer: 'sop',
-    sites: '',
-    policyRef: '',
     title: '',
-    library: 'Uploads',
+    category: 'upload',
+    sites: [],
+    policyRef: '',
   });
 
   function setField(field, value) {
@@ -42,14 +48,11 @@ export default function LibraryUploadPage() {
     e.preventDefault();
     setDragOver(false);
     const f = e.dataTransfer?.files?.[0];
-    if (f) {
+    if (f && !form.title) {
       setFile(f);
-      if (!form.documentId) {
-        const suggested = f.name.replace(/\.[^.]+$/, '').replace(/\s+/g, '-').replace(/~/g, '-');
-        setField('documentId', suggested);
-      }
-      if (!form.title) setField('title', f.name.replace(/\.[^.]+$/, ''));
-    }
+      const suggested = f.name.replace(/\.[^.]+$/, '').trim();
+      setField('title', suggested);
+    } else if (f) setFile(f);
   }
 
   async function handleIngest(e) {
@@ -58,28 +61,31 @@ export default function LibraryUploadPage() {
       setStatus({ ok: false, message: 'Select a file first.' });
       return;
     }
-    const docId = (form.documentId || '').trim();
-    if (!docId) {
-      setStatus({ ok: false, message: 'Document ID is required.' });
+    const title = (form.title || '').trim();
+    if (!title) {
+      setStatus({ ok: false, message: 'Title is required.' });
       return;
     }
+    const documentId = slugFromTitle(title) || file.name.replace(/\.[^.]+$/, '').replace(/\s+/g, '-');
     setLoading(true);
     setStatus(null);
     try {
+      const cat = CATEGORY_OPTIONS.find(c => c.value === form.category) || CATEGORY_OPTIONS.find(c => c.value === 'upload');
+      const sitesForApi = resolveSitesForApi(form.sites);
       const res = await ingestFile(file, {
-        document_id: docId,
-        doc_layer: form.docLayer,
-        sites: form.sites,
+        document_id: documentId,
+        title,
+        doc_layer: cat.docLayer,
+        sites: sitesForApi,
         policy_ref: form.policyRef || undefined,
-        title: form.title || undefined,
-        library: form.library,
+        library: cat.library,
       });
       setStatus({
         ok: true,
         message: `Ingested ${res.chunks_ingested} chunks from "${file.name}". Document added to library.`,
       });
       setFile(null);
-      setForm(f => ({ ...f, documentId: '', title: '' }));
+      setForm(f => ({ ...f, title: '' }));
     } catch (err) {
       setStatus({ ok: false, message: err.message });
     } finally {
@@ -90,7 +96,7 @@ export default function LibraryUploadPage() {
   function handleAddAnother() {
     setStatus(null);
     setFile(null);
-    setForm(f => ({ ...f, documentId: '', title: '' }));
+    setForm(f => ({ ...f, title: '' }));
   }
 
   return (
@@ -108,58 +114,36 @@ export default function LibraryUploadPage() {
           <h2 className="lib-upload-section-title">Document Metadata</h2>
           <div className="lib-upload-fields">
             <div className="lib-upload-row">
-              <label htmlFor="doc-id">Document ID <span className="required">*</span></label>
-              <input
-                id="doc-id"
-                type="text"
-                placeholder="e.g. CMS-v2, BRCGS-FS-v9-meat, GEN-OP-01"
-                value={form.documentId}
-                onChange={e => setField('documentId', e.target.value)}
-                required
-              />
-            </div>
-            <div className="lib-upload-row">
-              <label htmlFor="title">Title</label>
+              <label htmlFor="title">Title <span className="required">*</span></label>
               <input
                 id="title"
                 type="text"
-                placeholder="Human-readable document title"
+                placeholder="e.g. BRCGS Food Safety Standard v9, GEN-OP-01 Goods In Procedure"
                 value={form.title}
                 onChange={e => setField('title', e.target.value)}
+                required
               />
+              <span className="lib-upload-hint">Used for display and as the document identifier</span>
             </div>
             <div className="lib-upload-row">
-              <label htmlFor="doc-layer">Document Layer</label>
+              <label htmlFor="category">Category</label>
               <select
-                id="doc-layer"
-                value={form.docLayer}
-                onChange={e => setField('docLayer', e.target.value)}
+                id="category"
+                value={form.category}
+                onChange={e => setField('category', e.target.value)}
               >
-                {DOC_LAYERS.map(l => (
-                  <option key={l.value} value={l.value}>{l.label}</option>
+                {CATEGORY_OPTIONS.map(c => (
+                  <option key={c.value} value={c.value}>{c.label}</option>
                 ))}
               </select>
+              <span className="lib-upload-hint">Document type and library placement</span>
             </div>
             <div className="lib-upload-row">
-              <label htmlFor="library">Library</label>
-              <select
-                id="library"
-                value={form.library}
-                onChange={e => setField('library', e.target.value)}
-              >
-                {LIBRARY_OPTIONS.map(l => (
-                  <option key={l.value} value={l.value}>{l.label}</option>
-                ))}
-              </select>
-            </div>
-            <div className="lib-upload-row">
-              <label htmlFor="sites">Sites</label>
-              <input
+              <label>Sites</label>
+              <SitesSelect
                 id="sites"
-                type="text"
-                placeholder="e.g. Barnsley, Hull, Norfolk (comma-separated)"
                 value={form.sites}
-                onChange={e => setField('sites', e.target.value)}
+                onChange={v => setField('sites', v)}
               />
             </div>
             <div className="lib-upload-row">
@@ -194,11 +178,7 @@ export default function LibraryUploadPage() {
                 const f = e.target.files?.[0];
                 if (f) {
                   setFile(f);
-                  if (!form.documentId) {
-                    const suggested = f.name.replace(/\.[^.]+$/, '').replace(/\s+/g, '-').replace(/~/g, '-');
-                    setField('documentId', suggested);
-                  }
-                  if (!form.title) setField('title', f.name.replace(/\.[^.]+$/, ''));
+                  if (!form.title) setField('title', f.name.replace(/\.[^.]+$/, '').trim());
                 }
               }}
               className="lib-upload-input"
@@ -226,18 +206,27 @@ export default function LibraryUploadPage() {
           </button>
           <div className="lib-upload-right">
             {status?.ok && (
-              <button
-                type="button"
-                className="lib-upload-btn-outline"
-                onClick={handleAddAnother}
-              >
-                Add Another
-              </button>
+              <>
+                <button
+                  type="button"
+                  className="lib-upload-btn-outline"
+                  onClick={() => navigate('/library', { state: { fromUpload: true } })}
+                >
+                  View in Library
+                </button>
+                <button
+                  type="button"
+                  className="lib-upload-btn-outline"
+                  onClick={handleAddAnother}
+                >
+                  Add Another
+                </button>
+              </>
             )}
             <button
               type="submit"
               className="lib-upload-btn-primary"
-              disabled={!file || !form.documentId?.trim() || loading}
+              disabled={!file || !form.title?.trim() || loading}
             >
               {loading ? 'Ingesting…' : 'Add to Library'}
             </button>

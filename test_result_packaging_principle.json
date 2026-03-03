@@ -1,0 +1,316 @@
+{
+  "tracking_id": "principle-packaging-001",
+  "draft_ready": true,
+  "overall_risk": "medium",
+  "conflict_count": 0,
+  "blocker_count": 0,
+  "conflicts": [],
+  "terminology_flags": [
+    {
+      "term": "Julian code",
+      "issue": "The term 'Julian code' is used but not defined or explained in the document.",
+      "recommendation": "Provide a clear definition or explanation of 'Julian code' to ensure understanding and compliance.",
+      "location": "\u2022 first pack produced after a change in a batch of raw material that would require a Julian code change"
+    },
+    {
+      "term": "zone of indecision (ZOI)",
+      "issue": "The term 'zone of indecision (ZOI)' is used but not defined or explained in the document.",
+      "recommendation": "Include a definition or explanation of 'zone of indecision (ZOI)' to clarify its meaning and application.",
+      "location": "The zone of indecision (ZOI) shall be calculated via the Weight and Quantity Control app for each dynamic catch weight and check-weighing system to establish if the variability could lead to non-compliant batches of product."
+    },
+    {
+      "term": "Weight and Quantity Control app",
+      "issue": "The 'Weight and Quantity Control app' is mentioned but not described or defined in the document.",
+      "recommendation": "Provide a description or definition of the 'Weight and Quantity Control app' to ensure users understand its purpose and functionality.",
+      "location": "The zone of indecision (ZOI) shall be calculated via the Weight and Quantity Control app for each dynamic catch weight and check-weighing system to establish if the variability could lead to non-compliant batches of product."
+    }
+  ],
+  "risk_scores": [],
+  "risk_gaps": [
+    {
+      "location": "FSP74b - Online packaging & labelling verification check sheet",
+      "issue": "No mention of corrective actions or escalation steps if verification checks fail.",
+      "risk": "Failure to address verification check failures could lead to incorrect labelling reaching consumers, posing legal and safety risks.",
+      "recommendation": "Include specific corrective actions and escalation steps for failed verification checks."
+    },
+    {
+      "location": "FSP74c - Dimaco Veri-pack label Check Sheet",
+      "issue": "No mention of person responsible for conducting checks.",
+      "risk": "Lack of accountability could lead to checks being missed or improperly conducted.",
+      "recommendation": "Specify the person or role responsible for conducting the checks."
+    },
+    {
+      "location": "6.3.7",
+      "issue": "No verification method for ensuring pre-coded/labelled packaging is segregated from original packaging.",
+      "risk": "Mixing of pre-coded and original packaging could lead to incorrect labelling and traceability issues.",
+      "recommendation": "Define a verification method to ensure proper segregation of packaging."
+    },
+    {
+      "location": "5.5.2",
+      "issue": "No mention of how the site ensures product liners and bags are resistant to tearing.",
+      "risk": "Tearing could lead to contamination of products, posing safety risks.",
+      "recommendation": "Include procedures or tests to verify the tear resistance of product liners and bags."
+    },
+    {
+      "location": "5.6.1",
+      "issue": "No mention of corrective actions if product inspection or testing fails.",
+      "risk": "Failure to address inspection or testing failures could lead to unsafe products reaching consumers.",
+      "recommendation": "Include specific corrective actions for failed inspections or tests."
+    },
+    {
+      "location": "6.3.11",
+      "issue": "No specific procedure for conducting root cause analysis.",
+      "risk": "Without a defined procedure, root cause analysis may be inconsistent or ineffective, leading to repeated errors.",
+      "recommendation": "Define a detailed procedure for conducting root cause analysis."
+    },
+    {
+      "location": "6.3.12.4",
+      "issue": "No mention of who verifies the system is functioning correctly before reducing check frequency.",
+      "risk": "Reducing check frequency without proper verification could lead to undetected errors.",
+      "recommendation": "Specify the role responsible for verifying system functionality before reducing check frequency."
+    },
+    {
+      "location": "5.2.1",
+      "issue": "No mention of verification method for ensuring ingredient and allergen labelling is correct.",
+      "risk": "Incorrect allergen labelling could pose serious health risks to consumers.",
+      "recommendation": "Include a verification method for ensuring the accuracy of ingredient and allergen labelling."
+    },
+    {
+      "location": "Scope",
+      "issue": "No mention of how risks of incorrect packaging/labelling are identified and assessed.",
+      "risk": "Without risk assessment, potential issues may not be identified or mitigated.",
+      "recommendation": "Include a risk assessment process for identifying and evaluating risks related to packaging and labelling."
+    },
+    {
+      "location": "Vision System",
+      "issue": "No mention of calibration or maintenance procedures for the vision system.",
+      "risk": "Improperly calibrated or maintained systems could lead to incorrect labelling checks.",
+      "recommendation": "Include calibration and maintenance procedures for the vision system."
+    }
+  ],
+  "specifying_flags": [
+    {
+      "location": "QA Operatives Responsibilities",
+      "current_text": "as per required frequency",
+      "issue": "vague frequency term",
+      "recommendation": "Specify the exact frequency for conducting fail-safe checks, e.g., every 30 minutes, hourly, etc."
+    },
+    {
+      "location": "6.3.7",
+      "current_text": "labelling area to be free from other packaging items",
+      "issue": "subjective quality descriptor",
+      "recommendation": "Provide measurable criteria for 'free from other packaging items', e.g., no more than 5 items present."
+    },
+    {
+      "location": "5.5.2",
+      "current_text": "appropriately coloured",
+      "issue": "subjective quality descriptor",
+      "recommendation": "Specify the exact colour or contrast level required for product liners and bags."
+    },
+    {
+      "location": "5.6.1",
+      "current_text": "appropriate procedures, facilities and standards",
+      "issue": "subjective quality descriptor",
+      "recommendation": "Define the specific procedures, facilities, and standards to be used for product inspection and testing."
+    },
+    {
+      "location": "6.3.12.4",
+      "current_text": "reduce the frequency",
+      "issue": "vague frequency term",
+      "recommendation": "Specify the new frequency if the 30-minute check is reduced, e.g., every 60 minutes."
+    },
+    {
+      "location": "6.3.12.1",
+      "current_text": "sufficient back up system",
+      "issue": "subjective quality descriptor",
+      "recommendation": "Specify the exact backup system requirements, e.g., daily backups with offsite storage."
+    },
+    {
+      "location": "Scope",
+      "current_text": "where possible",
+      "issue": "vague frequency term",
+      "recommendation": "Specify the conditions or criteria under which risk reduction is possible."
+    },
+    {
+      "location": "Frequency of Testing",
+      "current_text": "every 30 mins",
+      "issue": "missing units",
+      "recommendation": "Specify the unit of time, e.g., every 30 minutes."
+    },
+    {
+      "location": "6.4.3",
+      "current_text": "significantly deviates",
+      "issue": "subjective quality descriptor",
+      "recommendation": "Define what constitutes a significant deviation, e.g., more than 10% change in dimensions."
+    },
+    {
+      "location": "QA Operatives Responsibilities",
+      "current_text": "as per required frequency",
+      "issue": "vague frequency term",
+      "recommendation": "Specify the exact frequency for conducting fail-safe checks."
+    },
+    {
+      "location": "6.3.7",
+      "current_text": "adequate controls",
+      "issue": "subjective quality descriptor",
+      "recommendation": "Provide specific criteria or standards for what constitutes adequate controls."
+    },
+    {
+      "location": "5.5.2",
+      "current_text": "appropriately coloured",
+      "issue": "subjective quality descriptor",
+      "recommendation": "Specify the exact colour or range of colours that are considered appropriate."
+    },
+    {
+      "location": "5.6.1",
+      "current_text": "appropriate procedures",
+      "issue": "subjective quality descriptor",
+      "recommendation": "Define the specific procedures that are considered appropriate."
+    },
+    {
+      "location": "6.3.12.4",
+      "current_text": "reduce the frequency",
+      "issue": "vague frequency term",
+      "recommendation": "Specify the new frequency or conditions under which the frequency can be reduced."
+    },
+    {
+      "location": "Scope",
+      "current_text": "where possible",
+      "issue": "vague frequency term",
+      "recommendation": "Define the specific conditions or criteria that determine when risk can be reduced or eliminated."
+    },
+    {
+      "location": "Scope",
+      "current_text": "every 30 mins",
+      "issue": "missing units or tolerances",
+      "recommendation": "Clarify if '30 mins' refers to 30 minutes exactly or if there is an acceptable range or tolerance."
+    },
+    {
+      "location": "6.4.3",
+      "current_text": "significantly deviates",
+      "issue": "subjective quality descriptor",
+      "recommendation": "Define what constitutes a significant deviation in terms of specific measurements or criteria."
+    }
+  ],
+  "sequencing_flags": [
+    {
+      "location": "6.3.7",
+      "issue": "Pre-coded/labelled packaging is not segregated from original packaging storage location before checks.",
+      "impact": "Potential for cross-contact and incorrect labelling.",
+      "recommendation": "Ensure pre-coded/labelled packaging is segregated from original packaging storage location before checks are conducted."
+    },
+    {
+      "location": "6.3.12.4",
+      "issue": "Checks for the first pack produced after any break in production are listed after checks for every 30 minutes during production.",
+      "impact": "Potential for missed errors in the first pack after production changes.",
+      "recommendation": "Move checks for the first pack produced after any break in production before the 30-minute interval checks."
+    },
+    {
+      "location": "Scope",
+      "issue": "Fail-safe checks are required at the start and end of production, but there is no mention of checks after maintenance or repairs.",
+      "impact": "Risk of undetected errors after maintenance or repairs.",
+      "recommendation": "Include fail-safe checks immediately after any repairs or maintenance conducted on the line."
+    }
+  ],
+  "formatting_flags": [
+    {
+      "location": "Document Title",
+      "issue": "Incorrect metadata",
+      "recommendation": "Ensure the document title is clearly defined and separated from the rest of the text."
+    },
+    {
+      "location": "Introduction",
+      "issue": "Dense text block",
+      "recommendation": "Break down the introduction into smaller paragraphs or bullet points for better readability."
+    },
+    {
+      "location": "Responsibilities Section",
+      "issue": "Dense text block",
+      "recommendation": "Separate responsibilities by role into a list format for clarity."
+    },
+    {
+      "location": "Section 6.3.7",
+      "issue": "Dense text block",
+      "recommendation": "Break down the paragraph into bullet points for each control measure for better readability."
+    },
+    {
+      "location": "Section 5.5.2",
+      "issue": "Dense text block",
+      "recommendation": "Separate the points into a list format to improve readability."
+    },
+    {
+      "location": "Section 6.3.12",
+      "issue": "Dense text block",
+      "recommendation": "Break down the paragraph into bullet points or numbered steps for clarity."
+    },
+    {
+      "location": "Section 5.2",
+      "issue": "Dense text block",
+      "recommendation": "Separate the different requirements into bullet points for better readability."
+    },
+    {
+      "location": "Scope Section",
+      "issue": "Dense text block",
+      "recommendation": "Break down the scope into smaller paragraphs or bullet points for clarity."
+    },
+    {
+      "location": "Frequency of Testing Section",
+      "issue": "Dense text block",
+      "recommendation": "Separate the testing frequencies into a list format for better readability."
+    },
+    {
+      "location": "Section 6.4.3",
+      "issue": "Dense text block",
+      "recommendation": "Break down the paragraph into bullet points for each condition that requires re-evaluation."
+    },
+    {
+      "location": "General",
+      "issue": "Missing mandatory sections",
+      "recommendation": "Ensure all mandatory sections such as Scope, Responsibilities, CCPs, and Related Documents are clearly defined and separated."
+    }
+  ],
+  "compliance_flags": [
+    {
+      "location": "Section 6.3.11",
+      "issue": "Missing corrective action documentation",
+      "requirement_reference": "BRCGS Clause 3.6.4",
+      "recommendation": "Ensure documented corrective actions are in place for labelling or date coding errors, including root cause analysis."
+    },
+    {
+      "location": "Section 5.2.1",
+      "issue": "Missing allergen handling requirements",
+      "requirement_reference": "BRCGS Food Safety",
+      "recommendation": "Include a process to verify that ingredient and allergen labelling is correct based on the product recipe and ingredient specifications."
+    },
+    {
+      "location": "Section 6.3.12.4",
+      "issue": "Missing CCP verification records",
+      "requirement_reference": "BRCGS Food Safety",
+      "recommendation": "Add record forms for verification checks of automated label verification and date coding equipment."
+    },
+    {
+      "location": "Section 5.2.2",
+      "issue": "Missing allergen declaration workflow",
+      "requirement_reference": "Natasha's Law",
+      "recommendation": "Implement a workflow to ensure allergen information is reviewed and updated whenever changes occur to product recipe, process, or raw materials."
+    },
+    {
+      "location": "Section 6.3.12.1",
+      "issue": "Required sign-offs missing",
+      "requirement_reference": "Cranswick Golden Template",
+      "recommendation": "Ensure that all amendments to the controlled database for automated label verification are signed off by authorized personnel."
+    }
+  ],
+  "warnings": [],
+  "errors": [],
+  "agents_run": [
+    "cleansing",
+    "terminology",
+    "conflict",
+    "risk",
+    "specifying",
+    "sequencing",
+    "formatting",
+    "validation"
+  ]
+}
