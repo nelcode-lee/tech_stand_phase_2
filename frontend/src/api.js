@@ -78,6 +78,14 @@ export async function deleteDocument(documentId) {
 }
 
 /**
+ * Fetch full document content for cross-reference with findings (split view).
+ * Returns { document_id, content, sections }.
+ */
+export async function getDocumentContent(documentId) {
+  return request(`/ingest/documents/${encodeURIComponent(documentId)}/content`);
+}
+
+/**
  * Fetch recent analysis sessions for dashboard metrics.
  * Returns an array of { trackingId, documentId, title, docLayer, sites, overallRisk,
  *   totalFindings, agentsRun, agentFindings, workflowType, completedAt }.

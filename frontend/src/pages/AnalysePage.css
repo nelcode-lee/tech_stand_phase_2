@@ -875,3 +875,59 @@
   word-break: break-all;
   display: block;
 }
+
+/* Split view: Original document (left) + Findings (right) */
+.analyse-split-view {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-xl);
+  align-items: start;
+  margin-top: var(--space-lg);
+}
+
+@media (max-width: 900px) {
+  .analyse-split-view {
+    grid-template-columns: 1fr;
+  }
+}
+
+.analyse-split-left {
+  position: sticky;
+  top: var(--space-md);
+  background: #fafbfc;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: var(--space-lg);
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.split-panel-title {
+  margin: 0 0 var(--space-md);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--yb-blue);
+}
+
+.split-loading,
+.split-unavailable {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.original-document-panel {
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.original-doc-para {
+  margin: 0 0 var(--space-sm);
+}
+
+.original-doc-highlight {
+  background: rgba(210, 159, 80, 0.35);
+  padding: 0 2px;
+  border-radius: 2px;
+}

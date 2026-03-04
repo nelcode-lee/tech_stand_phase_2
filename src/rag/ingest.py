@@ -1,6 +1,6 @@
 """Ingest pipeline: chunk → embed → vector store + document registry. Used by POST /ingest."""
 from src.rag.chunking import chunk_text
-from src.rag.document_registry import upsert_document
+from src.rag.document_registry import upsert_document, upsert_document_content
 from src.rag.embedding import embed_chunks, get_embedding_client
 from src.rag.models import IngestDocumentRequest
 from src.rag.vector_store import add_chunks, delete_by_document_id, get_collection
@@ -37,6 +37,8 @@ def ingest_document(req: IngestDocumentRequest) -> tuple[int, str | None]:
             policy_ref=metadata.policy_ref,
             source_path=metadata.source_path,
         )
+        # Store full text for cross-reference with findings (split view)
+        upsert_document_content(metadata.document_id, req.content)
 
         return len(chunks), None
     except Exception as e:

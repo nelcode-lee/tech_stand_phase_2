@@ -8,6 +8,7 @@ from psycopg2.extras import RealDictCursor
 
 SUPABASE_DB_URL = os.environ.get("SUPABASE_DB_URL", "")
 TABLE_NAME = "documents"
+CONTENT_TABLE_NAME = "document_content"
 
 
 def _get_conn():
@@ -53,6 +54,101 @@ def ensure_table():
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         """)
+
+
+def ensure_document_content_table():
+    """
+    Create the document_content table if it does not exist.
+    Stores full text for cross-reference with findings (Phase 1: split view).
+    """
+    with _cursor() as cur:
+        cur.execute(f"""
+            CREATE TABLE IF NOT EXISTS public.{CONTENT_TABLE_NAME} (
+                document_id TEXT PRIMARY KEY,
+                content TEXT NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+
+
+def upsert_document_content(document_id: str, content: str) -> None:
+    """Store or update full document text for cross-reference with findings."""
+    if not document_id or not content:
+        return
+    try:
+        ensure_document_content_table()
+    except Exception:
+        return
+    with _cursor() as cur:
+        cur.execute(f"""
+            INSERT INTO public.{CONTENT_TABLE_NAME} (document_id, content, updated_at)
+            VALUES (%s, %s, NOW())
+            ON CONFLICT (document_id) DO UPDATE SET
+                content = EXCLUDED.content,
+                updated_at = NOW()
+        """, (document_id, content))
+
+
+def get_document_content(document_id: str) -> str | None:
+    """
+    Return full document text. First checks document_content table.
+    If not stored (e.g. pre-split-view ingest), reconstructs from vector store chunks.
+    """
+    if not document_id:
+        return None
+    # 1. Try stored content
+    try:
+        ensure_document_content_table()
+        with _cursor() as cur:
+            cur.execute(
+                f"SELECT content FROM public.{CONTENT_TABLE_NAME} WHERE document_id = %s",
+                (document_id,),
+            )
+            row = cur.fetchone()
+        if row and row.get("content"):
+            return row["content"]
+    except Exception:
+        pass
+    # 2. Fallback: reconstruct from chunks
+    chunks = _fetch_chunks_for_document(document_id)
+    if not chunks:
+        return None
+    # Deduplicate overlap: chunks are ordered; overlap is at boundaries
+    return "\n\n".join(c["text"] for c in chunks)
+
+
+def _fetch_chunks_for_document(document_id: str) -> list[dict]:
+    """Fetch all chunks for a document from vector store via raw SQL. Returns list of {text}."""
+    if not document_id or not SUPABASE_DB_URL:
+        return []
+    for table in ("vecs.document_chunks", "public.document_chunks", "document_chunks"):
+        try:
+            with _cursor() as cur:
+                cur.execute(f"""
+                    SELECT metadata->>'text' AS text, (metadata->>'chunk_index')::int AS chunk_index
+                    FROM {table}
+                    WHERE metadata->>'document_id' = %s
+                    ORDER BY chunk_index
+                """, (document_id,))
+                rows = cur.fetchall()
+                return [{"text": r["text"] or ""} for r in rows if r.get("text")]
+        except Exception:
+            continue
+    return []
+
+
+def delete_document_content(document_id: str) -> None:
+    """Remove stored content when document is deleted."""
+    if not document_id:
+        return
+    try:
+        with _cursor() as cur:
+            cur.execute(
+                f"DELETE FROM public.{CONTENT_TABLE_NAME} WHERE document_id = %s",
+                (document_id,),
+            )
+    except Exception:
+        pass
 
 
 def upsert_document(
@@ -241,6 +337,7 @@ def delete_document(document_id: str) -> None:
     """Remove a document from the registry (e.g. when re-ingesting or deleting)."""
     if not document_id:
         return
+    delete_document_content(document_id)
     with _cursor() as cur:
         cur.execute(f"DELETE FROM public.{TABLE_NAME} WHERE document_id = %s", (document_id,))
 

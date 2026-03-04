@@ -2,7 +2,12 @@
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from src.rag.document_registry import delete_document, update_document_metadata, update_vector_store_chunk_metadata
+from src.rag.document_registry import (
+    delete_document,
+    get_document_content,
+    update_document_metadata,
+    update_vector_store_chunk_metadata,
+)
 from src.rag.vector_store import delete_by_document_id
 from src.rag.models import (
     DocLayer,
@@ -83,6 +88,20 @@ class DocumentUpdateBody(BaseModel):
     doc_layer: str | None = None
     library: str | None = None
     policy_ref: str | None = None
+
+
+@router.get("/documents/{document_id}/content", tags=["documents"])
+def get_document_content_route(document_id: str):
+    """
+    Return full document text for cross-reference with findings (split view).
+    Stored at ingest, or reconstructed from chunks for older documents.
+    """
+    if not document_id:
+        raise HTTPException(status_code=400, detail="document_id is required")
+    content = get_document_content(document_id)
+    if content is None:
+        raise HTTPException(status_code=404, detail=f"Document '{document_id}' not found or has no content")
+    return {"document_id": document_id, "content": content, "sections": []}
 
 
 @router.patch("/documents/{document_id}", tags=["documents"])

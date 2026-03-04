@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
-import { analyse, saveAnalysisSession, exportDraftDocx, getAnalysisSession } from '../api';
+import { analyse, saveAnalysisSession, exportDraftDocx, getAnalysisSession, getDocumentContent } from '../api';
 import { useAnalysis } from '../context/AnalysisContext';
 import { resolveSitesForApi } from '../constants/sites';
 import { Save, FileDown } from 'lucide-react';
@@ -78,21 +78,28 @@ function scrollToSection(sectionId) {
 }
 
 // Flatten all findings into a unified Proposed Solutions list
+// searchText: best string to search for in original doc (excerpt > current_text > location)
 function buildProposedSolutions(result) {
   const solutions = [];
-  const push = (agent, current, proposal) => {
-    if (proposal) solutions.push({ agent, current: current || '—', proposal, sectionId: AGENT_SECTION_IDS[agent] });
+  const push = (agent, current, proposal, searchText) => {
+    if (proposal) solutions.push({
+      agent,
+      current: current || '—',
+      proposal,
+      sectionId: AGENT_SECTION_IDS[agent],
+      searchText: searchText || current || '',
+    });
   };
 
-  (result.risk_gaps || []).forEach(g => push('Risk', [g.location, g.issue].filter(Boolean).join(' · '), g.recommendation));
-  (result.structure_flags || []).forEach(f => push('Structure', [f.section, f.detail].filter(Boolean).join(' — '), f.recommendation));
-  (result.content_integrity_flags || []).forEach(f => push('Content Integrity', [f.location, f.detail].filter(Boolean).join(' · ') || f.excerpt, f.recommendation));
-  (result.specifying_flags || []).forEach(f => push('Specifying', [f.location, f.current_text, f.issue].filter(Boolean).join(' · '), f.recommendation));
-  (result.sequencing_flags || []).forEach(f => push('Sequencing', [f.location, f.issue, f.impact].filter(Boolean).join(' · '), f.recommendation));
-  (result.formatting_flags || []).forEach(f => push('Formatting', [f.location, f.issue].filter(Boolean).join(' · '), f.recommendation));
-  (result.compliance_flags || []).forEach(f => push('Compliance', [f.location, f.issue].filter(Boolean).join(' · '), f.recommendation));
-  (result.terminology_flags || []).forEach(f => push('Terminology', [f.term, f.location, f.issue].filter(Boolean).join(' · '), f.recommendation));
-  (result.conflicts || []).forEach(c => push('Conflict', [c.conflict_type, c.description].filter(Boolean).join(' — '), c.recommendation));
+  (result.risk_gaps || []).forEach(g => push('Risk', [g.location, g.issue].filter(Boolean).join(' · '), g.recommendation, g.location));
+  (result.structure_flags || []).forEach(f => push('Structure', [f.section, f.detail].filter(Boolean).join(' — '), f.recommendation, f.section));
+  (result.content_integrity_flags || []).forEach(f => push('Content Integrity', [f.location, f.detail].filter(Boolean).join(' · ') || f.excerpt, f.recommendation, f.excerpt || f.location));
+  (result.specifying_flags || []).forEach(f => push('Specifying', [f.location, f.current_text, f.issue].filter(Boolean).join(' · '), f.recommendation, f.current_text || f.location));
+  (result.sequencing_flags || []).forEach(f => push('Sequencing', [f.location, f.issue, f.impact].filter(Boolean).join(' · '), f.recommendation, f.location));
+  (result.formatting_flags || []).forEach(f => push('Formatting', [f.location, f.issue].filter(Boolean).join(' · '), f.recommendation, f.location));
+  (result.compliance_flags || []).forEach(f => push('Compliance', [f.location, f.issue].filter(Boolean).join(' · '), f.recommendation, f.location));
+  (result.terminology_flags || []).forEach(f => push('Terminology', [f.term, f.location, f.issue].filter(Boolean).join(' · '), f.recommendation, f.term || f.location));
+  (result.conflicts || []).forEach(c => push('Conflict', [c.conflict_type, c.description].filter(Boolean).join(' — '), c.recommendation, c.description));
 
   return solutions;
 }
@@ -208,12 +215,37 @@ export default function AnalysePage({ mode = 'review' }) {
       .catch(() => setError('Could not load analysis results. The session may not be in the database — run a new analysis to see results.'))
       .finally(() => setLoadingStored(false));
   }, [trackingIdFromUrl, documentIdFromUrl, storedResultFromState, sessionFromState, setResult, setConfig]);
+
+  // Fetch original document content for split view (cross-reference with findings)
+  useEffect(() => {
+    if (!result || !effectiveDocId) {
+      setDocumentContent(null);
+      return;
+    }
+    setLoadingContent(true);
+    setDocumentContent(null);
+    getDocumentContent(effectiveDocId)
+      .then(data => setDocumentContent(data?.content || null))
+      .catch(() => setDocumentContent(null))
+      .finally(() => setLoadingContent(false));
+  }, [result, effectiveDocId]);
+
+  // Scroll to first highlight when user clicks a finding
+  useEffect(() => {
+    if (!highlightSearch || !originalDocRef.current) return;
+    const el = originalDocRef.current.querySelector('.original-doc-highlight');
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [highlightSearch]);
   const [saving, setSaving] = useState(false);
   const [saveStatus, setSaveStatus] = useState(null);
   const [error, setError] = useState(null);
   const [sessionNotPersisted, setSessionNotPersisted] = useState(false);
   const [draftContent, setDraftContent] = useState('');
   const [exporting, setExporting] = useState(false);
+  const [documentContent, setDocumentContent] = useState(null);
+  const [loadingContent, setLoadingContent] = useState(false);
+  const [highlightSearch, setHighlightSearch] = useState('');
+  const originalDocRef = useRef(null);
 
   async function handleRun(e) {
     e.preventDefault();
@@ -417,7 +449,19 @@ export default function AnalysePage({ mode = 'review' }) {
       )}
 
       {result && (
-        <>
+        <div className={effectiveDocId ? 'analyse-split-view' : ''}>
+          {/* Left panel: Original document (split view only) */}
+          {effectiveDocId && (
+            <div className="analyse-split-left" ref={originalDocRef}>
+              <h3 className="split-panel-title">Original Document</h3>
+              {loadingContent && <p className="split-loading">Loading document…</p>}
+              {!loadingContent && !documentContent && <p className="split-unavailable">Document content not available. Re-ingest to enable cross-reference.</p>}
+              {!loadingContent && documentContent && (
+                <OriginalDocumentPanel content={documentContent} highlightSearch={highlightSearch} />
+              )}
+            </div>
+          )}
+          <div className={effectiveDocId ? 'analyse-split-right' : ''}>
           {/* Draft content — Create mode only */}
           {hasDraft && (
             <section className="draft-section">
@@ -563,11 +607,49 @@ export default function AnalysePage({ mode = 'review' }) {
 
           {/* Proposed Solutions summary — at bottom */}
           {totalFindings > 0 && (
-            <ProposedSolutionsSummary solutions={buildProposedSolutions(result)} />
+            <ProposedSolutionsSummary
+              solutions={buildProposedSolutions(result)}
+              onFindingClick={effectiveDocId ? (searchText) => setHighlightSearch(searchText || '') : undefined}
+            />
           )}
         </section>
-        </>
+          </div>
+        </div>
       )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Original document panel — renders content with search highlight
+// ---------------------------------------------------------------------------
+function OriginalDocumentPanel({ content, highlightSearch }) {
+  if (!content) return null;
+  const paragraphs = content.split(/\n\n+/).filter(Boolean);
+  const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+  function highlightInText(text) {
+    if (!highlightSearch || highlightSearch.length < 2) return text;
+    try {
+      const re = new RegExp(`(${escapeRegex(highlightSearch)})`, 'gi');
+      const parts = text.split(re);
+      if (parts.length <= 1) return text;
+      // With capturing group, split includes matches: [before, match1, between, match2, ...]
+      return parts.map((part, j) =>
+        j % 2 === 1 ? <mark key={j} className="original-doc-highlight" data-highlight>{part}</mark> : part
+      );
+    } catch (_) {
+      return text;
+    }
+  }
+
+  return (
+    <div className="original-document-panel">
+      {paragraphs.map((para, i) => (
+        <p key={i} className="original-doc-para">
+          {highlightInText(para)}
+        </p>
+      ))}
     </div>
   );
 }
@@ -575,9 +657,14 @@ export default function AnalysePage({ mode = 'review' }) {
 // ---------------------------------------------------------------------------
 // Proposed Solutions summary — consolidated view of all recommendations
 // ---------------------------------------------------------------------------
-function ProposedSolutionsSummary({ solutions }) {
+function ProposedSolutionsSummary({ solutions, onFindingClick }) {
   const [expanded, setExpanded] = useState(true);
   if (!solutions?.length) return null;
+
+  function handleRowClick(row) {
+    if (row.sectionId) scrollToSection(row.sectionId);
+    if (onFindingClick && row.searchText) onFindingClick(row.searchText);
+  }
 
   return (
     <div className="proposed-solutions-summary">
@@ -601,11 +688,11 @@ function ProposedSolutionsSummary({ solutions }) {
                 <tr
                   key={i}
                   className="proposed-solutions-row-clickable"
-                  onClick={() => row.sectionId && scrollToSection(row.sectionId)}
+                  onClick={() => handleRowClick(row)}
                   role="button"
                   tabIndex={0}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); row.sectionId && scrollToSection(row.sectionId); } }}
-                  title="Click to jump to this finding"
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleRowClick(row); } }}
+                  title={onFindingClick ? 'Click to jump to finding and highlight in original' : 'Click to jump to this finding'}
                 >
                   <td className="proposed-agent">{row.agent}</td>
                   <td className="proposed-current">{row.current}</td>
