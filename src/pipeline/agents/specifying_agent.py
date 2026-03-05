@@ -1,4 +1,5 @@
 """Agent 5: Specifying — flags vague, unmeasurable, or ambiguous language."""
+from src.pipeline.agent_rules import DOCUMENT_REFERENCE_RULE, JOB_TITLE_RULE, TOLERANCE_VS_REFERENCE_RULE, PURPOSE_OBJECTIVE_RULE
 from src.pipeline.base_agent import BaseAgent
 from src.pipeline.llm import completion, parse_json_array
 from src.pipeline.models import PipelineContext, SpecifyingFlag
@@ -46,7 +47,7 @@ Return a JSON array only. Each item has:
 - recommendation: specific value needed or instruction to provide it
 
 Example: [{"location": "Step 3", "current_text": "clean thoroughly", "issue": "subjective quality descriptor", "recommendation": "Provide measurable criteria e.g. visual inspection against defined standards"}]
-If no issues, return []."""
+If no issues, return [].""" + DOCUMENT_REFERENCE_RULE + JOB_TITLE_RULE + TOLERANCE_VS_REFERENCE_RULE + PURPOSE_OBJECTIVE_RULE
 
 
 class SpecifyingAgent(BaseAgent):

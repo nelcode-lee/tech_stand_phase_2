@@ -1,6 +1,7 @@
 """Document registry: SQL table for listing documents without vector similarity search."""
 import json
 import os
+import re
 from contextlib import contextmanager
 
 import psycopg2
@@ -56,65 +57,163 @@ def ensure_table():
         """)
 
 
+# Regex to detect section headings (numbered, ALL CAPS, or Title Case)
+_SECTION_HEADING_RE = re.compile(
+    r"^(?:"
+    r"\d[\d\.]*\s+[A-Za-z]"       # "1. Purpose" or "1.2 Scope"
+    r"|[A-Z][A-Z0-9 /\-]{2,80}$"   # ALL CAPS headings
+    r"|[A-Z][a-zA-Z0-9 /\-&]{2,80}:?\s*$"  # Title Case headings
+    r")",
+    re.MULTILINE,
+)
+
+
+def _parse_sections(content: str) -> list[dict]:
+    """
+    Parse document into sections: [{ heading, content, start_char, end_char }].
+    Reconfigurable structure for cross-reference and export.
+    """
+    if not content or not content.strip():
+        return []
+    lines = content.split("\n")
+    sections: list[dict] = []
+    current_heading: str | None = None
+    current_content: list[str] = []
+    current_start = 0
+    pos = 0
+
+    for line in lines:
+        line_stripped = line.strip()
+        is_heading = (
+            line_stripped
+            and len(line_stripped) <= 80
+            and not re.search(r"[.!?]\s+[a-z]", line_stripped)
+            and _SECTION_HEADING_RE.match(line_stripped)
+        )
+
+        if is_heading and current_heading is not None:
+            # Flush previous section
+            section_text = "\n".join(current_content).strip()
+            if section_text or current_heading:
+                sections.append({
+                    "heading": current_heading,
+                    "content": section_text,
+                    "start_char": current_start,
+                    "end_char": pos,
+                })
+            current_heading = line_stripped
+            current_content = []
+            current_start = pos
+        elif is_heading:
+            current_heading = line_stripped
+            current_content = []
+            current_start = pos
+        elif current_heading is not None:
+            current_content.append(line)
+        else:
+            # Content before first heading — treat as intro
+            if not sections and current_content:
+                current_content.append(line)
+            elif not sections:
+                current_heading = "(Introduction)"
+                current_content = [line]
+                current_start = 0
+
+        pos += len(line) + 1  # +1 for newline
+
+    if current_heading is not None:
+        section_text = "\n".join(current_content).strip()
+        sections.append({
+            "heading": current_heading,
+            "content": section_text,
+            "start_char": current_start,
+            "end_char": pos,
+        })
+
+    return sections
+
+
 def ensure_document_content_table():
     """
     Create the document_content table if it does not exist.
-    Stores full text for cross-reference with findings (Phase 1: split view).
+    Stores full text and sections for cross-reference with findings (Phase 1/2).
     """
     with _cursor() as cur:
         cur.execute(f"""
             CREATE TABLE IF NOT EXISTS public.{CONTENT_TABLE_NAME} (
                 document_id TEXT PRIMARY KEY,
                 content TEXT NOT NULL,
+                sections JSONB DEFAULT '[]',
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         """)
+        # Add sections column if table existed without it
+        try:
+            cur.execute(f"""
+                ALTER TABLE public.{CONTENT_TABLE_NAME}
+                ADD COLUMN IF NOT EXISTS sections JSONB DEFAULT '[]'
+            """)
+        except Exception:
+            pass
 
 
 def upsert_document_content(document_id: str, content: str) -> None:
-    """Store or update full document text for cross-reference with findings."""
+    """Store or update full document text and parsed sections for cross-reference with findings."""
     if not document_id or not content:
         return
     try:
         ensure_document_content_table()
     except Exception:
         return
+    sections = _parse_sections(content)
+    sections_json = json.dumps(sections)
     with _cursor() as cur:
         cur.execute(f"""
-            INSERT INTO public.{CONTENT_TABLE_NAME} (document_id, content, updated_at)
-            VALUES (%s, %s, NOW())
+            INSERT INTO public.{CONTENT_TABLE_NAME} (document_id, content, sections, updated_at)
+            VALUES (%s, %s, %s::jsonb, NOW())
             ON CONFLICT (document_id) DO UPDATE SET
                 content = EXCLUDED.content,
+                sections = EXCLUDED.sections,
                 updated_at = NOW()
-        """, (document_id, content))
+        """, (document_id, content, sections_json))
 
 
-def get_document_content(document_id: str) -> str | None:
+def get_document_content(document_id: str) -> tuple[str | None, list[dict]]:
     """
-    Return full document text. First checks document_content table.
+    Return (content, sections). First checks document_content table.
     If not stored (e.g. pre-split-view ingest), reconstructs from vector store chunks.
+    Sections are parsed on the fly when content comes from chunks.
     """
     if not document_id:
-        return None
+        return None, []
     # 1. Try stored content
     try:
         ensure_document_content_table()
         with _cursor() as cur:
             cur.execute(
-                f"SELECT content FROM public.{CONTENT_TABLE_NAME} WHERE document_id = %s",
+                f"SELECT content, sections FROM public.{CONTENT_TABLE_NAME} WHERE document_id = %s",
                 (document_id,),
             )
             row = cur.fetchone()
         if row and row.get("content"):
-            return row["content"]
+            sections = row.get("sections")
+            if isinstance(sections, str):
+                try:
+                    sections = json.loads(sections) if sections else []
+                except json.JSONDecodeError:
+                    sections = []
+            elif sections is None:
+                sections = []
+            return row["content"], sections
     except Exception:
         pass
     # 2. Fallback: reconstruct from chunks
     chunks = _fetch_chunks_for_document(document_id)
     if not chunks:
-        return None
-    # Deduplicate overlap: chunks are ordered; overlap is at boundaries
-    return "\n\n".join(c["text"] for c in chunks)
+        return None, []
+    content = "\n\n".join(c["text"] for c in chunks)
+    sections = _parse_sections(content)
+    return content, sections
 
 
 def _fetch_chunks_for_document(document_id: str) -> list[dict]:

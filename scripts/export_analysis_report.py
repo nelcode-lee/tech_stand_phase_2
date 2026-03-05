@@ -35,10 +35,8 @@ def _fmea_bar(score: int) -> str:
 # Main export function
 # ---------------------------------------------------------------------------
 
-def export(json_path: Path, out_path: Path | None = None) -> str:
-    data = json.loads(json_path.read_text(encoding="utf-8"))
-    out_path = out_path or json_path.with_suffix(".md")
-
+def export_from_dict(data: dict) -> str:
+    """Build markdown report from analysis result dict. Returns the report string."""
     lines: list[str] = []
 
     # ── Header ──────────────────────────────────────────────────────────────
@@ -258,7 +256,14 @@ def export(json_path: Path, out_path: Path | None = None) -> str:
             lines.append(f"- **Warning:** {w}")
         lines.append("")
 
-    report = "\n".join(lines)
+    return "\n".join(lines)
+
+
+def export(json_path: Path, out_path: Path | None = None) -> str:
+    """Load analysis JSON from file and export to markdown."""
+    data = json.loads(json_path.read_text(encoding="utf-8"))
+    report = export_from_dict(data)
+    out_path = out_path or json_path.with_suffix(".md")
     out_path.write_text(report, encoding="utf-8")
     return str(out_path)
 

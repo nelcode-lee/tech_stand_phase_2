@@ -9,7 +9,7 @@ from fastapi.responses import StreamingResponse
 log = logging.getLogger(__name__)
 from pydantic import BaseModel
 
-from src.pipeline.models import PipelineContext, RequestType, DocLayer
+from src.pipeline.models import Document, PipelineContext, RequestType, DocLayer
 from src.pipeline.router import PipelineRouter
 from src.rag.models import DocumentChunk
 
@@ -34,6 +34,45 @@ class AnalyseRequest(BaseModel):
 
 def _to_doc_layer(s: str) -> DocLayer:
     return DocLayer(s) if s in ("policy", "principle", "sop", "work_instruction") else DocLayer.sop
+
+
+def _dedup_key(items: list, key_fn) -> list:
+    """Deduplicate by key; keep first occurrence."""
+    seen = set()
+    out = []
+    for x in items:
+        k = key_fn(x)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(x)
+    return out
+
+
+def _deduplicate_findings(ctx: PipelineContext) -> PipelineContext:
+    """Remove duplicate findings from chunk overlap or table extraction."""
+    def norm(s: str) -> str:
+        return (s or "").strip().lower()[:200]
+
+    ctx.risk_gaps = _dedup_key(ctx.risk_gaps, lambda g: norm(g.location) + "|" + norm(g.issue))
+    ctx.structure_flags = _dedup_key(ctx.structure_flags, lambda f: norm(f.section) + "|" + norm(f.detail))
+    ctx.content_integrity_flags = _dedup_key(
+        ctx.content_integrity_flags,
+        lambda f: norm(f.location) + "|" + norm(f.excerpt) + "|" + norm(f.detail),
+    )
+    ctx.specifying_flags = _dedup_key(
+        ctx.specifying_flags,
+        lambda f: norm(f.location) + "|" + norm(f.current_text),
+    )
+    ctx.sequencing_flags = _dedup_key(ctx.sequencing_flags, lambda f: norm(f.location) + "|" + norm(f.issue))
+    ctx.formatting_flags = _dedup_key(ctx.formatting_flags, lambda f: norm(f.location) + "|" + norm(f.issue))
+    ctx.compliance_flags = _dedup_key(ctx.compliance_flags, lambda f: norm(f.location) + "|" + norm(f.issue))
+    ctx.terminology_flags = _dedup_key(
+        ctx.terminology_flags,
+        lambda f: norm(f.term) + "|" + norm(f.location or ""),
+    )
+    ctx.conflicts = _dedup_key(ctx.conflicts, lambda c: norm(c.description))
+    return ctx
 
 
 def _to_request_type(s: str) -> RequestType:
@@ -84,6 +123,47 @@ def _chunks_from_request(req: AnalyseRequest) -> list[DocumentChunk]:
     )
 
 
+def _fetch_parent_policy(req: AnalyseRequest) -> Document | None:
+    """
+    Fetch policy-layer chunks and build a parent policy Document for harmonisation.
+    Policy layer is treated as the reference; procedure is checked against it.
+    - harmonisation_review: always fetch policy chunks (all policies, or specific if policy_ref set)
+    - single_document_review with policy_ref: fetch that specific policy
+    """
+    from src.rag.retriever import retrieve
+    from src.rag.models import DocLayer
+    is_harmonisation = _to_request_type(req.request_type) == RequestType.harmonisation_review
+    has_policy_ref = bool((req.policy_ref or "").strip())
+    if not is_harmonisation and not has_policy_ref:
+        return None
+    try:
+        policy_chunks = retrieve(
+            doc_layer=DocLayer.policy,
+            document_id=req.policy_ref.strip() if has_policy_ref else None,
+            limit=150,
+        )
+        if not policy_chunks:
+            log.warning("No policy chunks found — ensure policy documents are ingested with doc_layer=policy")
+            return None
+        # Sort by document_id then chunk_index for coherent order
+        policy_chunks.sort(key=lambda c: ((c.document_id or ""), c.chunk_index))
+        content = "\n\n".join(c.text for c in policy_chunks)
+        # Build title from unique document_ids present
+        doc_ids = list(dict.fromkeys(c.document_id for c in policy_chunks if c.document_id))
+        title = doc_ids[0] if len(doc_ids) == 1 else f"Policy layer ({len(doc_ids)} documents)"
+        return Document(
+            id=doc_ids[0] if doc_ids else "policy",
+            title=title,
+            content=content[:50000],  # cap for LLM context
+            doc_layer=DocLayer.policy,
+            sites=[],
+            policy_ref=req.policy_ref,
+        )
+    except Exception as e:
+        log.warning("Failed to fetch parent policy: %s", e)
+        return None
+
+
 # Map API result keys -> agent names for agent_findings
 _FINDING_KEYS_TO_AGENT = {
     "risk_gaps": "risk",
@@ -98,11 +178,47 @@ _FINDING_KEYS_TO_AGENT = {
 }
 
 
+def _filter_chunks_by_document(chunks: list[DocumentChunk], document_id: str | None) -> list[DocumentChunk]:
+    """When document_id is set, keep only chunks from that document to avoid cross-doc contamination."""
+    if not document_id or not chunks:
+        return chunks
+    doc_id = (document_id or "").strip().upper()
+    if not doc_id:
+        return chunks
+    # Exact match first
+    filtered = [c for c in chunks if (c.document_id or "").strip().upper() == doc_id]
+    if filtered:
+        return filtered
+    # Partial match: request "FSP003" may match chunk "FSP003-VEHICLE-LOADING-..." (doc_id in chunk_id)
+    filtered = [c for c in chunks if doc_id in ((c.document_id or "").strip().upper())]
+    if filtered:
+        return filtered
+    # Reverse: chunk "FSP003" when request has "FSP003 - Vehicle Loading and Unloading"
+    filtered = [c for c in chunks if (c.document_id or "").strip().upper() in doc_id]
+    if filtered:
+        return filtered
+    return chunks
+
+
 @router.post("/analyse")
 async def post_analyse(body: AnalyseRequest):
     """Run the agent pipeline. Accepts content or retrieved_chunks for testing."""
     chunks = _chunks_from_request(body)
+    chunks = _filter_chunks_by_document(chunks, body.document_id)
+    doc_id = (body.document_id or "").strip() or (chunks[0].document_id if chunks else "") or ""
+    doc_title = (body.title or "").strip() or (chunks[0].title if chunks else "") or doc_id or ""
     agents_override = body.agents if body.agents else None
+    parent_policy = _fetch_parent_policy(body)
+
+    # When document_id set: use full document content to avoid chunk overlap duplicates
+    full_content = None
+    if doc_id:
+        try:
+            from src.rag.document_registry import get_document_content
+            full_content, _ = get_document_content(doc_id)
+        except Exception:
+            pass
+
     ctx = PipelineContext(
         tracking_id=body.tracking_id,
         request_type=_to_request_type(body.request_type),
@@ -110,10 +226,17 @@ async def post_analyse(body: AnalyseRequest):
         sites=body.sites,
         policy_ref=body.policy_ref,
         attached_doc_url=body.attached_doc_url,
+        document_id=doc_id or None,
+        document_title=doc_title or None,
         retrieved_chunks=chunks,
+        full_document_content=full_content,
+        parent_policy=parent_policy,
     )
     router_instance = PipelineRouter(agents_override=agents_override)
     ctx = await router_instance.run(ctx)
+
+    # Deduplicate findings — chunk overlap or table extraction can produce same finding twice
+    ctx = _deduplicate_findings(ctx)
 
     # Persist session for dashboard metrics
     from src.rag.analysis_sessions import record_session

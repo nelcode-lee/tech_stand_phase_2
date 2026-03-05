@@ -93,15 +93,15 @@ class DocumentUpdateBody(BaseModel):
 @router.get("/documents/{document_id}/content", tags=["documents"])
 def get_document_content_route(document_id: str):
     """
-    Return full document text for cross-reference with findings (split view).
+    Return full document text and sections for cross-reference with findings (split view).
     Stored at ingest, or reconstructed from chunks for older documents.
     """
     if not document_id:
         raise HTTPException(status_code=400, detail="document_id is required")
-    content = get_document_content(document_id)
+    content, sections = get_document_content(document_id)
     if content is None:
         raise HTTPException(status_code=404, detail=f"Document '{document_id}' not found or has no content")
-    return {"document_id": document_id, "content": content, "sections": []}
+    return {"document_id": document_id, "content": content, "sections": sections}
 
 
 @router.patch("/documents/{document_id}", tags=["documents"])

@@ -42,6 +42,9 @@ chroma_data/
 # Proprietary/sensitive documents (keep local only)
 src/*.doc
 
+# Vite cache
+frontend/.vite/
+
 # OS
 .DS_Store
 Thumbs.db

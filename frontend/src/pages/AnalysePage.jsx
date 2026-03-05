@@ -152,6 +152,17 @@ export default function AnalysePage({ mode = 'review' }) {
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadingStored, setLoadingStored] = useState(!!trackingIdFromUrl);
+  const [saving, setSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState(null);
+  const [error, setError] = useState(null);
+  const [sessionNotPersisted, setSessionNotPersisted] = useState(false);
+  const [draftContent, setDraftContent] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const [documentContent, setDocumentContent] = useState(null);
+  const [documentSections, setDocumentSections] = useState([]);
+  const [loadingContent, setLoadingContent] = useState(false);
+  const [highlightSearch, setHighlightSearch] = useState('');
+  const originalDocRef = useRef(null);
 
   const fromIngestState = location.state?.fromIngest && location.state?.documentId;
   // Effective document: URL (from fresh ingest) overrides everything — cannot be overwritten by config/session
@@ -220,32 +231,77 @@ export default function AnalysePage({ mode = 'review' }) {
   useEffect(() => {
     if (!result || !effectiveDocId) {
       setDocumentContent(null);
+      setDocumentSections([]);
       return;
     }
     setLoadingContent(true);
     setDocumentContent(null);
+    setDocumentSections([]);
     getDocumentContent(effectiveDocId)
-      .then(data => setDocumentContent(data?.content || null))
-      .catch(() => setDocumentContent(null))
+      .then(data => {
+        setDocumentContent(data?.content || null);
+        setDocumentSections(Array.isArray(data?.sections) ? data.sections : []);
+      })
+      .catch(() => {
+        setDocumentContent(null);
+        setDocumentSections([]);
+      })
       .finally(() => setLoadingContent(false));
   }, [result, effectiveDocId]);
 
-  // Scroll to first highlight when user clicks a finding
+  // Scroll to specific section or highlight when user clicks a finding
   useEffect(() => {
     if (!highlightSearch || !originalDocRef.current) return;
-    const el = originalDocRef.current.querySelector('.original-doc-highlight');
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, [highlightSearch]);
-  const [saving, setSaving] = useState(false);
-  const [saveStatus, setSaveStatus] = useState(null);
-  const [error, setError] = useState(null);
-  const [sessionNotPersisted, setSessionNotPersisted] = useState(false);
-  const [draftContent, setDraftContent] = useState('');
-  const [exporting, setExporting] = useState(false);
-  const [documentContent, setDocumentContent] = useState(null);
-  const [loadingContent, setLoadingContent] = useState(false);
-  const [highlightSearch, setHighlightSearch] = useState('');
-  const originalDocRef = useRef(null);
+    const container = originalDocRef.current;
+    const search = highlightSearch.trim();
+    if (search.length < 2) return;
+    const searchLower = search.toLowerCase();
+
+    const doScroll = () => {
+      // 1. Try section-based scroll: find section matching the finding
+      if (documentSections.length > 0) {
+        const findSection = (needle) => documentSections.findIndex(s => {
+          const heading = (s.heading || '').toLowerCase();
+          const content = (s.content || '').toLowerCase();
+          return heading === needle || heading.includes(needle) || content.includes(needle);
+        });
+        let idx = findSection(searchLower);
+        // "Step 3" / "Section 4" — extract number and match "3. X" or "4. X"
+        if (idx < 0) {
+          const numMatch = searchLower.match(/(?:step|section)\s*(\d+)/);
+          if (numMatch) {
+            const num = numMatch[1];
+            idx = documentSections.findIndex(s => {
+              const h = (s.heading || '').toLowerCase();
+              return h.startsWith(num + '.') || h.startsWith(num + ' ');
+            });
+          }
+        }
+        if (idx < 0 && searchLower.length > 20) {
+          const short = searchLower.slice(0, 50).trim();
+          if (short.length >= 5) idx = findSection(short);
+        }
+        if (idx < 0 && searchLower.length > 10) {
+          const firstWords = searchLower.split(/\s+/).slice(0, 3).join(' ');
+          if (firstWords.length >= 3) idx = findSection(firstWords);
+        }
+        if (idx >= 0) {
+          const target = container.querySelector(`[data-doc-section="${idx}"]`);
+          if (target) {
+            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            return;
+          }
+        }
+      }
+      // 2. Fallback: scroll to first highlight in document (after DOM has rendered)
+      const highlightEl = container.querySelector('.original-doc-highlight');
+      if (highlightEl) highlightEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    };
+
+    // Defer scroll until after React has rendered the highlights
+    const t = requestAnimationFrame(() => requestAnimationFrame(doScroll));
+    return () => cancelAnimationFrame(t);
+  }, [highlightSearch, documentSections]);
 
   async function handleRun(e) {
     e.preventDefault();
@@ -390,8 +446,8 @@ export default function AnalysePage({ mode = 'review' }) {
   }
 
   return (
-    <div className="analyse-page meatspec-main-content">
-      <div className="doc-header">
+    <div className="analyse-page-layout">
+      <div className="doc-header doc-header-outside">
         <div>
           <h2>{isCreate ? 'Analyse & Draft' : 'Review Findings'}</h2>
           <p className="doc-subtitle">
@@ -409,6 +465,7 @@ export default function AnalysePage({ mode = 'review' }) {
         </div>
       </div>
 
+      <div className="analyse-page meatspec-main-content">
       <form id="analyse-form" onSubmit={handleRun} className="analyse-form">
         {!effectiveDocId && (
           <div className="analyse-no-doc-warning">
@@ -449,19 +506,53 @@ export default function AnalysePage({ mode = 'review' }) {
       )}
 
       {result && (
-        <div className={effectiveDocId ? 'analyse-split-view' : ''}>
-          {/* Left panel: Original document (split view only) */}
-          {effectiveDocId && (
-            <div className="analyse-split-left" ref={originalDocRef}>
-              <h3 className="split-panel-title">Original Document</h3>
-              {loadingContent && <p className="split-loading">Loading document…</p>}
-              {!loadingContent && !documentContent && <p className="split-unavailable">Document content not available. Re-ingest to enable cross-reference.</p>}
-              {!loadingContent && documentContent && (
-                <OriginalDocumentPanel content={documentContent} highlightSearch={highlightSearch} />
-              )}
+        <div className="analyse-results-wrapper">
+          {/* Flag counts bar — full width across top */}
+          {flagCounts && (
+            <div className="flag-metrics-top">
+              <div className="metrics-grid">
+                {Object.entries(flagCounts).map(([key, count]) => {
+                  const sectionId = FLAG_KEY_TO_SECTION_ID[key];
+                  const isClickable = count > 0 && sectionId;
+                  return (
+                    <div
+                      key={key}
+                      className={`metric${count === 0 ? ' metric-zero' : ''}${isClickable ? ' metric-clickable' : ''}`}
+                      onClick={isClickable ? () => scrollToSection(sectionId) : undefined}
+                      onKeyDown={isClickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); scrollToSection(sectionId); } } : undefined}
+                      role={isClickable ? 'button' : undefined}
+                      tabIndex={isClickable ? 0 : undefined}
+                      title={isClickable ? `Jump to ${key}` : undefined}
+                    >
+                      <span className="metric-value">{count}</span>
+                      <span className="metric-label">{key}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="flag-metrics-total">{totalFindings} total findings</div>
             </div>
           )}
-          <div className={effectiveDocId ? 'analyse-split-right' : ''}>
+
+          {/* Doc and findings side by side */}
+          <div className={effectiveDocId ? 'analyse-split-view' : 'analyse-single-column'}>
+            {/* Left panel: Original document */}
+            {effectiveDocId && (
+              <div className="analyse-split-left" ref={originalDocRef}>
+                <h3 className="split-panel-title">Original Document</h3>
+                {loadingContent && <p className="split-loading">Loading document…</p>}
+                {!loadingContent && !documentContent && <p className="split-unavailable">Document content not available. Re-ingest to enable cross-reference.</p>}
+              {!loadingContent && documentContent && (
+                <OriginalDocumentPanel
+                  content={documentContent}
+                  sections={documentSections}
+                  highlightSearch={highlightSearch}
+                />
+              )}
+              </div>
+            )}
+            {/* Right panel: Findings */}
+            <div className={effectiveDocId ? 'analyse-split-right' : ''}>
           {/* Draft content — Create mode only */}
           {hasDraft && (
             <section className="draft-section">
@@ -541,67 +632,40 @@ export default function AnalysePage({ mode = 'review' }) {
             </div>
           )}
 
-          {/* Metric tiles — clickable to scroll to corresponding agent card */}
-          {flagCounts && (
-            <div className="flag-metrics">
-              <h4>Flag counts</h4>
-              <div className="metrics-grid">
-                {Object.entries(flagCounts).map(([key, count]) => {
-                  const sectionId = FLAG_KEY_TO_SECTION_ID[key];
-                  const isClickable = count > 0 && sectionId;
-                  return (
-                    <div
-                      key={key}
-                      className={`metric${count === 0 ? ' metric-zero' : ''}${isClickable ? ' metric-clickable' : ''}`}
-                      onClick={isClickable ? () => scrollToSection(sectionId) : undefined}
-                      onKeyDown={isClickable ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); scrollToSection(sectionId); } } : undefined}
-                      role={isClickable ? 'button' : undefined}
-                      tabIndex={isClickable ? 0 : undefined}
-                      title={isClickable ? `Jump to ${key}` : undefined}
-                    >
-                      <span className="metric-value">{count}</span>
-                      <span className="metric-label">{key}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
           {/* Agent cards — each wrapped with id for Proposed Solutions scroll target */}
           <div className="agent-cards">
             {result.risk_gaps?.length > 0 && (
-              <div id="agent-card-risk"><RiskGapCard items={result.risk_gaps} /></div>
+              <div id="agent-card-risk"><RiskGapCard items={result.risk_gaps} onFindingClick={effectiveDocId ? setHighlightSearch : undefined} /></div>
             )}
             {result.structure_flags?.length > 0 && (
-              <div id="agent-card-structure"><StructureCard items={result.structure_flags} /></div>
+              <div id="agent-card-structure"><StructureCard items={result.structure_flags} onFindingClick={effectiveDocId ? setHighlightSearch : undefined} /></div>
             )}
             {result.content_integrity_flags?.length > 0 && (
-              <div id="agent-card-content-integrity"><ContentIntegrityCard items={result.content_integrity_flags} /></div>
+              <div id="agent-card-content-integrity"><ContentIntegrityCard items={result.content_integrity_flags} onFindingClick={effectiveDocId ? setHighlightSearch : undefined} /></div>
             )}
             {result.specifying_flags?.length > 0 && (
               <div id="agent-card-specifying"><AgentCard title="Specifying" items={result.specifying_flags}
-                keys={['location', 'current_text', 'issue', 'recommendation']} /></div>
+                keys={['location', 'current_text', 'issue', 'recommendation']} searchTextKey="current_text" onFindingClick={effectiveDocId ? setHighlightSearch : undefined} /></div>
             )}
             {result.sequencing_flags?.length > 0 && (
               <div id="agent-card-sequencing"><AgentCard title="Sequencing" items={result.sequencing_flags}
-                keys={['location', 'issue', 'impact', 'recommendation']} /></div>
+                keys={['location', 'issue', 'impact', 'recommendation']} searchTextKey="location" onFindingClick={effectiveDocId ? setHighlightSearch : undefined} /></div>
             )}
             {result.formatting_flags?.length > 0 && (
               <div id="agent-card-formatting"><AgentCard title="Formatting" items={result.formatting_flags}
-                keys={['location', 'issue', 'recommendation']} /></div>
+                keys={['location', 'issue', 'recommendation']} searchTextKey="location" onFindingClick={effectiveDocId ? setHighlightSearch : undefined} /></div>
             )}
             {result.compliance_flags?.length > 0 && (
               <div id="agent-card-compliance"><AgentCard title="Compliance" items={result.compliance_flags}
-                keys={['location', 'issue', 'requirement_reference', 'recommendation']} /></div>
+                keys={['location', 'issue', 'requirement_reference', 'recommendation']} searchTextKey="location" onFindingClick={effectiveDocId ? setHighlightSearch : undefined} /></div>
             )}
             {result.terminology_flags?.length > 0 && (
               <div id="agent-card-terminology"><AgentCard title="Terminology" items={result.terminology_flags}
-                keys={['term', 'location', 'issue', 'recommendation']} /></div>
+                keys={['term', 'location', 'issue', 'recommendation']} searchTextKey="term" onFindingClick={effectiveDocId ? setHighlightSearch : undefined} /></div>
             )}
             {result.conflicts?.length > 0 && (
               <div id="agent-card-conflict"><AgentCard title="Conflicts" items={result.conflicts}
-                keys={['conflict_type', 'severity', 'description', 'recommendation']} /></div>
+                keys={['conflict_type', 'severity', 'description', 'recommendation']} searchTextKey="description" onFindingClick={effectiveDocId ? setHighlightSearch : undefined} /></div>
             )}
           </div>
 
@@ -613,36 +677,67 @@ export default function AnalysePage({ mode = 'review' }) {
             />
           )}
         </section>
+            </div>
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Original document panel — renders content with search highlight
+// Original document panel — highlights only the selected finding (one at a time)
 // ---------------------------------------------------------------------------
-function OriginalDocumentPanel({ content, highlightSearch }) {
+function OriginalDocumentPanel({ content, sections = [], highlightSearch }) {
   if (!content) return null;
-  const paragraphs = content.split(/\n\n+/).filter(Boolean);
   const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
   function highlightInText(text) {
-    if (!highlightSearch || highlightSearch.length < 2) return text;
+    if (!highlightSearch || highlightSearch.trim().length < 2) return text;
+    const search = highlightSearch.trim();
     try {
-      const re = new RegExp(`(${escapeRegex(highlightSearch)})`, 'gi');
+      const re = new RegExp(`(${escapeRegex(search)})`, 'gi');
       const parts = text.split(re);
       if (parts.length <= 1) return text;
-      // With capturing group, split includes matches: [before, match1, between, match2, ...]
       return parts.map((part, j) =>
-        j % 2 === 1 ? <mark key={j} className="original-doc-highlight" data-highlight>{part}</mark> : part
+        j % 2 === 1 ? (
+          <mark key={j} className="original-doc-highlight" data-highlight>{part}</mark>
+        ) : part
       );
     } catch (_) {
       return text;
     }
   }
 
+  // Render by sections when available — enables scroll-to-section
+  if (sections.length > 0) {
+    return (
+      <div className="original-document-panel">
+        {sections.map((sec, i) => (
+          <section
+            key={i}
+            className="original-doc-section"
+            data-doc-section={i}
+          >
+            <h4 className="original-doc-section-heading">{sec.heading}</h4>
+            <div className="original-doc-section-body">
+              {sec.content ? (
+                sec.content.split(/\n\n+/).filter(Boolean).map((para, j) => (
+                  <p key={j} className="original-doc-para">
+                    {highlightInText(para)}
+                  </p>
+                ))
+              ) : null}
+            </div>
+          </section>
+        ))}
+      </div>
+    );
+  }
+
+  // Fallback: paragraphs only (no sections)
+  const paragraphs = content.split(/\n\n+/).filter(Boolean);
   return (
     <div className="original-document-panel">
       {paragraphs.map((para, i) => (
@@ -710,7 +805,7 @@ function ProposedSolutionsSummary({ solutions, onFindingClick }) {
 // ---------------------------------------------------------------------------
 // Risk Gap card — sorted by FMEA score, shows score bar inline
 // ---------------------------------------------------------------------------
-function RiskGapCard({ items }) {
+function RiskGapCard({ items, onFindingClick }) {
   const [expanded, setExpanded] = useState(false);
   const sorted = [...items].sort((a, b) => (b.fmea_score || 0) - (a.fmea_score || 0));
   const display = expanded ? sorted : sorted.slice(0, 3);
@@ -723,7 +818,15 @@ function RiskGapCard({ items }) {
       </button>
       <ul className="agent-list">
         {display.map((gap, i) => (
-          <li key={i} className="agent-item">
+          <li
+            key={i}
+            className={`agent-item ${onFindingClick && gap.location ? 'agent-item-clickable' : ''}`}
+            onClick={onFindingClick && gap.location ? () => onFindingClick(gap.location) : undefined}
+            onKeyDown={onFindingClick && gap.location ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onFindingClick(gap.location); } } : undefined}
+            role={onFindingClick && gap.location ? 'button' : undefined}
+            tabIndex={onFindingClick && gap.location ? 0 : undefined}
+            title={onFindingClick && gap.location ? 'Click to highlight in original document' : undefined}
+          >
             <div className="risk-gap-top">
               <span className="agent-field-label">{gap.location || '—'}</span>
               <FmeaBar score={gap.fmea_score} band={gap.fmea_band} />
@@ -760,7 +863,7 @@ function RiskGapCard({ items }) {
 // ---------------------------------------------------------------------------
 // Structure flag card — omission/ordering, shows severity pill
 // ---------------------------------------------------------------------------
-function StructureCard({ items }) {
+function StructureCard({ items, onFindingClick }) {
   const [expanded, setExpanded] = useState(false);
   // Required-section omissions first, then ordering, then optional omissions
   const sorted = [...items].sort((a, b) => {
@@ -777,7 +880,15 @@ function StructureCard({ items }) {
       </button>
       <ul className="agent-list">
         {display.map((flag, i) => (
-          <li key={i} className="agent-item structure-item">
+          <li
+            key={i}
+            className={`agent-item structure-item ${onFindingClick && flag.section ? 'agent-item-clickable' : ''}`}
+            onClick={onFindingClick && flag.section ? () => onFindingClick(flag.section) : undefined}
+            onKeyDown={onFindingClick && flag.section ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onFindingClick(flag.section); } } : undefined}
+            role={onFindingClick && flag.section ? 'button' : undefined}
+            tabIndex={onFindingClick && flag.section ? 0 : undefined}
+            title={onFindingClick && flag.section ? 'Click to highlight in original document' : undefined}
+          >
             <div className="structure-top">
               <SevPill severity={flag.severity} />
               <span className="structure-type">{flag.flag_type}</span>
@@ -805,7 +916,7 @@ function StructureCard({ items }) {
 // ---------------------------------------------------------------------------
 // Content integrity card — grouped by flag_type sub-section
 // ---------------------------------------------------------------------------
-function ContentIntegrityCard({ items }) {
+function ContentIntegrityCard({ items, onFindingClick }) {
   const [expanded, setExpanded] = useState(false);
   const grouped = groupBy(items, 'flag_type');
 
@@ -829,7 +940,7 @@ function ContentIntegrityCard({ items }) {
           {orderedTypes.map(ftype => {
             const group = grouped[ftype];
             return (
-              <IntegrityGroup key={ftype} ftype={ftype} items={group} />
+              <IntegrityGroup key={ftype} ftype={ftype} items={group} onFindingClick={onFindingClick} />
             );
           })}
         </div>
@@ -863,7 +974,7 @@ function ContentIntegrityCard({ items }) {
   );
 }
 
-function IntegrityGroup({ ftype, items }) {
+function IntegrityGroup({ ftype, items, onFindingClick }) {
   const [open, setOpen] = useState(false);
   const label = INTEGRITY_TYPE_LABELS[ftype] || ftype.replace(/_/g, ' ');
   const display = open ? items : items.slice(0, 2);
@@ -876,8 +987,18 @@ function IntegrityGroup({ ftype, items }) {
         <span className="integrity-toggle">{open ? '▲' : '▼'}</span>
       </button>
       <ul className="agent-list">
-        {display.map((flag, i) => (
-          <li key={i} className="agent-item">
+        {display.map((flag, i) => {
+          const searchText = flag.excerpt || flag.location;
+          return (
+          <li
+            key={i}
+            className={`agent-item ${onFindingClick && searchText ? 'agent-item-clickable' : ''}`}
+            onClick={onFindingClick && searchText ? () => onFindingClick(searchText) : undefined}
+            onKeyDown={onFindingClick && searchText ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onFindingClick(searchText); } } : undefined}
+            role={onFindingClick && searchText ? 'button' : undefined}
+            tabIndex={onFindingClick && searchText ? 0 : undefined}
+            title={onFindingClick && searchText ? 'Click to highlight in original document' : undefined}
+          >
             <div className="integrity-top">
               <SevPill severity={flag.severity} />
               {flag.location && (
@@ -897,7 +1018,8 @@ function IntegrityGroup({ ftype, items }) {
               <span className="agent-field-value">{flag.recommendation}</span>
             </div>
           </li>
-        ))}
+          );
+        })}
       </ul>
       {items.length > 2 && !open && (
         <button type="button" className="show-more" onClick={() => setOpen(true)}>
@@ -909,9 +1031,9 @@ function IntegrityGroup({ ftype, items }) {
 }
 
 // ---------------------------------------------------------------------------
-// Generic agent card (existing behaviour, unchanged)
+// Generic agent card — supports click-to-highlight via searchTextKey
 // ---------------------------------------------------------------------------
-function AgentCard({ title, items, keys }) {
+function AgentCard({ title, items, keys, searchTextKey = 'location', onFindingClick }) {
   const [expanded, setExpanded] = useState(false);
   const displayItems = expanded ? items : items.slice(0, 3);
   const hasMore = items.length > 3;
@@ -923,8 +1045,18 @@ function AgentCard({ title, items, keys }) {
         <span className="count">{items.length}</span>
       </button>
       <ul className="agent-list">
-        {displayItems.map((item, i) => (
-          <li key={i} className="agent-item">
+        {displayItems.map((item, i) => {
+          const searchText = searchTextKey && item[searchTextKey] ? String(item[searchTextKey]).slice(0, 150) : null;
+          return (
+          <li
+            key={i}
+            className={`agent-item ${onFindingClick && searchText ? 'agent-item-clickable' : ''}`}
+            onClick={onFindingClick && searchText ? () => onFindingClick(searchText) : undefined}
+            onKeyDown={onFindingClick && searchText ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onFindingClick(searchText); } } : undefined}
+            role={onFindingClick && searchText ? 'button' : undefined}
+            tabIndex={onFindingClick && searchText ? 0 : undefined}
+            title={onFindingClick && searchText ? 'Click to highlight in original document' : undefined}
+          >
             {keys.map((k) => (
               item[k] && (
                 <div key={k} className="agent-field">
@@ -936,7 +1068,8 @@ function AgentCard({ title, items, keys }) {
               )
             ))}
           </li>
-        ))}
+          );
+        })}
       </ul>
       {hasMore && !expanded && (
         <button type="button" className="show-more" onClick={() => setExpanded(true)}>

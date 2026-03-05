@@ -1,4 +1,5 @@
 """Agent 2: Terminology — flags inconsistent term usage across documents."""
+from src.pipeline.agent_rules import DOCUMENT_REFERENCE_RULE
 from src.pipeline.base_agent import BaseAgent
 from src.pipeline.domain import get_glossary_block, load_domain_context
 from src.pipeline.llm import completion, parse_json_array
@@ -42,7 +43,7 @@ Return ONLY a JSON array. Each object: {"term": "<exact term as it appears>", "l
 
 RULES
 - No prose outside JSON. No invented terms. No assumptions.
-- If no terms need flagging, return []."""
+- If no terms need flagging, return [].""" + DOCUMENT_REFERENCE_RULE
 
 
 def _term_appears_in_content(term: str, content: str) -> bool:

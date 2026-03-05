@@ -167,9 +167,12 @@ class PipelineContext(BaseModel):
     sites: list[str] = Field(default_factory=list)
     policy_ref: str | None = None
     attached_doc_url: str | None = None
+    document_id: str | None = None   # Document being analysed (from request) — used to avoid cross-doc contamination
+    document_title: str | None = None  # Title from request — authoritative for Formatting agent
 
     # RAG retrieval (pre-pipeline)
     retrieved_chunks: list[DocumentChunk] = Field(default_factory=list)
+    full_document_content: str | None = None  # When document_id set: full text from document_content table (avoids chunk overlap)
     parent_policy: Document | None = None
     current_version: Document | None = None
     sibling_docs: list[Document] = Field(default_factory=list)

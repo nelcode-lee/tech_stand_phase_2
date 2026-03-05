@@ -3,6 +3,7 @@ import json
 import re
 from pathlib import Path
 
+from src.pipeline.agent_rules import DOCUMENT_REFERENCE_RULE, JOB_TITLE_RULE, TOLERANCE_VS_REFERENCE_RULE, PURPOSE_OBJECTIVE_RULE
 from src.pipeline.base_agent import BaseAgent
 from src.pipeline.domain import get_glossary_block
 from src.pipeline.llm import completion, parse_json_array
@@ -35,7 +36,7 @@ _TEMPLATE_SECTIONS: list[dict] = (
 # If the JSON doesn't have a detailed template list yet, use the full canonical order.
 if not _TEMPLATE_SECTIONS:
     _TEMPLATE_SECTIONS = [
-        {"name": "Purpose / Objective",  "required": True,  "aliases": ["purpose", "objective", "aim", "intent"]},
+        {"name": "Purpose / Objective",  "required": False, "aliases": ["purpose", "objective", "aim", "intent"]},
         {"name": "Scope",                "required": True,  "aliases": ["scope", "applicability", "applies to"]},
         {"name": "References",           "required": True,  "aliases": ["references", "related documents", "associated documents", "see also"]},
         {"name": "Responsibilities",     "required": True,  "aliases": ["responsibilities", "accountabilities", "roles", "ownership"]},
@@ -96,7 +97,7 @@ ABSOLUTE RULES
 OUTPUT
 Return a JSON array only. Each item:
 {"location": "<section or step>", "current_text": "<exact vague or complex wording>", "issue": "<why it is vague or unclear>", "recommendation": "<what specific information is needed or how to clarify>"}
-If no issues found, return []."""
+If no issues found, return [].""" + DOCUMENT_REFERENCE_RULE + JOB_TITLE_RULE + TOLERANCE_VS_REFERENCE_RULE + PURPOSE_OBJECTIVE_RULE
 
 # ---------------------------------------------------------------------------
 # Structure analysis — heading extraction and template comparison
@@ -423,20 +424,22 @@ def _detect_content_integrity(text: str) -> list[ContentIntegrityFlag]:
                 break  # one flag per line is enough
 
         # --- Numbered/bulleted step ending with a bare colon (body missing) ---
+        # Often an extraction artefact: PDF/DOCX extraction can drop list items that follow.
         if _STEP_COLON_RE.match(raw_line):
             flags.append(ContentIntegrityFlag(
                 flag_type="truncated_step",
                 location=location,
                 excerpt=line[:200],
                 detail=(
-                    "A procedural step ends with a colon but has no following content. "
-                    "The body of this step may have been lost during extraction."
+                    "A procedural step ends with a colon but has no following content in the extracted text. "
+                    "This is often an extraction artefact—the original document may have a list or sub-points "
+                    "that were lost during PDF/DOCX conversion."
                 ),
                 recommendation=(
-                    "Verify the source document. If this step should have sub-points or "
-                    "a description, add them explicitly."
+                    "Check the source document. If a list or sub-points exist there, the issue is extraction "
+                    "quality (re-ingest may help). If the step is genuinely incomplete, add the content."
                 ),
-                severity="high",
+                severity="low",
             ))
 
         # --- Fragmented sentence: very short body line that is not a heading/label ---
@@ -485,13 +488,15 @@ def _detect_content_integrity(text: str) -> list[ContentIntegrityFlag]:
                 excerpt=intro[:200],
                 detail=(
                     f'The line "{intro}" ends with a colon suggesting a list follows, '
-                    "but no list items were found immediately after it."
+                    "but no bulleted/numbered list items were found in the extracted text. "
+                    "This is often an extraction artefact—PDF/DOCX conversion can drop list formatting."
                 ),
                 recommendation=(
-                    "Check the source document. Either the list items were not extracted "
-                    "or this introduction should be reworded as a complete sentence."
+                    "Check the source document. If a list exists there, the issue is extraction quality "
+                    "(re-ingest may help; DOCX list items are now preserved with bullets). "
+                    "If the document is genuinely incomplete, add the list or reword as a complete sentence."
                 ),
-                severity="medium",
+                severity="low",
             ))
 
     return flags
@@ -789,17 +794,19 @@ class CleansingAgent(BaseAgent):
     name = "cleansing"
 
     async def run(self, ctx: PipelineContext) -> PipelineContext:
-        if not ctx.retrieved_chunks:
-            self._add_error(ctx, "No retrieved chunks to cleanse", "critical")
+        # Prefer full document content when available — avoids chunk overlap duplicates (e.g. heading flagged twice)
+        if ctx.full_document_content:
+            ctx.cleansed_content = _cleanse_text(ctx.full_document_content)
+        elif ctx.retrieved_chunks:
+            parts: list[str] = []
+            for chunk in ctx.retrieved_chunks:
+                text = _cleanse_text(chunk.text)
+                if text:
+                    parts.append(text)
+            ctx.cleansed_content = "\n\n".join(parts) if parts else None
+        else:
+            self._add_error(ctx, "No retrieved chunks or full document content to cleanse", "critical")
             return ctx
-
-        parts: list[str] = []
-        for chunk in ctx.retrieved_chunks:
-            text = _cleanse_text(chunk.text)
-            if text:
-                parts.append(text)
-
-        ctx.cleansed_content = "\n\n".join(parts) if parts else None
         if not ctx.cleansed_content:
             self._add_error(ctx, "Cleansed content is empty", "critical")
             return ctx
@@ -844,7 +851,7 @@ class CleansingAgent(BaseAgent):
             self._add_error(ctx, f"Cleansing structure analysis failed: {e}", "low")
 
         # --- Passes 3–5 share a single raw_text build (pre-cleanse) ---
-        raw_text = "\n\n".join(c.text for c in ctx.retrieved_chunks)
+        raw_text = ctx.full_document_content or "\n\n".join(c.text for c in ctx.retrieved_chunks)
 
         # --- Pass 3: content integrity — non-text elements + fragmentation (rule-based) ---
         try:

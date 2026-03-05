@@ -1,4 +1,5 @@
 """Agent 7: Formatting — flags structural and template compliance issues."""
+from src.pipeline.agent_rules import DOCUMENT_REFERENCE_RULE, PURPOSE_OBJECTIVE_RULE
 from src.pipeline.base_agent import BaseAgent
 from src.pipeline.llm import completion, parse_json_array
 from src.pipeline.models import PipelineContext, FormattingFlag
@@ -7,7 +8,8 @@ FORMATTING_SYSTEM_PROMPT = """You are the Structure, Formatting & Presentation A
 You enforce clear structure, consistent formatting, and alignment with the Cranswick Golden Template.
 
 TITLE AND SCOPE MISMATCH
-- When the document title is provided in the prompt (from metadata), use it to check if the content matches. Flag if the content does not reflect what the title implies.
+- When the document title is provided in the prompt (from the request — this is the document being analysed), use it to check if the content matches. Flag if the content does not reflect what the title implies.
+- Use ONLY the title provided in the prompt. Do not infer or use titles from other documents that may appear in the content.
 - If no title is provided, only flag when the document explicitly states its own title or scope in the text and that stated title/scope does not match the content.
 - Do NOT infer, assume, or invent a document title when none is provided.
 - Scope gaps: e.g. scope states "dispatch to customers only" but dispatch to third party storage or other businesses not included.
@@ -46,7 +48,7 @@ Return only a JSON array. Each item has:
 - recommendation: specific fix to align with template or improve structure
 
 Example: [{"location": "Section 3", "issue": "Steps not numbered", "recommendation": "Add step numbers (1, 2, 3...) for clarity"}]
-If no issues, return []."""
+If no issues, return [].""" + DOCUMENT_REFERENCE_RULE + PURPOSE_OBJECTIVE_RULE
 
 
 class FormattingAgent(BaseAgent):
@@ -60,8 +62,9 @@ class FormattingAgent(BaseAgent):
             return ctx
 
         try:
-            doc_title = None
-            if ctx.retrieved_chunks:
+            # Use document_title from request (authoritative) — avoids cross-doc contamination when chunks are mixed
+            doc_title = ctx.document_title
+            if not doc_title and ctx.retrieved_chunks:
                 doc_title = next((c.title for c in ctx.retrieved_chunks if c.title), None)
             prompt_parts = ["Analyse the following document for structure, formatting and presentation issues:"]
             if doc_title:

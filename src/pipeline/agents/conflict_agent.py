@@ -1,4 +1,5 @@
 """Agent 3: Conflict detection — identifies contradictions between documents."""
+from src.pipeline.agent_rules import DOCUMENT_REFERENCE_RULE
 from src.pipeline.base_agent import BaseAgent
 from src.pipeline.llm import completion, parse_json_array
 from src.pipeline.models import PipelineContext, Conflict
@@ -35,7 +36,7 @@ RULES
 OUTPUT FORMAT
 Return ONLY a JSON array. Each object: {"conflict_type": "UNSANCTIONED_CONFLICT|SANCTIONED_VARIANCE|PENDING_REVIEW|PARENT_BREACH", "severity": "info|low|medium|high|critical", "layer": "<doc layer>", "sites": [], "document_refs": [], "description": "<explicit contradiction>", "recommendation": "<required alignment>", "blocks_draft": false}
 
-If none found, return []."""
+If none found, return [].""" + DOCUMENT_REFERENCE_RULE
 
 
 class ConflictAgent(BaseAgent):

@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 
+from src.pipeline.agent_rules import DOCUMENT_REFERENCE_RULE, JOB_TITLE_RULE, TOLERANCE_VS_REFERENCE_RULE
 from src.pipeline.base_agent import BaseAgent
 from src.pipeline.llm import completion, parse_json_array
 from src.pipeline.models import PipelineContext, RiskGap, RiskLevel
@@ -116,7 +117,7 @@ YOU MUST IDENTIFY (inclusive of, but not limited to):
    - Corrective actions (what to do when something goes wrong)
    - Escalation procedure: who to escalate to, the trigger point (condition or threshold), and how to escalate
    - Verification methods and record-keeping requirements (what must be recorded, where, and for how long)
-   - Responsible person or role not named
+   - Responsible role or job title not named (job titles are appropriate; named individuals are not for controlled procedures)
    - Tolerances, limits, or acceptable ranges not defined
 3. Frequency definitions: any requirement described as "regularly", "periodically", "frequently", "as needed", "as required", or similar without an explicit interval (e.g. "every 30 minutes", "daily")
 4. Safety gaps: CCP monitoring actions missing specificity, temperature ranges missing units or tolerances, pre-start or hygiene steps missing, allergen or segregation risks unstated
@@ -134,7 +135,7 @@ Return ONLY a JSON array. Each object:
 {{"location": "<section, step, or heading>", "issue": "<the specific missing information or unsafe assumption>", "risk": "<factual consequence if left unaddressed>", "recommendation": "<exactly what information must be added>", "severity": <1-5>, "scope": <1-5>, "detectability": <1-5>}}
 
 If no issues found, return [].
-"""
+""" + DOCUMENT_REFERENCE_RULE + JOB_TITLE_RULE + TOLERANCE_VS_REFERENCE_RULE
 
 
 def _build_system_prompt(ctx: PipelineContext) -> str:

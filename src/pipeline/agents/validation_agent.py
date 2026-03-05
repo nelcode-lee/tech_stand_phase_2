@@ -1,6 +1,7 @@
 """Agent 8: Validation — final gate, compliance analysis, sets draft_ready."""
 import re
 
+from src.pipeline.agent_rules import DOCUMENT_REFERENCE_RULE, JOB_TITLE_RULE, TOLERANCE_VS_REFERENCE_RULE, PURPOSE_OBJECTIVE_RULE
 from src.pipeline.base_agent import BaseAgent
 from src.pipeline.llm import completion, parse_json_array
 from src.pipeline.models import (
@@ -46,7 +47,7 @@ Return only a JSON array. Each item has:
 - recommendation: correction needed to meet requirement (factual only)
 
 Example: [{"location": "Section 4", "issue": "CCP verification records not referenced", "requirement_reference": "BRCGS Clause 5.8", "recommendation": "Add CCP verification record form reference"}]
-If no issues, return []."""
+If no issues, return [].""" + DOCUMENT_REFERENCE_RULE + JOB_TITLE_RULE + TOLERANCE_VS_REFERENCE_RULE + PURPOSE_OBJECTIVE_RULE
 
 
 class ValidationAgent(BaseAgent):

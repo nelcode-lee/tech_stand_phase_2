@@ -1,4 +1,5 @@
 """Agent 6: Sequencing — flags logical flow and step-order issues in procedures."""
+from src.pipeline.agent_rules import DOCUMENT_REFERENCE_RULE
 from src.pipeline.base_agent import BaseAgent
 from src.pipeline.llm import completion, parse_json_array
 from src.pipeline.models import PipelineContext, DocLayer, SequencingFlag
@@ -45,7 +46,7 @@ Return only a JSON array. Each item has:
 - recommendation: required change while staying within document content
 
 Example: [{"location": "Step 5", "issue": "Temperature check occurs after product has been packed", "impact": "CCP verification too late", "recommendation": "Move temperature verification before packing step"}]
-If no issues, return []."""
+If no issues, return [].""" + DOCUMENT_REFERENCE_RULE
 
 
 class SequencingAgent(BaseAgent):
