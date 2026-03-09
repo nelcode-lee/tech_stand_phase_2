@@ -61,7 +61,7 @@ function timeAgo(isoString) {
 export default function DashboardPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { setWorkflowMode, setConfig, sessionLog } = useAnalysis();
+  const { setWorkflowMode, setConfig, sessionLog, reloadSessionLog } = useAnalysis();
 
   const [backendDocs, setBackendDocs] = useState([]);
   const [backendSessions, setBackendSessions] = useState([]);
@@ -97,9 +97,10 @@ export default function DashboardPage() {
   // Refetch only when navigating to dashboard (not on every context change)
   useEffect(() => {
     if (location.pathname !== '/dashboard') return;
+    if (reloadSessionLog) reloadSessionLog();
     fetchDocs();
     fetchSessions();
-  }, [location.pathname]);
+  }, [location.pathname, reloadSessionLog]);
 
   // Refetch when tab becomes visible, with debounce to avoid rapid successive fetches
   useEffect(() => {
@@ -108,6 +109,7 @@ export default function DashboardPage() {
       if (document.visibilityState !== 'visible') return;
       if (timeoutId) clearTimeout(timeoutId);
       timeoutId = setTimeout(() => {
+        if (reloadSessionLog) reloadSessionLog();
         fetchDocs();
         fetchSessions();
         timeoutId = null;
@@ -118,7 +120,7 @@ export default function DashboardPage() {
       document.removeEventListener('visibilitychange', onVisible);
       if (timeoutId) clearTimeout(timeoutId);
     };
-  }, []);
+  }, [reloadSessionLog]);
 
   // Merge sessionLog (in-memory + persisted) with backend sessions
   const allSessions = useMemo(() => {

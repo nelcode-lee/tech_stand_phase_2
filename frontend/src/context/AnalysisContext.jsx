@@ -1,4 +1,4 @@
-import { createContext, useContext, useState } from 'react';
+import { createContext, useCallback, useContext, useState } from 'react';
 
 const AnalysisContext = createContext(null);
 
@@ -52,6 +52,10 @@ export function AnalysisProvider({ children }) {
     }
   };
   const [sessionLog, setSessionLog] = useState(loadPersistedSessions);
+
+  const reloadSessionLog = useCallback(() => {
+    setSessionLog(loadPersistedSessions());
+  }, []);
 
   function recordSession(apiResult, sessionConfig, wfMode) {
     const totalFindings =
@@ -115,6 +119,7 @@ export function AnalysisProvider({ children }) {
         setWorkflowMode,
         sessionLog,
         recordSession,
+        reloadSessionLog,
         allAgentKeys: ALL_AGENTS_KEYS,
         agentLabels: AGENT_LABELS,
       }}

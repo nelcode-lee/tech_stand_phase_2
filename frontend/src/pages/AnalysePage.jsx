@@ -501,7 +501,7 @@ export default function AnalysePage({ mode = 'review' }) {
 
       {sessionNotPersisted && (
         <div className="analyse-warning">
-          Findings were not saved to the dashboard database. Metrics may not appear until you click Save. Check that SUPABASE_DB_URL is set in the backend.
+          Findings were not saved to the dashboard database. The session will appear in the dashboard for now, but full results may not load when viewing later. Set SUPABASE_DB_URL in the backend to persist sessions.
         </div>
       )}
 

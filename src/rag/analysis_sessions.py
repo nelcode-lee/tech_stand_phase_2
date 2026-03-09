@@ -82,8 +82,8 @@ def record_session(
     if not tracking_id:
         return
     if not SUPABASE_DB_URL:
-        log.warning("SUPABASE_DB_URL not set — analysis sessions will not persist")
-        raise ValueError("SUPABASE_DB_URL not set")
+        log.warning("SUPABASE_DB_URL not set — analysis sessions will not persist to database")
+        return
     ensure_table()
     agents_json = json.dumps(agents_run or [])
     findings_json = json.dumps(agent_findings or {})
