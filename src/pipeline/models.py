@@ -38,6 +38,7 @@ class TerminologyFlag(BaseModel):
     recommendation: str
     location: str | None = None  # Exact quote from document where term appears (evidence)
     glossary_candidate: bool = False  # True when term is vague/undefined — route to HITL, add to glossary
+    citations: list[str] = Field(default_factory=list)  # BRCGS / Cranswick / regulatory refs when applicable
 
 
 class Conflict(BaseModel):
@@ -49,6 +50,7 @@ class Conflict(BaseModel):
     description: str
     recommendation: str
     blocks_draft: bool = False
+    citations: list[str] = Field(default_factory=list)  # BRCGS / Cranswick / regulatory refs when applicable
 
 
 class RiskScore(BaseModel):
@@ -65,6 +67,7 @@ class RiskScore(BaseModel):
 class RiskGap(BaseModel):
     """Gap or assumption identified by Risk agent."""
     location: str
+    excerpt: str | None = None  # Exact text from document to highlight (copy-paste from source)
     issue: str
     risk: str
     recommendation: str
@@ -73,6 +76,7 @@ class RiskGap(BaseModel):
     detectability: int = 0     # FMEA detectability 1–5
     fmea_score: int = 0        # severity × scope × (1 / detectability) normalised
     fmea_band: str = ""        # low | medium | high | critical
+    citations: list[str] = Field(default_factory=list)  # BRCGS / Cranswick / regulatory refs when applicable
 
 
 class SpecifyingFlag(BaseModel):
@@ -81,6 +85,7 @@ class SpecifyingFlag(BaseModel):
     current_text: str
     issue: str
     recommendation: str
+    citations: list[str] = Field(default_factory=list)  # BRCGS / Cranswick / regulatory refs when applicable
 
 
 class StructureFlag(BaseModel):
@@ -118,24 +123,30 @@ class ContentIntegrityFlag(BaseModel):
 class SequencingFlag(BaseModel):
     """Sequencing or logic issue flagged by Sequencing agent."""
     location: str
+    excerpt: str | None = None  # Exact text from document to highlight (copy-paste from source)
     issue: str
     impact: str
     recommendation: str
+    citations: list[str] = Field(default_factory=list)  # BRCGS / Cranswick / regulatory refs when applicable
 
 
 class FormattingFlag(BaseModel):
     """Format or structural issue flagged by Formatting agent."""
     location: str
+    excerpt: str | None = None  # Exact text from document to highlight (copy-paste from source)
     issue: str
     recommendation: str
+    citations: list[str] = Field(default_factory=list)  # BRCGS / Cranswick / regulatory refs when applicable
 
 
 class ComplianceFlag(BaseModel):
     """Regulatory or compliance gap flagged by Validation agent."""
     location: str
+    excerpt: str | None = None  # Exact text from document to highlight (copy-paste from source)
     issue: str
     requirement_reference: str | None = None
     recommendation: str
+    citations: list[str] = Field(default_factory=list)  # BRCGS / Cranswick / parent policy refs when applicable
 
 
 class ValidationResult(BaseModel):

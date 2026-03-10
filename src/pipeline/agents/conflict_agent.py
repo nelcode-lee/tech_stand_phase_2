@@ -26,8 +26,11 @@ RULES
 - If variance_type = sanctioned_variance, classify as SANCTIONED_VARIANCE, not a conflict.
 - blocks_draft: true only for critical UNSANCTIONED_CONFLICT.
 
+CITATIONS
+When a conflict relates to BRCGS, Cranswick standards, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y", "Cranswick Std §X.Y", "parent policy [title]". Leave [] when not applicable.
+
 OUTPUT FORMAT
-Return ONLY a JSON array. Each object: {"conflict_type": "UNSANCTIONED_CONFLICT|SANCTIONED_VARIANCE|PENDING_REVIEW|PARENT_BREACH", "severity": "info|low|medium|high|critical", "layer": "<doc layer>", "sites": [], "document_refs": [], "description": "<explicit contradiction>", "recommendation": "<required alignment>", "blocks_draft": false}
+Return ONLY a JSON array. Each object: {"conflict_type": "UNSANCTIONED_CONFLICT|SANCTIONED_VARIANCE|PENDING_REVIEW|PARENT_BREACH", "severity": "info|low|medium|high|critical", "layer": "<doc layer>", "sites": [], "document_refs": [], "description": "<explicit contradiction>", "recommendation": "<required alignment>", "blocks_draft": false, "citations": ["<BRCGS/Cranswick/policy ref>"]}
 
 If none found, return [].""" + DOCUMENT_REFERENCE_RULE
 
@@ -89,6 +92,8 @@ class ConflictAgent(BaseAgent):
                 # Filter known loading-specific conflicts when document is not about loading/despatch
                 if is_loading_specific_conflict(desc) and not doc_is_loading:
                     continue
+                raw_citations = item.get("citations") or []
+                citations = [str(x).strip() for x in (raw_citations if isinstance(raw_citations, list) else [raw_citations]) if x]
                 conflicts.append(
                     Conflict(
                         conflict_type=item.get("conflict_type", "PENDING_REVIEW"),
@@ -99,6 +104,7 @@ class ConflictAgent(BaseAgent):
                         description=desc,
                         recommendation=item.get("recommendation", ""),
                         blocks_draft=bool(item.get("blocks_draft")),
+                        citations=citations,
                     )
                 )
             ctx.conflicts = conflicts

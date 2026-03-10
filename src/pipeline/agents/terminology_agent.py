@@ -38,8 +38,11 @@ Identify terminology issues ONLY for terms that actually appear in the document.
 - defined differently in multiple places
 - undefined or ambiguous (these will be routed to HITL for glossary addition)
 
+CITATIONS
+When a terminology issue relates to BRCGS, Cranswick standards, or glossary definitions, include a "citations" array. Format: "BRCGS Clause X.Y", "Cranswick Std §X.Y". Leave [] when not applicable.
+
 OUTPUT FORMAT
-Return ONLY a JSON array. Each object: {"term": "<exact term as it appears>", "location": "<exact quote from document containing the term>", "issue": "<fact-based description>", "recommendation": "<precise correction>", "glossary_candidate": true/false}
+Return ONLY a JSON array. Each object: {"term": "<exact term as it appears>", "location": "<exact quote from document containing the term>", "issue": "<fact-based description>", "recommendation": "<precise correction>", "glossary_candidate": true/false, "citations": ["<BRCGS/Cranswick ref>"]}
 
 RULES
 - No prose outside JSON. No invented terms. No assumptions.
@@ -83,6 +86,8 @@ class TerminologyAgent(BaseAgent):
                     issue_lower = str(item.get("issue", "")).lower()
                     vague_keywords = ("undefined", "not defined", "vague", "ambiguous", "unclear", "not explained")
                     glossary_candidate = any(kw in issue_lower for kw in vague_keywords)
+                raw_citations = item.get("citations") or []
+                citations = [str(x).strip() for x in (raw_citations if isinstance(raw_citations, list) else [raw_citations]) if x]
                 flags.append(
                     TerminologyFlag(
                         term=term,
@@ -90,6 +95,7 @@ class TerminologyAgent(BaseAgent):
                         recommendation=item.get("recommendation", ""),
                         location=item.get("location") or None,
                         glossary_candidate=glossary_candidate,
+                        citations=citations,
                     )
                 )
             ctx.terminology_flags = flags

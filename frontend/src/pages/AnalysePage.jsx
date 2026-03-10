@@ -91,14 +91,14 @@ function buildProposedSolutions(result) {
     });
   };
 
-  (result.risk_gaps || []).forEach(g => push('Risk', [g.location, g.issue].filter(Boolean).join(' · '), g.recommendation, g.location));
+  (result.risk_gaps || []).forEach(g => push('Risk', [g.location, g.issue].filter(Boolean).join(' · '), g.recommendation, g.excerpt || g.location));
   (result.structure_flags || []).forEach(f => push('Structure', [f.section, f.detail].filter(Boolean).join(' — '), f.recommendation, f.section));
   (result.content_integrity_flags || []).forEach(f => push('Content Integrity', [f.location, f.detail].filter(Boolean).join(' · ') || f.excerpt, f.recommendation, f.excerpt || f.location));
   (result.specifying_flags || []).forEach(f => push('Specifying', [f.location, f.current_text, f.issue].filter(Boolean).join(' · '), f.recommendation, f.current_text || f.location));
-  (result.sequencing_flags || []).forEach(f => push('Sequencing', [f.location, f.issue, f.impact].filter(Boolean).join(' · '), f.recommendation, f.location));
-  (result.formatting_flags || []).forEach(f => push('Formatting', [f.location, f.issue].filter(Boolean).join(' · '), f.recommendation, f.location));
-  (result.compliance_flags || []).forEach(f => push('Compliance', [f.location, f.issue].filter(Boolean).join(' · '), f.recommendation, f.location));
-  (result.terminology_flags || []).forEach(f => push('Terminology', [f.term, f.location, f.issue].filter(Boolean).join(' · '), f.recommendation, f.term || f.location));
+  (result.sequencing_flags || []).forEach(f => push('Sequencing', [f.location, f.issue, f.impact].filter(Boolean).join(' · '), f.recommendation, f.excerpt || f.location));
+  (result.formatting_flags || []).forEach(f => push('Formatting', [f.location, f.issue].filter(Boolean).join(' · '), f.recommendation, f.excerpt || f.location));
+  (result.compliance_flags || []).forEach(f => push('Compliance', [f.location, f.issue].filter(Boolean).join(' · '), f.recommendation, f.excerpt || f.location));
+  (result.terminology_flags || []).forEach(f => push('Terminology', [f.term, f.location, f.issue].filter(Boolean).join(' · '), f.recommendation, f.location || f.term));
   (result.conflicts || []).forEach(c => push('Conflict', [c.conflict_type, c.description].filter(Boolean).join(' — '), c.recommendation, c.description));
 
   return solutions;
@@ -645,27 +645,27 @@ export default function AnalysePage({ mode = 'review' }) {
             )}
             {result.specifying_flags?.length > 0 && (
               <div id="agent-card-specifying"><AgentCard title="Specifying" items={result.specifying_flags}
-                keys={['location', 'current_text', 'issue', 'recommendation']} searchTextKey="current_text" onFindingClick={effectiveDocId ? setHighlightSearch : undefined} /></div>
+                keys={['location', 'current_text', 'issue', 'citations', 'recommendation']} searchTextKeys={['current_text', 'location']} onFindingClick={effectiveDocId ? setHighlightSearch : undefined} /></div>
             )}
             {result.sequencing_flags?.length > 0 && (
               <div id="agent-card-sequencing"><AgentCard title="Sequencing" items={result.sequencing_flags}
-                keys={['location', 'issue', 'impact', 'recommendation']} searchTextKey="location" onFindingClick={effectiveDocId ? setHighlightSearch : undefined} /></div>
+                keys={['location', 'excerpt', 'issue', 'impact', 'citations', 'recommendation']} searchTextKeys={['excerpt', 'location']} onFindingClick={effectiveDocId ? setHighlightSearch : undefined} /></div>
             )}
             {result.formatting_flags?.length > 0 && (
               <div id="agent-card-formatting"><AgentCard title="Formatting" items={result.formatting_flags}
-                keys={['location', 'issue', 'recommendation']} searchTextKey="location" onFindingClick={effectiveDocId ? setHighlightSearch : undefined} /></div>
+                keys={['location', 'excerpt', 'issue', 'citations', 'recommendation']} searchTextKeys={['excerpt', 'location']} onFindingClick={effectiveDocId ? setHighlightSearch : undefined} /></div>
             )}
             {result.compliance_flags?.length > 0 && (
               <div id="agent-card-compliance"><AgentCard title="Compliance" items={result.compliance_flags}
-                keys={['location', 'issue', 'requirement_reference', 'recommendation']} searchTextKey="location" onFindingClick={effectiveDocId ? setHighlightSearch : undefined} /></div>
+                keys={['location', 'excerpt', 'issue', 'requirement_reference', 'citations', 'recommendation']} searchTextKeys={['excerpt', 'location']} onFindingClick={effectiveDocId ? setHighlightSearch : undefined} /></div>
             )}
             {result.terminology_flags?.length > 0 && (
               <div id="agent-card-terminology"><AgentCard title="Terminology" items={result.terminology_flags}
-                keys={['term', 'location', 'issue', 'recommendation']} searchTextKey="term" onFindingClick={effectiveDocId ? setHighlightSearch : undefined} /></div>
+                keys={['term', 'location', 'issue', 'citations', 'recommendation']} searchTextKeys={['location', 'term']} onFindingClick={effectiveDocId ? setHighlightSearch : undefined} /></div>
             )}
             {result.conflicts?.length > 0 && (
               <div id="agent-card-conflict"><AgentCard title="Conflicts" items={result.conflicts}
-                keys={['conflict_type', 'severity', 'description', 'recommendation']} searchTextKey="description" onFindingClick={effectiveDocId ? setHighlightSearch : undefined} /></div>
+                keys={['conflict_type', 'severity', 'description', 'citations', 'recommendation']} searchTextKeys={['description']} onFindingClick={effectiveDocId ? setHighlightSearch : undefined} /></div>
             )}
           </div>
 
@@ -820,12 +820,12 @@ function RiskGapCard({ items, onFindingClick }) {
         {display.map((gap, i) => (
           <li
             key={i}
-            className={`agent-item ${onFindingClick && gap.location ? 'agent-item-clickable' : ''}`}
-            onClick={onFindingClick && gap.location ? () => onFindingClick(gap.location) : undefined}
-            onKeyDown={onFindingClick && gap.location ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onFindingClick(gap.location); } } : undefined}
-            role={onFindingClick && gap.location ? 'button' : undefined}
-            tabIndex={onFindingClick && gap.location ? 0 : undefined}
-            title={onFindingClick && gap.location ? 'Click to highlight in original document' : undefined}
+            className={`agent-item ${onFindingClick && (gap.excerpt || gap.location) ? 'agent-item-clickable' : ''}`}
+            onClick={onFindingClick && (gap.excerpt || gap.location) ? () => onFindingClick(gap.excerpt || gap.location) : undefined}
+            onKeyDown={onFindingClick && (gap.excerpt || gap.location) ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onFindingClick(gap.excerpt || gap.location); } } : undefined}
+            role={onFindingClick && (gap.excerpt || gap.location) ? 'button' : undefined}
+            tabIndex={onFindingClick && (gap.excerpt || gap.location) ? 0 : undefined}
+            title={onFindingClick && (gap.excerpt || gap.location) ? 'Click to highlight in original document' : undefined}
           >
             <div className="risk-gap-top">
               <span className="agent-field-label">{gap.location || '—'}</span>
@@ -836,6 +836,12 @@ function RiskGapCard({ items, onFindingClick }) {
                 S={gap.severity} · Sc={gap.scope} · D={gap.detectability}
               </div>
             )}
+            {gap.excerpt && (
+              <div className="agent-field">
+                <span className="agent-field-label">excerpt:</span>{' '}
+                <span className="agent-field-value">{gap.excerpt.slice(0, 200)}{gap.excerpt.length > 200 ? '…' : ''}</span>
+              </div>
+            )}
             <div className="agent-field">
               <span className="agent-field-label">issue:</span>{' '}
               <span className="agent-field-value">{gap.issue}</span>
@@ -844,6 +850,12 @@ function RiskGapCard({ items, onFindingClick }) {
               <span className="agent-field-label">risk:</span>{' '}
               <span className="agent-field-value">{gap.risk}</span>
             </div>
+            {gap.citations?.length > 0 && (
+              <div className="agent-field">
+                <span className="agent-field-label">citations:</span>{' '}
+                <span className="agent-field-value">{gap.citations.join(', ')}</span>
+              </div>
+            )}
             <div className="agent-field">
               <span className="agent-field-label">recommendation:</span>{' '}
               <span className="agent-field-value">{gap.recommendation}</span>
@@ -1031,12 +1043,21 @@ function IntegrityGroup({ ftype, items, onFindingClick }) {
 }
 
 // ---------------------------------------------------------------------------
-// Generic agent card — supports click-to-highlight via searchTextKey
+// Generic agent card — supports click-to-highlight via searchTextKey or searchTextKeys (array, try in order)
 // ---------------------------------------------------------------------------
-function AgentCard({ title, items, keys, searchTextKey = 'location', onFindingClick }) {
+function AgentCard({ title, items, keys, searchTextKey = 'location', searchTextKeys, onFindingClick }) {
   const [expanded, setExpanded] = useState(false);
   const displayItems = expanded ? items : items.slice(0, 3);
   const hasMore = items.length > 3;
+
+  function getSearchText(item) {
+    const keysToTry = searchTextKeys || (searchTextKey ? [searchTextKey] : []);
+    for (const k of keysToTry) {
+      const v = item[k];
+      if (v && (typeof v === 'string' ? v.trim() : true)) return String(v).slice(0, 300);
+    }
+    return null;
+  }
 
   return (
     <div className="agent-card">
@@ -1046,7 +1067,7 @@ function AgentCard({ title, items, keys, searchTextKey = 'location', onFindingCl
       </button>
       <ul className="agent-list">
         {displayItems.map((item, i) => {
-          const searchText = searchTextKey && item[searchTextKey] ? String(item[searchTextKey]).slice(0, 150) : null;
+          const searchText = getSearchText(item);
           return (
           <li
             key={i}
@@ -1057,16 +1078,20 @@ function AgentCard({ title, items, keys, searchTextKey = 'location', onFindingCl
             tabIndex={onFindingClick && searchText ? 0 : undefined}
             title={onFindingClick && searchText ? 'Click to highlight in original document' : undefined}
           >
-            {keys.map((k) => (
-              item[k] && (
+            {keys.map((k) => {
+              const val = item[k];
+              const show = val && (!Array.isArray(val) || val.length > 0);
+              if (!show) return null;
+              const displayVal = Array.isArray(val) ? val.join(', ') : String(val);
+              return (
                 <div key={k} className="agent-field">
                   <span className="agent-field-label">{k}:</span>{' '}
                   <span className="agent-field-value">
-                    {String(item[k]).slice(0, 200)}{String(item[k]).length > 200 ? '…' : ''}
+                    {displayVal.slice(0, 200)}{displayVal.length > 200 ? '…' : ''}
                   </span>
                 </div>
-              )
-            ))}
+              );
+            })}
           </li>
           );
         })}

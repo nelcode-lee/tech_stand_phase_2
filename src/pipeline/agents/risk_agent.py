@@ -130,9 +130,14 @@ RULES
 - Each gap must be a separate JSON object. Never merge two gaps into one object.
 - Score every gap using the FMEA dimensions above.
 
+CITATIONS
+When a gap relates to BRCGS, Cranswick standards, parent policy, or regulatory requirements, include a "citations" array with the relevant reference(s). Format: "BRCGS Clause X.Y", "Cranswick Std §X.Y", "parent policy [title]", or "Reg (EC) 852/2004 Art X". Leave [] when not applicable.
+
 OUTPUT FORMAT
 Return ONLY a JSON array. Each object:
-{{"location": "<section, step, or heading>", "issue": "<the specific missing information or unsafe assumption>", "risk": "<factual consequence if left unaddressed>", "recommendation": "<exactly what information must be added>", "severity": <1-5>, "scope": <1-5>, "detectability": <1-5>}}
+{{"location": "<section, step, or heading>", "excerpt": "<exact quote from document — the text that relates to this gap; copy-paste from source>", "issue": "<the specific missing information or unsafe assumption>", "risk": "<factual consequence if left unaddressed>", "recommendation": "<exactly what information must be added>", "severity": <1-5>, "scope": <1-5>, "detectability": <1-5>, "citations": ["<BRCGS/Cranswick/policy ref>"]}}
+
+CRITICAL: "excerpt" must be the exact text from the document that relates to the gap — this is used to highlight the relevant passage in the original. If the gap concerns missing content, quote the nearest surrounding text (e.g. the step or paragraph where the gap applies).
 
 If no issues found, return [].
 """ + DOCUMENT_REFERENCE_RULE + JOB_TITLE_RULE + TOLERANCE_VS_REFERENCE_RULE
@@ -340,9 +345,13 @@ class RiskAgent(BaseAgent):
                     score = 0
                     band = ""
 
+                raw_citations = item.get("citations") or []
+                citations = [str(x).strip() for x in (raw_citations if isinstance(raw_citations, list) else [raw_citations]) if x]
+                excerpt = (item.get("excerpt") or "").strip() or None
                 gaps.append(
                     RiskGap(
                         location=item.get("location", ""),
+                        excerpt=excerpt,
                         issue=item.get("issue", ""),
                         risk=item.get("risk", ""),
                         recommendation=item.get("recommendation", ""),
@@ -351,6 +360,7 @@ class RiskAgent(BaseAgent):
                         detectability=det,
                         fmea_score=score,
                         fmea_band=band,
+                        citations=citations,
                     )
                 )
 

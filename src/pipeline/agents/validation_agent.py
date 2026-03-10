@@ -39,14 +39,19 @@ ABSOLUTE RULES
 - No legal interpretation or extrapolation.
 - No invented regulatory requirements.
 
+CITATIONS
+When a gap relates to BRCGS, Cranswick standards, customer spec, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y", "Cranswick Std §X.Y", "parent policy [title]". Leave [] when not applicable.
+
 OUTPUT
 Return only a JSON array. Each item has:
 - location: section reference
+- excerpt: exact quote from document — the text that relates to this gap (copy-paste from source). Used to highlight the relevant passage.
 - issue: explicit compliance or regulatory gap
 - requirement_reference: BRC/customer/Cranswick reference if provided
 - recommendation: correction needed to meet requirement (factual only)
+- citations: array of BRCGS/Cranswick/parent policy refs when applicable (optional)
 
-Example: [{"location": "Section 4", "issue": "CCP verification records not referenced", "requirement_reference": "BRCGS Clause 5.8", "recommendation": "Add CCP verification record form reference"}]
+Example: [{"location": "Section 4", "excerpt": "4. CCP verification: temperature recorded weekly.", "issue": "CCP verification records not referenced", "requirement_reference": "BRCGS Clause 5.8", "recommendation": "Add CCP verification record form reference", "citations": ["BRCGS Clause 5.8", "parent policy [Food Safety Policy]"]}]
 If no issues, return [].""" + DOCUMENT_REFERENCE_RULE + JOB_TITLE_RULE + TOLERANCE_VS_REFERENCE_RULE + PURPOSE_OBJECTIVE_RULE
 
 
@@ -65,12 +70,17 @@ class ValidationAgent(BaseAgent):
                 items = parse_json_array(raw)
                 for item in items:
                     if isinstance(item, dict) and item.get("location") and item.get("issue") and item.get("recommendation"):
+                        excerpt = (item.get("excerpt") or "").strip() or None
+                        raw_citations = item.get("citations") or []
+                        citations = [str(x).strip() for x in (raw_citations if isinstance(raw_citations, list) else [raw_citations]) if x]
                         ctx.compliance_flags.append(
                             ComplianceFlag(
                                 location=str(item["location"]),
+                                excerpt=excerpt,
                                 issue=str(item["issue"]),
                                 requirement_reference=str(item["requirement_reference"]) if item.get("requirement_reference") else None,
                                 recommendation=str(item["recommendation"]),
+                                citations=citations,
                             )
                         )
             except Exception as e:

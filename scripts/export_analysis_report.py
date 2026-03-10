@@ -99,6 +99,8 @@ def export_from_dict(data: dict) -> str:
         lines.append(_badge("Sites", ", ".join(c.get("sites", [])) or "—"))
         lines.append(_badge("Documents", ", ".join(c.get("document_refs", [])) or "—"))
         lines.append(_badge("Blocks Draft", str(c.get("blocks_draft", False))))
+        if c.get("citations"):
+            lines.append(_badge("Citations", ", ".join(c.get("citations", []))))
         lines.append(f"\n> {c.get('description', '')}\n")
         lines.append(f"**Recommendation:** {c.get('recommendation', '')}\n")
 
@@ -110,6 +112,8 @@ def export_from_dict(data: dict) -> str:
         lines.append(f"- **{t.get('term', '—')}**")
         if t.get("location"):
             lines.append(f"  - *Location:* {t.get('location', '')}")
+        if t.get("citations"):
+            lines.append(f"  - *Citations:* {', '.join(t.get('citations', []))}")
         lines.append(f"  - *Issue:* {t.get('issue', '')}")
         lines.append(f"  - *Recommendation:* {t.get('recommendation', '')}")
         lines.append("")
@@ -145,6 +149,8 @@ def export_from_dict(data: dict) -> str:
     for s in specs:
         lines.append(f"- **{s.get('location', '—')}**")
         lines.append(f"  - *Current text:* `{s.get('current_text', '')}`")
+        if s.get("citations"):
+            lines.append(f"  - *Citations:* {', '.join(s.get('citations', []))}")
         lines.append(f"  - *Issue:* {s.get('issue', '')}")
         lines.append(f"  - *Recommendation:* {s.get('recommendation', '')}")
         lines.append("")
@@ -208,6 +214,10 @@ def export_from_dict(data: dict) -> str:
     lines.append(f"**Count:** {len(seqs)}\n")
     for s in seqs:
         lines.append(f"- **{s.get('location', '—')}**")
+        if s.get("excerpt"):
+            lines.append(f"  - *Excerpt:* `{s.get('excerpt', '')}`")
+        if s.get("citations"):
+            lines.append(f"  - *Citations:* {', '.join(s.get('citations', []))}")
         lines.append(f"  - *Issue:* {s.get('issue', '')}")
         lines.append(f"  - *Impact:* {s.get('impact', '')}")
         lines.append(f"  - *Recommendation:* {s.get('recommendation', '')}")
@@ -229,8 +239,12 @@ def export_from_dict(data: dict) -> str:
     lines.append(f"**Count:** {len(comps)}\n")
     for c in comps:
         lines.append(f"- **{c.get('location', '—')}**")
+        if c.get("excerpt"):
+            lines.append(f"  - *Excerpt:* `{c.get('excerpt', '')}`")
         lines.append(f"  - *Issue:* {c.get('issue', '')}")
         lines.append(f"  - *Reference:* {c.get('requirement_reference', '—')}")
+        if c.get("citations"):
+            lines.append(f"  - *Citations:* {', '.join(c.get('citations', []))}")
         lines.append(f"  - *Recommendation:* {c.get('recommendation', '')}")
         lines.append("")
 

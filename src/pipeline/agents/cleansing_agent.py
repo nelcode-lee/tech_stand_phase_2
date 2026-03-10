@@ -94,9 +94,12 @@ ABSOLUTE RULES
 - If missing, state that a specific measurable value must be provided.
 - For complex terms: recommend adding to Definitions/Glossary or replacing with plain-language equivalent.
 
+CITATIONS
+When an issue relates to BRCGS, Cranswick standards, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y", "Cranswick Std §X.Y". Leave [] when not applicable.
+
 OUTPUT
 Return a JSON array only. Each item:
-{"location": "<section or step>", "current_text": "<exact vague or complex wording>", "issue": "<why it is vague or unclear>", "recommendation": "<what specific information is needed or how to clarify>"}
+{"location": "<section or step>", "current_text": "<exact vague or complex wording>", "issue": "<why it is vague or unclear>", "recommendation": "<what specific information is needed or how to clarify>", "citations": ["<BRCGS/Cranswick ref>"]}
 If no issues found, return [].""" + DOCUMENT_REFERENCE_RULE + JOB_TITLE_RULE + TOLERANCE_VS_REFERENCE_RULE + PURPOSE_OBJECTIVE_RULE
 
 # ---------------------------------------------------------------------------
@@ -832,12 +835,15 @@ class CleansingAgent(BaseAgent):
                     and item.get("issue")
                     and item.get("recommendation")
                 ):
+                    raw_citations = item.get("citations") or []
+                    citations = [str(x).strip() for x in (raw_citations if isinstance(raw_citations, list) else [raw_citations]) if x]
                     ctx.specifying_flags.append(
                         SpecifyingFlag(
                             location=str(item["location"]),
                             current_text=str(item["current_text"]),
                             issue=str(item["issue"]),
                             recommendation=str(item["recommendation"]),
+                            citations=citations,
                         )
                     )
         except Exception as e:
