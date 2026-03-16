@@ -26,8 +26,8 @@ RULES
 - If variance_type = sanctioned_variance, classify as SANCTIONED_VARIANCE, not a conflict.
 - blocks_draft: true only for critical UNSANCTIONED_CONFLICT.
 
-CITATIONS
-When a conflict relates to BRCGS, Cranswick standards, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y", "Cranswick Std §X.Y", "parent policy [title]". Leave [] when not applicable.
+CITATIONS — ALWAYS INCLUDE WHEN POSSIBLE
+When a conflict relates to BRCGS, Cranswick standards, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y", "Cranswick Std §X.Y", "parent policy [title]". If such sources are in the context and apply, include at least one citation. Leave [] only when no such source could apply.
 
 OUTPUT FORMAT
 Return ONLY a JSON array. Each object: {"conflict_type": "UNSANCTIONED_CONFLICT|SANCTIONED_VARIANCE|PENDING_REVIEW|PARENT_BREACH", "severity": "info|low|medium|high|critical", "layer": "<doc layer>", "sites": [], "document_refs": [], "description": "<explicit contradiction>", "recommendation": "<required alignment>", "blocks_draft": false, "citations": ["<BRCGS/Cranswick/policy ref>"]}
@@ -44,9 +44,12 @@ class ConflictAgent(BaseAgent):
 
         parent_text = ctx.parent_policy.content if ctx.parent_policy else "(No parent policy provided)"
         prompt = f"DOCUMENTS:\n{ctx.cleansed_content[:12000]}\n\nPARENT POLICY:\n{parent_text[:4000]}"
+        system = CONFLICT_SYSTEM_PROMPT
+        if getattr(ctx, "glossary_block", None) and (ctx.glossary_block or "").strip():
+            system += "\n\n" + (ctx.glossary_block or "").strip()
 
         try:
-            raw = await completion(prompt, system=CONFLICT_SYSTEM_PROMPT)
+            raw = await completion(prompt, system=system)
             items = parse_json_array(raw, max_items=20)
             if len(items) > 20:
                 ctx.warnings.append("Conflict count truncated to 20")

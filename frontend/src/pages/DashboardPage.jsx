@@ -56,12 +56,60 @@ function timeAgo(isoString) {
   return `${days} day${days > 1 ? 's' : ''} ago`;
 }
 
+// Line chart: sessions per day (last 7 days)
+function SessionsLineChart({ data }) {
+  const padding = { top: 8, right: 8, bottom: 28, left: 28 };
+  const width = 280;
+  const height = 100;
+  const innerW = width - padding.left - padding.right;
+  const innerH = height - padding.top - padding.bottom;
+  const maxVal = Math.max(1, ...data.map((d) => d.sessions));
+  const xScale = data.length > 1 ? (i) => (i / (data.length - 1)) * innerW : () => 0;
+  const points = data.map((d, i) => {
+    const x = padding.left + xScale(i);
+    const y = padding.top + innerH - (d.sessions / maxVal) * innerH;
+    return { x, y, ...d };
+  });
+  const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+  return (
+    <div className="sessions-line-chart-wrap">
+      <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet" className="sessions-line-chart">
+        <defs>
+          <linearGradient id="sessions-line-gradient" x1="0%" y1="0%" x2="0%" y2="100%">
+            <stop offset="0%" stopColor="var(--yb-blue)" stopOpacity="0.25" />
+            <stop offset="100%" stopColor="var(--yb-blue)" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <path
+          d={`${pathD} L ${points[points.length - 1]?.x ?? 0} ${padding.top + innerH} L ${padding.left} ${padding.top + innerH} Z`}
+          fill="url(#sessions-line-gradient)"
+        />
+        <path d={pathD} fill="none" stroke="var(--yb-blue)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+        {points.map((p, i) => (
+          <circle key={i} cx={p.x} cy={p.y} r="4" fill="var(--yb-blue)" className="chart-dot" />
+        ))}
+        {data.map((d, i) => (
+          <text
+            key={d.dateKey}
+            x={padding.left + xScale(i)}
+            y={height - 6}
+            textAnchor="middle"
+            className="chart-axis-label"
+          >
+            {d.label.split(' ')[0]}
+          </text>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
 // ---------------------------------------------------------------------------
 
 export default function DashboardPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { setWorkflowMode, setConfig, sessionLog, reloadSessionLog } = useAnalysis();
+  const { setWorkflowMode, setConfig, sessionLog, reloadSessionLog, removeSessionFromLog, selectedSite } = useAnalysis();
 
   const [backendDocs, setBackendDocs] = useState([]);
   const [backendSessions, setBackendSessions] = useState([]);
@@ -140,19 +188,42 @@ export default function DashboardPage() {
     );
   }, [sessionLog, backendSessions]);
 
+  // Site-filtered docs (policy always; otherwise by selected site)
+  const siteFilteredDocIds = useMemo(() => {
+    if (selectedSite === 'all') return null; // null = no filter, all docs
+    const ids = new Set();
+    for (const d of backendDocs) {
+      if (d.doc_layer === 'policy') ids.add(d.document_id);
+      else {
+        const sites = Array.isArray(d.sites) ? d.sites : (d.sites ? String(d.sites).split(/[,\s]+/).filter(Boolean) : []);
+        if (sites.includes(selectedSite)) ids.add(d.document_id);
+      }
+    }
+    return ids;
+  }, [backendDocs, selectedSite]);
+
+  const siteFilteredSessions = useMemo(() => {
+    if (!siteFilteredDocIds) return allSessions;
+    return allSessions.filter((s) => {
+      const docId = s.documentId || s.document_id;
+      return !docId || siteFilteredDocIds.has(docId);
+    });
+  }, [allSessions, siteFilteredDocIds]);
+
   // ---- Derived KPIs ---------------------------------------------------
 
   const kpi = useMemo(() => {
-    const totalDocs    = backendDocs.length;
-    const totalSessions= allSessions.length;
-    const openFindings = allSessions.reduce((sum, s) => sum + (s.totalFindings || 0), 0);
+    const totalDocs    = siteFilteredDocIds ? siteFilteredDocIds.size : backendDocs.length;
+    const totalSessions= siteFilteredSessions.length;
+    const openFindings = siteFilteredSessions.reduce((sum, s) => sum + (s.totalFindings || 0), 0);
+    const correctionsImplemented = siteFilteredSessions.reduce((sum, s) => sum + (s.correctionsImplemented ?? 0), 0);
 
-    // Per-agent finding totals across all sessions
+    // Per-agent finding totals across site-filtered sessions
     const agentTotals = {};
 
     // Risk severity breakdown from session log (use latest per tracking_id)
     const riskCounts = { low: 0, medium: 0, high: 0, critical: 0 };
-    for (const s of allSessions) {
+    for (const s of siteFilteredSessions) {
       if (s.overallRisk && riskCounts[s.overallRisk] !== undefined) {
         riskCounts[s.overallRisk] += 1;
       }
@@ -162,17 +233,18 @@ export default function DashboardPage() {
       totalDocs,
       totalSessions,
       openFindings,
+      correctionsImplemented,
       agentTotals,
       riskCounts,
       overdueReviews: 0,   // Without a review DB, leave at 0
       reviewsDue:     0,
     };
-  }, [backendDocs, allSessions]);
+  }, [backendDocs.length, siteFilteredDocIds, siteFilteredSessions]);
 
-  // Agent breakdown: per-agent finding totals from all sessions
+  // Agent breakdown: per-agent finding totals from site-filtered sessions
   const agentStats = useMemo(() => {
     const totals = {};
-    for (const s of allSessions) {
+    for (const s of siteFilteredSessions) {
       const findings = s.agentFindings || {};
       for (const [agent, count] of Object.entries(findings)) {
         const key = AGENT_DISPLAY[agent] || agent;
@@ -184,7 +256,7 @@ export default function DashboardPage() {
       .map(([agent, findings]) => ({ agent, findings }))
       .filter(a => a.findings > 0)
       .sort((a, b) => b.findings - a.findings);
-  }, [allSessions]);
+  }, [siteFilteredSessions]);
 
   // Activity feed from session log (most recent first, max 8)
   const activity = useMemo(() =>
@@ -199,22 +271,50 @@ export default function DashboardPage() {
     })),
   [allSessions]);
 
+  // Line chart: sessions per day for last 7 days (oldest to newest)
+  const sessionsChartData = useMemo(() => {
+    const now = new Date();
+    const days = [];
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(d.getDate() - i);
+      d.setHours(0, 0, 0, 0);
+      days.push({
+        dateKey: d.toISOString().slice(0, 10),
+        label: d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' }),
+        sessions: 0,
+        findings: 0,
+      });
+    }
+    for (const s of siteFilteredSessions) {
+      const at = s.completedAt ? new Date(s.completedAt) : null;
+      if (!at) continue;
+      const key = at.toISOString().slice(0, 10);
+      const row = days.find((r) => r.dateKey === key);
+      if (row) {
+        row.sessions += 1;
+        row.findings += s.totalFindings || 0;
+      }
+    }
+    return days;
+  }, [siteFilteredSessions]);
+
   // Health bar: count analysed docs by risk band
   const healthCounts = useMemo(() => {
     const counts = { low: 0, medium: 0, high: 0, critical: 0, unknown: 0 };
-    for (const s of allSessions) {
+    for (const s of siteFilteredSessions) {
       if (s.overallRisk && counts[s.overallRisk] !== undefined) counts[s.overallRisk]++;
       else counts.unknown++;
     }
     return counts;
-  }, [allSessions]);
+  }, [siteFilteredSessions]);
 
   const totalHealth = Object.values(healthCounts).reduce((a, b) => a + b, 0) || 1;
 
-  // Alerts: any session with findings pending action (prioritise by risk, then findings count)
+  // Alerts: site-filtered sessions with findings (when a site is selected, only that site's docs; "All Sites" = all)
   const riskOrder = { critical: 0, high: 1, medium: 2, low: 3 };
   const liveAlerts = useMemo(() =>
-    allSessions
+    siteFilteredSessions
       .filter(s => (s.totalFindings || 0) > 0)
       .sort((a, b) => {
         const ra = riskOrder[a.overallRisk] ?? 4;
@@ -232,7 +332,7 @@ export default function DashboardPage() {
         action:      'View analysis',
         session:     s,
       })),
-  [allSessions]);
+  [siteFilteredSessions]);
 
   // ---- Navigation helpers ---------------------------------------------------
 
@@ -271,11 +371,21 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* Workflow hint — start here for new users */}
+      <div className="workflow-hint" role="status">
+        <span className="workflow-hint-label">Start here</span>
+        <span className="workflow-hint-text">
+          <strong>Review a Document</strong> — analyse and draft existing docs. <strong>Create a Document</strong> — build brand-new SOPs using ingested content, the policy layer, and project logic (principle layer in time). Then: Configure → Analyse → Draft for HITL → Submit to Library. Main actions are in the top-right on each step.
+        </span>
+      </div>
+
       {/* Page title */}
       <div className="dash-header">
         <div>
           <h1 className="dash-title">Dashboard</h1>
-          <p className="dash-subtitle">Technical standards overview — all sites</p>
+          <p className="dash-subtitle">
+            Technical standards overview{selectedSite !== 'all' ? ` — ${selectedSite}` : ' — all sites'}
+          </p>
         </div>
         <div className="dash-quick-actions">
           <button type="button" className="dash-action-btn secondary" title="Refresh document list and sessions" onClick={() => { fetchDocs(); fetchSessions(); }}>
@@ -289,7 +399,7 @@ export default function DashboardPage() {
             <FileSearch size={15} />
             Review Doc
           </button>
-          <button type="button" className="dash-action-btn primary" onClick={startCreate}>
+          <button type="button" className="dash-action-btn primary next-action" onClick={startCreate}>
             <FilePlus2 size={15} />
             New Doc
           </button>
@@ -330,7 +440,7 @@ export default function DashboardPage() {
           <span className="kpi-icon kpi-icon-green"><CheckCircle2 size={18} /></span>
           <div>
             <span className="kpi-value">
-              {allSessions.filter(s => !s.overallRisk || s.overallRisk === 'low').length}
+              {siteFilteredSessions.filter(s => !s.overallRisk || s.overallRisk === 'low').length}
             </span>
             <span className="kpi-label">Low-Risk Sessions</span>
           </div>
@@ -351,6 +461,9 @@ export default function DashboardPage() {
           <h2 className="dash-card-title">
             <AlertTriangle size={15} />
             Attention Required
+            {selectedSite !== 'all' && (
+              <span className="dash-card-title-context"> — {selectedSite}</span>
+            )}
           </h2>
           {liveAlerts.length === 0 ? (
             <p className="dash-empty">No alerts. Run an analysis — sessions with medium, high, or critical risk will appear here.</p>
@@ -362,46 +475,42 @@ export default function DashboardPage() {
                     <span className="dash-alert-doc">{a.doc}</span>
                     <span className="dash-alert-msg">{a.msg}</span>
                   </div>
-                  <button type="button" className="dash-alert-action" onClick={() => startReview(a.session ? { documentId: a.documentId || a.doc, title: a.doc, trackingId: a.session.trackingId } : null)}>
-                    {a.action}
-                  </button>
+                  <div className="dash-alert-actions">
+                    <button type="button" className="dash-alert-action" onClick={() => startReview(a.session ? { documentId: a.documentId || a.doc, title: a.doc, trackingId: a.session.trackingId } : null)}>
+                      {a.action}
+                    </button>
+                    <button type="button" className="dash-alert-action dash-alert-delete" onClick={() => removeSessionFromLog(a.id)} title="Remove from Attention Required">
+                      Delete
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>
           )}
         </section>
 
-        {/* Recent activity */}
+        {/* Recent activity — line graph */}
         <section className="dash-card dash-activity">
           <h2 className="dash-card-title">
             <Activity size={15} />
             Recent Analysis Sessions
           </h2>
-          {activity.length === 0 ? (
-            <p className="dash-empty">No analysis sessions yet this session. Run an analysis to see activity here.</p>
+          {sessionsChartData.every((d) => d.sessions === 0) ? (
+            <p className="dash-empty">No analysis sessions in the last 7 days. Run an analysis to see the trend.</p>
           ) : (
-            <ul className="activity-list">
-              {activity.map(item => (
-                <li key={item.id} className="activity-item">
-                  <span className={`activity-type-dot type-${item.type}`} />
-                  <div className="activity-body">
+            <div className="dash-sessions-chart">
+              <SessionsLineChart data={sessionsChartData} />
+              <ul className="activity-list activity-list-compact">
+                {activity.slice(0, 4).map(item => (
+                  <li key={item.id} className="activity-item">
+                    <span className={`activity-type-dot type-${item.type}`} />
                     <span className="activity-doc">{item.doc}</span>
-                    <span className="activity-meta">
-                      {item.type === 'review' ? 'Review' : 'Create'} · {item.time}
-                    </span>
-                  </div>
-                  <div className="activity-right">
-                    {item.totalFindings > 0 && (
-                      <span className="activity-findings">{item.totalFindings} findings</span>
-                    )}
-                    <span className="activity-status status-complete">complete</span>
-                    {item.risk && (
-                      <span className={`risk-pill risk-${item.risk}`}>{item.risk}</span>
-                    )}
-                  </div>
-                </li>
-              ))}
-            </ul>
+                    <span className="activity-meta">{item.time}</span>
+                    {item.totalFindings > 0 && <span className="activity-findings">{item.totalFindings} findings</span>}
+                  </li>
+                ))}
+              </ul>
+            </div>
           )}
         </section>
 
@@ -430,6 +539,16 @@ export default function DashboardPage() {
               })}
             </div>
           )}
+        </section>
+
+        {/* Corrections Implemented — separate metric below Agents */}
+        <section className="dash-card dash-corrections">
+          <h2 className="dash-card-title">
+            <CheckCircle2 size={15} />
+            Corrections Implemented
+          </h2>
+          <div className="dash-corrections-value">{kpi.correctionsImplemented}</div>
+          <p className="dash-corrections-desc">Findings accepted and applied to the draft across all sessions.</p>
         </section>
 
         {/* Document health */}

@@ -39,8 +39,8 @@ ABSOLUTE RULES
 - Never invent a number, time, limit, or criterion.
 - If missing, state that a specific measurable value must be provided.
 
-CITATIONS
-When vague language conflicts with a measurable requirement in BRCGS, Cranswick standards, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y", "Cranswick Std §X.Y". Leave [] when not applicable.
+CITATIONS — ALWAYS INCLUDE WHEN POSSIBLE
+When vague language conflicts with a measurable requirement in BRCGS, Cranswick standards, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y", "Cranswick Std §X.Y". If such sources are in the context and apply, include at least one citation. Leave [] only when no such source could apply.
 
 OUTPUT
 Return a JSON array only. Each item has:
@@ -48,7 +48,7 @@ Return a JSON array only. Each item has:
 - current_text: the vague or unmeasurable wording
 - issue: why it is vague or non-compliant
 - recommendation: specific value needed or instruction to provide it
-- citations: array of BRCGS/Cranswick/policy refs when applicable (optional)
+- citations: array of BRCGS/Cranswick/policy refs — include when applicable
 
 Example: [{"location": "Step 3", "current_text": "clean thoroughly", "issue": "subjective quality descriptor", "recommendation": "Provide measurable criteria e.g. visual inspection against defined standards", "citations": ["BRCGS Clause 4.2.1"]}]
 If no issues, return [].""" + DOCUMENT_REFERENCE_RULE + JOB_TITLE_RULE + TOLERANCE_VS_REFERENCE_RULE + PURPOSE_OBJECTIVE_RULE
@@ -66,10 +66,21 @@ class SpecifyingAgent(BaseAgent):
         if not content:
             return ctx
 
-        prompt = f"Analyse the following procedure for vague or unmeasurable language:\n\n{content[:12000]}"
+        prompt_parts = ["Analyse the following procedure for vague or unmeasurable language:\n\n", content[:12000]]
+        if ctx.parent_policy and ctx.parent_policy.content:
+            prompt_parts.append(f"\n\nPARENT POLICY (use for citations when applicable):\n{ctx.parent_policy.content[:6000]}")
+        prompt = "".join(prompt_parts)
+        system = SPECIFYING_SYSTEM_PROMPT
+        if getattr(ctx, "glossary_block", None) and (ctx.glossary_block or "").strip():
+            system += "\n\n" + (ctx.glossary_block or "").strip()
+        if ctx.agent_instructions and ctx.agent_instructions.strip():
+            system += (
+                "\n\nADDITIONAL CONTEXT (from requester — use to inform your analysis; policy and standards always take precedence):\n"
+                f"{ctx.agent_instructions.strip()}"
+            )
 
         try:
-            raw = await completion(prompt, system=SPECIFYING_SYSTEM_PROMPT)
+            raw = await completion(prompt, system=system)
             items = parse_json_array(raw)
             for item in items:
                 if isinstance(item, dict) and item.get("location") and item.get("current_text") and item.get("issue") and item.get("recommendation"):

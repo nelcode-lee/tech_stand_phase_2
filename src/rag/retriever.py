@@ -17,7 +17,7 @@ FALLBACK_QUERIES = {
 
 
 def retrieve(
-    doc_layer: str | DocLayer,
+    doc_layer: str | DocLayer | None = None,
     sites: list[str] | None = None,
     policy_ref: str | None = None,
     document_id: str | None = None,
@@ -27,17 +27,19 @@ def retrieve(
     """
     Retrieve relevant chunks from the vector store.
     Uses query_text for semantic search; falls back to layer-specific query if not provided.
-    Filters by doc_layer, policy_ref, document_id (when provided), and optionally sites.
+    Filters by doc_layer (None = no filter), policy_ref, document_id (when provided), and optionally sites.
     When document_id is set, returns only chunks from that document, sorted by chunk_index.
     """
-    layer = DocLayer(doc_layer) if isinstance(doc_layer, str) and doc_layer in ("policy", "principle", "sop", "work_instruction") else DocLayer.sop
-    q = (query_text or "").strip() or FALLBACK_QUERIES.get(layer, "procedure policy document")
+    layer = None
+    if doc_layer is not None and doc_layer != "":
+        layer = DocLayer(doc_layer) if isinstance(doc_layer, str) and doc_layer in ("policy", "principle", "sop", "work_instruction") else DocLayer.sop
+    q = (query_text or "").strip() or (FALLBACK_QUERIES.get(layer, "procedure policy document") if layer else "general document content")
     embedding = embed_text(q, client=get_embedding_client())
     if not embedding:
         return []
     chunks = query_chunks(
         embedding=embedding,
-        doc_layer=layer.value,
+        doc_layer=layer.value if layer else None,
         policy_ref=policy_ref,
         sites=sites,
         document_id=document_id,

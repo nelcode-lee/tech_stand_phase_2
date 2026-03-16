@@ -1,5 +1,6 @@
 # Pipeline agents
 from src.pipeline.agents.cleansing_agent import CleansingAgent
+from src.pipeline.agents.draft_layout_agent import DraftLayoutAgent
 from src.pipeline.agents.terminology_agent import TerminologyAgent
 from src.pipeline.agents.conflict_agent import ConflictAgent
 from src.pipeline.agents.risk_agent import RiskAgent
@@ -10,6 +11,7 @@ from src.pipeline.agents.validation_agent import ValidationAgent
 
 __all__ = [
     "CleansingAgent",
+    "DraftLayoutAgent",
     "TerminologyAgent",
     "ConflictAgent",
     "RiskAgent",

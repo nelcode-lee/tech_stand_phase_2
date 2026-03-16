@@ -1,12 +1,15 @@
 """FastAPI routes for RAG ingest (called by Workato) and document listing."""
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from src.rag.document_registry import (
     delete_document,
     get_document_content,
+    get_source_file,
     update_document_metadata,
     update_vector_store_chunk_metadata,
+    upsert_source_file,
 )
 from src.rag.vector_store import delete_by_document_id
 from src.rag.models import (
@@ -104,6 +107,20 @@ def get_document_content_route(document_id: str):
     return {"document_id": document_id, "content": content, "sections": sections}
 
 
+@router.get("/documents/{document_id}/file", tags=["documents"])
+def get_document_file_route(document_id: str):
+    """
+    Return original DOCX file bytes for procedures (sop, work_instruction).
+    Used by the Analyse page to render the document as HTML via mammoth.js.
+    """
+    if not document_id:
+        raise HTTPException(status_code=400, detail="document_id is required")
+    file_bytes, content_type = get_source_file(document_id)
+    if not file_bytes:
+        raise HTTPException(status_code=404, detail=f"Source file not stored for document '{document_id}'")
+    return Response(content=file_bytes, media_type=content_type or "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+
 @router.patch("/documents/{document_id}", tags=["documents"])
 def patch_document(document_id: str, body: DocumentUpdateBody):
     """
@@ -171,35 +188,65 @@ async def post_ingest_file(
     """
     Ingest a DOCX or PDF file. Extracts plain text and processes via the standard ingest pipeline.
     """
-    if not file.filename or not file.filename.lower().endswith(ALLOWED_EXTENSIONS):
+    doc_id = (document_id or "").strip()
+    if not doc_id:
         raise HTTPException(
             status_code=400,
-            detail=f"Only {', '.join(ALLOWED_EXTENSIONS)} files are accepted",
+            detail="document_id is required and cannot be empty. Use a short title or identifier.",
+        )
+    if not file.filename or not file.filename.lower().endswith(ALLOWED_EXTENSIONS):
+        allowed = ", ".join(ALLOWED_EXTENSIONS)
+        name = file.filename or "(no filename)"
+        raise HTTPException(
+            status_code=400,
+            detail=f"File '{name}' is not allowed. Only {allowed} files are accepted.",
         )
 
-    raw = await file.read()
+    try:
+        raw = await file.read()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not read file: {e!s}")
+
     content = extract_text(raw, file.filename)
     if not content or not content.strip():
-        raise HTTPException(status_code=400, detail="Could not extract text from file")
+        raise HTTPException(
+            status_code=400,
+            detail="Could not extract text from file. Check that the file is a valid DOCX or PDF and not password-protected.",
+        )
 
     site_list = [s.strip() for s in sites.split(",") if s.strip()] if sites else []
     metadata = IngestDocumentMetadata(
         doc_layer=_parse_doc_layer(doc_layer),
         sites=site_list,
         policy_ref=policy_ref if policy_ref else None,
-        document_id=document_id,
+        document_id=doc_id,
         source_path=file.filename,
         title=title or file.filename,
         library=library or "Uploads",
     )
     req = IngestDocumentRequest(content=content, metadata=metadata)
-    chunks_ingested, err = ingest_document(req)
+    try:
+        chunks_ingested, err = ingest_document(req)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ingest failed: {e!s}")
     if err:
         raise HTTPException(status_code=500, detail=err)
+    # Store original DOCX for procedures (sop, work_instruction) — enables HTML display with highlights
+    is_docx = file.filename and file.filename.lower().endswith(".docx")
+    is_procedure = doc_layer.lower() in ("sop", "work_instruction")
+    if is_docx and is_procedure and raw:
+        try:
+            upsert_source_file(
+                doc_id,
+                raw,
+                content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        except Exception:
+            pass
     return IngestResponse(
         ok=True,
         chunks_ingested=chunks_ingested,
-        document_id=document_id,
+        document_id=doc_id,
         message=f"Ingested {chunks_ingested} chunks from {file.filename}",
     )
 
@@ -231,3 +278,52 @@ def post_ingest_batch(body: IngestBatchRequest) -> IngestBatchResponse:
         documents_processed=docs_processed,
         errors=errors,
     )
+
+
+# ---------------------------------------------------------------------------
+# POST /ingest/admin/reset-metrics-and-library — reset dashboard & keep only 2 docs
+# ---------------------------------------------------------------------------
+
+KEEP_LIBRARY_TITLES = {
+    "local-Cranswick Manufacturing Standard v2",
+    "BRCGS - Food Safety Standard - V9",
+}
+
+
+@router.post("/admin/reset-metrics-and-library")
+def post_reset_metrics_and_library():
+    """
+    Delete all analysis sessions (reset metrics / Attention Required) and remove all
+    library documents except those with title in KEEP_LIBRARY_TITLES.
+    Returns counts so the UI can clear local session log and refetch.
+    """
+    from src.rag.analysis_sessions import delete_all_sessions
+    from src.rag.document_registry import list_documents, fetch_all_from_vector_store
+
+    sessions_deleted = delete_all_sessions()
+
+    docs = list_documents()
+    if not docs:
+        docs = fetch_all_from_vector_store()
+
+    to_keep = [d for d in docs if (d.get("title") or "").strip() in KEEP_LIBRARY_TITLES]
+    to_remove = [d for d in docs if (d.get("title") or "").strip() not in KEEP_LIBRARY_TITLES]
+
+    documents_removed = 0
+    for d in to_remove:
+        doc_id = d.get("document_id", "")
+        if not doc_id:
+            continue
+        try:
+            delete_by_document_id(doc_id)
+            delete_document(doc_id)
+            documents_removed += 1
+        except Exception:
+            pass
+
+    return {
+        "ok": True,
+        "sessions_deleted": sessions_deleted,
+        "documents_removed": documents_removed,
+        "documents_kept": [d.get("title") or d.get("document_id") for d in to_keep],
+    }

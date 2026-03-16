@@ -164,6 +164,11 @@
   gap: var(--space-sm);
 }
 
+.dash-card-title-context {
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
 /* Alerts */
 .dash-alerts {
   grid-column: 1 / -1;
@@ -228,6 +233,48 @@
   border-color: var(--yb-blue);
 }
 
+.dash-alert-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-shrink: 0;
+}
+
+.dash-alert-delete {
+  color: var(--text-secondary);
+  border-color: var(--border-card);
+}
+
+.dash-alert-delete:hover {
+  background: rgba(185,28,28,0.06);
+  border-color: rgba(185,28,28,0.4);
+  color: #b91c1c;
+}
+
+/* Sessions line chart */
+.dash-sessions-chart {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+.sessions-line-chart-wrap {
+  width: 100%;
+  max-width: 320px;
+}
+.sessions-line-chart {
+  display: block;
+}
+.sessions-line-chart .chart-dot {
+  transition: r 0.15s;
+}
+.sessions-line-chart .chart-dot:hover {
+  r: 5;
+}
+.sessions-line-chart .chart-axis-label {
+  font-size: 0.7rem;
+  fill: var(--text-muted);
+}
+
 /* Activity feed */
 .activity-list {
   list-style: none;
@@ -236,6 +283,24 @@
   display: flex;
   flex-direction: column;
   gap: 0;
+}
+.activity-list-compact .activity-item {
+  padding: 0.35rem 0;
+  border-bottom: 1px solid var(--border-subtle);
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+}
+.activity-list-compact .activity-doc {
+  display: inline;
+  margin-right: 0.25rem;
+}
+.activity-list-compact .activity-meta {
+  display: inline;
+  margin-top: 0;
+  margin-right: 0.5rem;
+}
+.activity-list-compact .activity-body {
+  flex: none;
 }
 
 .activity-item {
@@ -358,6 +423,23 @@
 .trend-up   { color: #b91c1c; }
 .trend-down { color: #059669; }
 .trend-flat { color: var(--text-muted); }
+
+/* Corrections Implemented — separate metric card */
+.dash-corrections .dash-card-title {
+  margin-bottom: var(--space-sm);
+}
+.dash-corrections-value {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--yb-blue);
+  line-height: 1.2;
+}
+.dash-corrections-desc {
+  margin: var(--space-xs) 0 0;
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
 
 /* Document health bar */
 .health-legend {

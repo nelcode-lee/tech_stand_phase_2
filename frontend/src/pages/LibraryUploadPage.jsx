@@ -9,6 +9,8 @@ import './LibraryUploadPage.css';
 /** Single category: maps to both doc_layer and library for the backend. */
 const CATEGORY_OPTIONS = [
   { value: 'policy', label: 'Policy', docLayer: 'policy', library: 'Policies' },
+  { value: 'policy_brcgs', label: 'BRCGS', docLayer: 'policy', library: 'Policies' },
+  { value: 'policy_cranswick', label: 'Cranswick Standards', docLayer: 'policy', library: 'Policies' },
   { value: 'principle', label: 'Principle / Standard', docLayer: 'principle', library: 'Standards' },
   { value: 'sop', label: 'SOP (Standards)', docLayer: 'sop', library: 'Standards' },
   { value: 'sop_site', label: 'SOP (Site)', docLayer: 'sop', library: 'Site SOPs' },
@@ -16,6 +18,13 @@ const CATEGORY_OPTIONS = [
   { value: 'work_instruction', label: 'Work Instruction', docLayer: 'work_instruction', library: 'Site SOPs' },
   { value: 'upload', label: 'Upload / Other', docLayer: 'sop', library: 'Uploads' },
 ];
+
+const ALLOWED_EXTENSIONS = ['.docx', '.pdf', '.doc'];
+function isAllowedFileName(name) {
+  if (!name || !name.includes('.')) return false;
+  const ext = name.toLowerCase().slice(name.lastIndexOf('.'));
+  return ALLOWED_EXTENSIONS.includes(ext);
+}
 
 /** Derive a stable document_id from title (slug-style for storage). */
 function slugFromTitle(title) {
@@ -61,12 +70,16 @@ export default function LibraryUploadPage() {
       setStatus({ ok: false, message: 'Select a file first.' });
       return;
     }
+    if (!isAllowedFileName(file.name)) {
+      setStatus({ ok: false, message: `"${file.name}" is not an allowed type. Use ${ALLOWED_EXTENSIONS.join(', ')}.` });
+      return;
+    }
     const title = (form.title || '').trim();
     if (!title) {
       setStatus({ ok: false, message: 'Title is required.' });
       return;
     }
-    const documentId = slugFromTitle(title) || file.name.replace(/\.[^.]+$/, '').replace(/\s+/g, '-');
+    const documentId = (slugFromTitle(title) || file.name.replace(/\.[^.]+$/, '').replace(/\s+/g, '-') || 'document').trim() || 'document';
     setLoading(true);
     setStatus(null);
     try {

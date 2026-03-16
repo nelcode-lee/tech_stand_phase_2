@@ -32,26 +32,26 @@ export function RebuildScreen({ onComplete }) {
             <Settings size={32} />
           </div>
         </div>
-        <h2 className="rebuild-title">Rebuilding Document</h2>
-        <p className="rebuild-subtitle">Applying your decisions and formatting...</p>
+        <h2 className="rebuild-title">Submitting to Library</h2>
+        <p className="rebuild-subtitle">Applying your decisions and preparing for SharePoint...</p>
         <div className="rebuild-checklist">
           <div className="rebuild-item">
             <div className={`rebuild-check ${step >= 0 ? 'done' : ''}`}>
               <CheckCircle size={14} />
             </div>
-            <span className={step >= 0 ? 'rebuild-item-done' : ''}>Applying accepted edits</span>
+            <span className={step >= 0 ? 'rebuild-item-done' : ''}>Applying your approved changes</span>
           </div>
           <div className="rebuild-item">
             <div className={`rebuild-check ${step >= 1 ? 'done' : ''}`}>
               <CheckCircle size={14} />
             </div>
-            <span className={step >= 1 ? 'rebuild-item-done' : ''}>Reconstructing document structure</span>
+            <span className={step >= 1 ? 'rebuild-item-done' : ''}>Preparing document for SharePoint</span>
           </div>
           <div className="rebuild-item">
             <div className={`rebuild-check ${step >= 2 ? 'done' : ''}`}>
               <CheckCircle size={14} />
             </div>
-            <span className={step >= 2 ? 'rebuild-item-done' : ''}>Running final protocol validation</span>
+            <span className={step >= 2 ? 'rebuild-item-done' : ''}>Submitting to Library</span>
           </div>
         </div>
       </div>

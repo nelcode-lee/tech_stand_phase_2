@@ -1,4 +1,6 @@
-"""Pipeline router: selects agents and runs the pipeline."""
+"""Pipeline router: selects agents and runs the pipeline. Runs independent agents in parallel to reduce latency."""
+import asyncio
+
 from src.pipeline.models import (
     PipelineContext,
     RequestType,
@@ -8,6 +10,7 @@ from src.pipeline.models import (
 from src.pipeline.base_agent import BaseAgent
 from src.pipeline.agents import (
     CleansingAgent,
+    DraftLayoutAgent,
     TerminologyAgent,
     ConflictAgent,
     RiskAgent,
@@ -19,6 +22,7 @@ from src.pipeline.agents import (
 
 AGENTS = {
     "cleansing": CleansingAgent(),
+    "draft_layout": DraftLayoutAgent(),
     "terminology": TerminologyAgent(),
     "conflict": ConflictAgent(),
     "risk": RiskAgent(),
@@ -28,6 +32,12 @@ AGENTS = {
     "validation": ValidationAgent(),
 }
 
+# Agents that can run in parallel after draft_layout (they only read cleansed/draft content; risk needs conflicts so runs after conflict)
+PARALLEL_GROUP = {"terminology", "conflict", "specifying", "sequencing", "formatting"}
+# Risk runs after conflict (uses ctx.conflicts); validation runs after all (uses other flags for summary)
+RISK_AFTER = "conflict"
+VALIDATION_LAST = "validation"
+
 
 class PipelineRouter:
     def __init__(self, agents_override: list[str] | None = None):
@@ -35,12 +45,38 @@ class PipelineRouter:
 
     async def run(self, ctx: PipelineContext) -> PipelineContext:
         agents = self._select_agents(ctx)
-        for agent in agents:
+        i = 0
+        while i < len(agents):
+            agent = agents[i]
+            # Run a single agent
             ctx = await agent.run(ctx)
             ctx.agents_run.append(agent.name)
             blockers = [e for e in ctx.errors if e.severity == "critical"]
             if blockers:
                 break
+            i += 1
+            # If next agents are in PARALLEL_GROUP, run them all in parallel
+            wave = []
+            while i < len(agents) and agents[i].name in PARALLEL_GROUP:
+                wave.append(agents[i])
+                i += 1
+            if wave:
+                results = await asyncio.gather(*[a.run(ctx) for a in wave])
+                for a in wave:
+                    ctx.agents_run.append(a.name)
+                ctx = results[0]
+                blockers = [e for e in ctx.errors if e.severity == "critical"]
+                if blockers:
+                    break
+        # Continue with risk, then validation (sequential)
+        while i < len(agents):
+            agent = agents[i]
+            ctx = await agent.run(ctx)
+            ctx.agents_run.append(agent.name)
+            blockers = [e for e in ctx.errors if e.severity == "critical"]
+            if blockers:
+                break
+            i += 1
         ctx = self._build_summary(ctx)
         return ctx
 
@@ -55,23 +91,21 @@ class PipelineRouter:
 
         # Base set by request type
         if request_type in (RequestType.new_document, RequestType.update_existing, RequestType.single_document_review):
-            # Full pipeline: all 8 agents
+            # Full pipeline: cleansing → draft_layout → (terminology, conflict, specifying, sequencing, formatting in parallel) → risk → validation
             names = [
-                "cleansing", "terminology", "conflict", "risk",
-                "specifying", "sequencing", "formatting", "validation",
+                "cleansing", "draft_layout",
+                "terminology", "conflict", "specifying", "sequencing", "formatting",
+                "risk", "validation",
             ]
         elif request_type == RequestType.harmonisation_review:
-            # Alignment with existing policies: conflict, compliance, terminology
-            names = ["cleansing", "terminology", "conflict", "risk", "validation"]
+            names = ["cleansing", "draft_layout", "terminology", "conflict", "risk", "validation"]
         elif request_type == RequestType.principle_layer_review:
-            # Principle layer: capture enough of the What (intent, rationale, requirements)
-            # Specifying + formatting; skip sequencing (not step logic)
             names = [
-                "cleansing", "terminology", "conflict", "risk",
-                "specifying", "formatting", "validation",
+                "cleansing", "draft_layout", "terminology", "conflict", "specifying", "formatting",
+                "risk", "validation",
             ]
         else:  # contradiction_flag, review_request (legacy)
-            names = ["cleansing", "terminology", "conflict", "risk", "validation"]
+            names = ["cleansing", "draft_layout", "terminology", "conflict", "risk", "validation"]
 
         # Skip Sequencing for policy/principle
         if doc_layer in (DocLayer.policy, DocLayer.principle) and "sequencing" in names:

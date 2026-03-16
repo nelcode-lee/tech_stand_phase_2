@@ -7,12 +7,51 @@ import {
   Key,
   Building2,
   Lock,
+  Trash2,
 } from 'lucide-react';
+import { useAnalysis } from '../context/AnalysisContext';
 import { SITES_OPTIONS } from '../constants/sites';
+import { resetMetricsAndPruneLibrary } from '../api';
 import './SettingsPage.css';
+
+const SESSION_LOG_KEY = 'tech-standards-session-log';
 
 export default function SettingsPage() {
   const [activeSection, setActiveSection] = useState('sharepoint');
+  const { reloadSessionLog } = useAnalysis();
+  const [sessionCleared, setSessionCleared] = useState(false);
+  const [resetInProgress, setResetInProgress] = useState(false);
+  const [resetResult, setResetResult] = useState(null);
+  const [resetError, setResetError] = useState(null);
+
+  function clearSessionHistory() {
+    try {
+      localStorage.removeItem(SESSION_LOG_KEY);
+      if (reloadSessionLog) reloadSessionLog();
+      setSessionCleared(true);
+      setTimeout(() => setSessionCleared(false), 3000);
+    } catch {
+      setSessionCleared(false);
+    }
+  }
+
+  async function handleResetMetricsAndLibrary() {
+    setResetError(null);
+    setResetResult(null);
+    setResetInProgress(true);
+    try {
+      const data = await resetMetricsAndPruneLibrary();
+      localStorage.removeItem(SESSION_LOG_KEY);
+      if (reloadSessionLog) reloadSessionLog();
+      setResetResult(data);
+      setSessionCleared(true);
+      setTimeout(() => setSessionCleared(false), 2000);
+    } catch (err) {
+      setResetError(err.message || 'Reset failed');
+    } finally {
+      setResetInProgress(false);
+    }
+  }
 
   return (
     <div className="settings-page">
@@ -57,6 +96,17 @@ export default function SettingsPage() {
         >
           <MapPin size={16} />
           Site-specific
+        </button>
+        <button
+          type="button"
+          className={`settings-nav-btn ${activeSection === 'data' ? 'active' : ''}`}
+          onClick={() => {
+            setActiveSection('data');
+            document.getElementById('data')?.scrollIntoView({ behavior: 'smooth' });
+          }}
+        >
+          <Trash2 size={16} />
+          Data
         </button>
       </nav>
 
@@ -150,6 +200,47 @@ export default function SettingsPage() {
               </ul>
             </div>
           </div>
+        </section>
+
+        {/* Data & session history */}
+        <section
+          id="data"
+          className="settings-section"
+        >
+          <div className="settings-section-header">
+            <h2 className="settings-section-title">
+              <Trash2 size={20} />
+              Data &amp; session history
+            </h2>
+          </div>
+          <p className="settings-section-desc">
+            Reset dashboard metrics and library in one go: all analysis sessions are deleted (Attention Required cleared) and all documents are removed except &quot;local-Cranswick Manufacturing Standard v2&quot; and &quot;BRCGS - Food Safety Standard - V9&quot;. Your browser session log is cleared so the UI shows the new state immediately.
+          </p>
+          <button
+            type="button"
+            className="settings-clear-btn settings-reset-btn"
+            onClick={handleResetMetricsAndLibrary}
+            disabled={resetInProgress}
+          >
+            {resetInProgress ? 'Resetting…' : 'Reset metrics and prune library'}
+          </button>
+          {resetError && <p className="settings-error-msg">{resetError}</p>}
+          {resetResult && (
+            <p className="settings-cleared-msg">
+              Done. {resetResult.sessions_deleted} session(s) deleted, {resetResult.documents_removed} document(s) removed. Kept: {resetResult.documents_kept?.join(', ') || '—'}. Open Library or Dashboard to see updated data.
+            </p>
+          )}
+          <p className="settings-section-desc" style={{ marginTop: '1rem' }}>
+            Or clear only the local session log (no server change). Use if you already ran a reset and still see old sessions.
+          </p>
+          <button
+            type="button"
+            className="settings-clear-btn"
+            onClick={clearSessionHistory}
+          >
+            {sessionCleared ? 'Cleared' : 'Clear session history only'}
+          </button>
+          {sessionCleared && !resetResult && <span className="settings-cleared-msg">Session history cleared. Refresh Library/Dashboard.</span>}
         </section>
       </div>
     </div>

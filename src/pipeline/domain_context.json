@@ -116,15 +116,15 @@
   },
 
   "standard_document_sections": {
-    "description": "Group document template — canonical section order. Edit here to adjust what CleansingAgent checks. 'required' sections generate high-severity omission flags; optional sections generate low-severity advisory flags.",
+    "description": "SOP structure for Cranswick: scope → reference docs → responsibility → frequency → procedure. CleansingAgent and DraftLayoutAgent use this order.",
     "template": [
       {"name": "Purpose / Objective",  "required": false, "aliases": ["purpose", "objective", "aim", "intent"]},
       {"name": "Scope",                "required": true,  "aliases": ["scope", "applicability", "applies to"]},
-      {"name": "References",           "required": true,  "aliases": ["references", "related documents", "associated documents", "see also"]},
-      {"name": "Responsibilities",     "required": true,  "aliases": ["responsibilities", "accountabilities", "roles", "ownership"]},
-      {"name": "Definitions",          "required": false, "aliases": ["definitions", "glossary", "terms", "abbreviations"]},
+      {"name": "References",           "required": true,  "aliases": ["references", "reference documents", "related documents", "associated documents", "see also"]},
+      {"name": "Responsibilities",     "required": true,  "aliases": ["responsibilities", "responsibility", "accountabilities", "roles", "ownership"]},
+      {"name": "Frequency",            "required": true,  "aliases": ["frequency", "schedule", "periodicity", "how often"]},
       {"name": "Procedure / Method",   "required": true,  "aliases": ["procedure", "method", "process", "instructions", "steps", "how to"]},
-      {"name": "Frequency",            "required": false, "aliases": ["frequency", "schedule", "periodicity", "how often"]},
+      {"name": "Definitions",          "required": false, "aliases": ["definitions", "glossary", "terms", "abbreviations"]},
       {"name": "Record Keeping",       "required": true,  "aliases": ["record keeping", "records", "documentation", "forms", "logs"]},
       {"name": "Corrective Actions",   "required": true,  "aliases": ["corrective action", "non-conformance", "deviation", "failure response"]},
       {"name": "Review Schedule",      "required": false, "aliases": ["review", "review date", "review schedule", "next review"]},

@@ -39,8 +39,8 @@ ABSOLUTE RULES
 - No legal interpretation or extrapolation.
 - No invented regulatory requirements.
 
-CITATIONS
-When a gap relates to BRCGS, Cranswick standards, customer spec, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y", "Cranswick Std §X.Y", "parent policy [title]". Leave [] when not applicable.
+CITATIONS — ALWAYS INCLUDE WHEN POSSIBLE
+When a gap relates to BRCGS, Cranswick standards, customer spec, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y", "Cranswick Std §X.Y", "parent policy [title]". If such sources are in the context and apply, include at least one citation. Leave [] only when no such source could apply.
 
 OUTPUT
 Return only a JSON array. Each item has:
@@ -49,7 +49,7 @@ Return only a JSON array. Each item has:
 - issue: explicit compliance or regulatory gap
 - requirement_reference: BRC/customer/Cranswick reference if provided
 - recommendation: correction needed to meet requirement (factual only)
-- citations: array of BRCGS/Cranswick/parent policy refs when applicable (optional)
+- citations: array of BRCGS/Cranswick/parent policy refs — include when applicable
 
 Example: [{"location": "Section 4", "excerpt": "4. CCP verification: temperature recorded weekly.", "issue": "CCP verification records not referenced", "requirement_reference": "BRCGS Clause 5.8", "recommendation": "Add CCP verification record form reference", "citations": ["BRCGS Clause 5.8", "parent policy [Food Safety Policy]"]}]
 If no issues, return [].""" + DOCUMENT_REFERENCE_RULE + JOB_TITLE_RULE + TOLERANCE_VS_REFERENCE_RULE + PURPOSE_OBJECTIVE_RULE
@@ -65,8 +65,14 @@ class ValidationAgent(BaseAgent):
         content = ctx.draft_content or ctx.cleansed_content or ""
         if content:
             try:
-                prompt = f"Analyse the following document for regulatory and compliance alignment:\n\n{content[:12000]}"
-                raw = await completion(prompt, system=VALIDATION_COMPLIANCE_PROMPT)
+                prompt_parts = ["Analyse the following document for regulatory and compliance alignment:\n\n", content[:12000]]
+                if ctx.parent_policy and ctx.parent_policy.content:
+                    prompt_parts.append(f"\n\nPARENT POLICY (use for citations when applicable):\n{ctx.parent_policy.content[:6000]}")
+                prompt = "".join(prompt_parts)
+                system = VALIDATION_COMPLIANCE_PROMPT
+                if getattr(ctx, "glossary_block", None) and (ctx.glossary_block or "").strip():
+                    system += "\n\n" + (ctx.glossary_block or "").strip()
+                raw = await completion(prompt, system=system)
                 items = parse_json_array(raw)
                 for item in items:
                     if isinstance(item, dict) and item.get("location") and item.get("issue") and item.get("recommendation"):

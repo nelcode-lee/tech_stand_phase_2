@@ -1,22 +1,19 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Crosshair, Zap, Eye, Shield, Swords, Target, Link2, Square, LayoutGrid, Scale, Save } from 'lucide-react';
+import { Upload, X } from 'lucide-react';
+import { ingestFile, listDocuments } from '../api';
 import { useAnalysis } from '../context/AnalysisContext';
-import SitesSelect from '../components/SitesSelect';
+import { resolveSitesForApi, SITES_OPTIONS } from '../constants/sites';
 import './ConfigurePage.css';
+import './IngestPage.css';
 
 const CONFIG_STORAGE_KEY = 'tech-standards-review-config';
-
-const AGENT_ICONS = {
-  cleansing: Eye,
-  risk: Shield,
-  conflict: Swords,
-  specifying: Target,
-  sequencing: Link2,
-  terminology: Square,
-  formatting: LayoutGrid,
-  validation: Scale,
-};
+const ALLOWED_EXTENSIONS = ['.docx', '.pdf', '.doc'];
+function isAllowedFileName(name) {
+  if (!name || !name.includes('.')) return false;
+  const ext = name.toLowerCase().slice(name.lastIndexOf('.'));
+  return ALLOWED_EXTENSIONS.includes(ext);
+}
 
 const REQUEST_TYPES = {
   review: [
@@ -25,36 +22,78 @@ const REQUEST_TYPES = {
     { value: 'principle_layer_review', label: 'Principle Layer Review',   desc: 'Identify if we are capturing enough of the What' },
   ],
   create: [
-    { value: 'new_document', label: 'New Document', desc: 'Draft a new SOP, Principle, or Policy from scratch' },
+    { value: 'new_document', label: 'New Document', desc: 'Build a new SOP or principle-layer doc from ingested policies and standards' },
   ],
 };
 
-const DOC_LAYER_OPTIONS = [
-  { value: 'policy', label: 'Policy', desc: 'High-level governance and intent' },
-  { value: 'principle', label: 'Principle / Standard', desc: 'Standards and principles' },
-  { value: 'sop', label: 'SOP', desc: 'Standard Operating Procedure — full section template' },
-  { value: 'work_instruction', label: 'Work Instruction', desc: 'Step-by-step instructions' },
+/** Create mode: build new docs from ingested content and policy layer. Principle layer in time. */
+const CREATE_DOC_LAYER_OPTIONS = [
+  {
+    value: 'principle',
+    label: 'Principles / Standards',
+    desc: 'Design rules that interpret policy (the &quot;What&quot;). Principle layer — being built out; applies to every site.',
+  },
+  {
+    value: 'sop',
+    label: 'SOP',
+    desc: 'Standard Operating Procedure — built from ingested policies and standards. Full section template, procedural.',
+  },
+  {
+    value: 'work_instruction',
+    label: 'Work Instruction',
+    desc: 'Step-by-step instructions. Built from ingested content and project logic. Procedural.',
+  },
 ];
 
 export default function ConfigurePage({ mode = 'review' }) {
   const navigate = useNavigate();
-  const { config, setConfig, allAgentKeys, agentLabels } = useAnalysis();
+  const { config, setConfig, pendingFiles, setPendingFiles, selectedSite } = useAnalysis();
   const base = `/${mode}`;
-  const [saveStatus, setSaveStatus] = useState(null);
+
+  const [dragOver, setDragOver] = useState(false);
+  const [status, setStatus] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [allDocs, setAllDocs] = useState([]);
+  const [loadingDocs, setLoadingDocs] = useState(false);
+  const fileInputRef = useRef(null);
+
+  // Fetch document list for review mode (dropdown)
+  useEffect(() => {
+    if (mode !== 'review') return;
+    setLoadingDocs(true);
+    listDocuments()
+      .then(data => setAllDocs(data || []))
+      .catch(() => setAllDocs([]))
+      .finally(() => setLoadingDocs(false));
+  }, [mode]);
+
+  // Filter docs by current level site (sidebar selector) for review mode
+  const filteredDocs = useMemo(() => {
+    if (mode !== 'review' || !allDocs.length) return [];
+    if (selectedSite === 'all') return [...allDocs];
+    return allDocs.filter(d => {
+      if (d.doc_layer === 'policy') return true;
+      const sites = Array.isArray(d.sites) ? d.sites : (d.sites ? String(d.sites).split(/[,\s]+/).filter(Boolean) : []);
+      return sites.includes(selectedSite);
+    });
+  }, [mode, allDocs, selectedSite]);
+
+  const isCreate = mode === 'create';
+  const isSupportingDocs = mode === 'review';
 
   const requestTypes = REQUEST_TYPES[mode] || REQUEST_TYPES.review;
-  const selectedAgents = config.agents?.length ? config.agents : [...allAgentKeys];
-  const analysisMode = config.mode || 'full';
 
   useEffect(() => {
     try {
       const stored = localStorage.getItem(`${CONFIG_STORAGE_KEY}-${mode}`);
       if (stored) {
         const parsed = JSON.parse(stored);
-        setConfig(c => {
-          if (c.documentId) return c;
-          return { ...c, ...parsed };
-        });
+        setConfig(c => ({
+          ...c,
+          ...parsed,
+          additionalDocIds: Array.isArray(parsed.additionalDocIds) ? parsed.additionalDocIds : [],
+          agentInstructions: parsed.agentInstructions || '',
+        }));
       }
     } catch {
       // Ignore parse errors
@@ -65,13 +104,66 @@ export default function ConfigurePage({ mode = 'review' }) {
     if (mode === 'create' && config.requestType !== 'new_document') {
       setConfig(c => ({ ...c, requestType: 'new_document' }));
     }
+    if (mode === 'create' && config.docLayer === 'policy') {
+      setConfig(c => ({ ...c, docLayer: 'principle' }));
+    }
     if (mode === 'review' && !['single_document_review', 'harmonisation_review', 'principle_layer_review'].includes(config.requestType)) {
       setConfig(c => ({ ...c, requestType: 'single_document_review' }));
     }
-  }, [mode, config.requestType, setConfig]);
+  }, [mode, config.requestType, config.docLayer, setConfig]);
 
-  function handleSave(e) {
+  function setField(field, value) {
+    setConfig(c => ({ ...c, [field]: value }));
+  }
+
+  function handleDocumentSelect(value) {
+    if (!value) {
+      setField('documentId', '');
+      setField('title', '');
+      return;
+    }
+    const doc = allDocs.find(d => d.document_id === value);
+    if (doc) {
+      const sites = Array.isArray(doc.sites) ? doc.sites : [];
+      setConfig(c => ({
+        ...c,
+        documentId: doc.document_id,
+        title: doc.title || doc.document_id,
+        docLayer: doc.doc_layer || c.docLayer,
+        sites: sites.length ? sites : c.sites,
+      }));
+      setPendingFiles([]);
+    }
+  }
+
+  function handleDrop(e) {
     e.preventDefault();
+    e.stopPropagation();
+    setDragOver(false);
+    const dropped = e.dataTransfer?.files;
+    if (!dropped?.length) return;
+    setPendingFiles(prev => [...prev, ...Array.from(dropped)]);
+  }
+
+  function handleFileSelect(e) {
+    const selected = e.target?.files;
+    if (selected?.length) {
+      setPendingFiles(prev => [...prev, ...Array.from(selected)]);
+    }
+    e.target.value = '';
+  }
+
+  function triggerFileInput() {
+    fileInputRef.current?.click();
+  }
+
+  function removeFile(index) {
+    setPendingFiles(prev => prev.filter((_, i) => i !== index));
+  }
+
+  async function handleIngest(e) {
+    e.preventDefault();
+    setStatus(null);
     try {
       const toStore = {
         requestType: config.requestType,
@@ -82,65 +174,120 @@ export default function ConfigurePage({ mode = 'review' }) {
         requester: config.requester,
         mode: config.mode,
         agents: config.agents,
+        additionalDocIds: config.additionalDocIds,
+        agentInstructions: config.agentInstructions,
       };
       localStorage.setItem(`${CONFIG_STORAGE_KEY}-${mode}`, JSON.stringify(toStore));
-      setSaveStatus('saved');
-      setTimeout(() => setSaveStatus(null), 2500);
-    } catch {
-      setSaveStatus('error');
-      setTimeout(() => setSaveStatus(null), 2500);
+    } catch { /* ignore */ }
+
+    const hasUpload = pendingFiles?.length > 0;
+    const hasDocId = !!config?.documentId?.trim();
+    if (isSupportingDocs && !hasDocId && !hasUpload) {
+      setStatus({ ok: false, message: 'Upload the document to review, or enter a document ID if it\'s already in the Library.' });
+      return;
     }
+
+    let docIdForNav = config?.documentId?.trim() || '';
+    let docTitleForNav = config?.title || docIdForNav;
+    if (hasUpload) {
+      const bad = pendingFiles.find(f => !isAllowedFileName(f.name));
+      if (bad) {
+        setStatus({ ok: false, message: `"${bad.name}" is not an allowed type. Use ${ALLOWED_EXTENSIONS.join(', ')}.` });
+        return;
+      }
+      setLoading(true);
+      try {
+        const sitesArr = Array.isArray(config?.sites) ? config.sites : (config?.sites ? String(config.sites).split(/[,\s]+/).filter(Boolean) : []);
+        const sitesForApi = resolveSitesForApi(sitesArr);
+        const existingAdditional = Array.isArray(config?.additionalDocIds) ? config.additionalDocIds : [];
+        const ingestedIds = [];
+
+        for (const f of pendingFiles) {
+          const docIdForIngest = f.name.replace(/\.[^.]+$/, '').replace(/\s+/g, '-');
+          const res = await ingestFile(f, {
+            document_id: docIdForIngest,
+            doc_layer: config?.docLayer || 'sop',
+            sites: sitesForApi,
+            policy_ref: config?.policyRef || undefined,
+            title: f.name.replace(/\.[^.]+$/, '') || docIdForIngest,
+          });
+          ingestedIds.push(res.document_id || docIdForIngest);
+        }
+
+        setPendingFiles([]);
+
+        if (isSupportingDocs) {
+          docIdForNav = ingestedIds[0];
+          docTitleForNav = pendingFiles[0].name.replace(/\.[^.]+$/, '') || docIdForNav;
+          const restAsAdditional = ingestedIds.slice(1);
+          const mergedAdditional = [...new Set([...existingAdditional, ...restAsAdditional])];
+          setConfig(c => ({ ...c, documentId: docIdForNav, title: docTitleForNav, additionalDocIds: mergedAdditional }));
+          const stored = JSON.parse(localStorage.getItem(`${CONFIG_STORAGE_KEY}-${mode}`) || '{}');
+          localStorage.setItem(`${CONFIG_STORAGE_KEY}-${mode}`, JSON.stringify({ ...stored, documentId: docIdForNav, title: docTitleForNav, additionalDocIds: mergedAdditional }));
+        } else {
+          docIdForNav = ingestedIds[0];
+          docTitleForNav = pendingFiles[0].name.replace(/\.[^.]+$/, '') || docIdForNav;
+          setConfig(c => ({ ...c, documentId: docIdForNav, title: docTitleForNav }));
+          const stored = JSON.parse(localStorage.getItem(`${CONFIG_STORAGE_KEY}-${mode}`) || '{}');
+          localStorage.setItem(`${CONFIG_STORAGE_KEY}-${mode}`, JSON.stringify({ ...stored, documentId: docIdForNav, title: docTitleForNav }));
+        }
+
+        setStatus({ ok: true, message: `Ingested ${ingestedIds.length} document(s).` });
+      } catch (err) {
+        setStatus({ ok: false, message: err.message || 'Ingest failed' });
+        setLoading(false);
+        return;
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    const docId = docIdForNav;
+    const analyseUrl = docId ? `${base}/analyse?documentId=${encodeURIComponent(docId)}` : `${base}/analyse`;
+    navigate(analyseUrl, { state: { fromIngest: true, documentId: docId, title: docTitleForNav }, replace: true });
   }
 
-  function setAnalysisMode(m) {
-    setConfig(c => ({
-      ...c,
-      mode: m,
-      agents: m === 'targeted' ? [...allAgentKeys] : m === 'quick' ? ['cleansing', 'risk', 'formatting'] : [...allAgentKeys],
-    }));
-  }
-
-  function toggleAgent(key) {
-    if (analysisMode !== 'targeted') return;
-    setConfig(c => ({
-      ...c,
-      agents: c.agents.includes(key) ? c.agents.filter(a => a !== key) : [...c.agents, key],
-    }));
-  }
-
-  function setField(field, value) {
-    setConfig(c => ({ ...c, [field]: value }));
-  }
-
-  function handleContinue(e) {
-    e.preventDefault();
-    navigate(`${base}/ingest`);
-  }
-
-  function handleSkipToAnalyse(e) {
-    e.preventDefault();
-    // Put documentId in URL so Analyse page uses the correct document (never stale config)
-    const docId = config?.documentId || '';
+  function goToAnalyse() {
+    const docId = config?.documentId?.trim() || '';
     const url = docId ? `${base}/analyse?documentId=${encodeURIComponent(docId)}` : `${base}/analyse`;
-    navigate(url);
+    navigate(url, { state: docId ? { fromIngest: false, documentId: docId, title: config?.title || docId } : undefined });
   }
 
   return (
     <div className="configure-page">
-      <div className="configure-header">
+      <div className="configure-top-bar">
         <h1 className="configure-title">
           {mode === 'create' ? 'Create a Document' : 'Review a Document'}
         </h1>
+        <div className="configure-top-actions">
+          <button type="button" className="configure-top-btn" onClick={() => navigate('/dashboard')}>
+            ← Back
+          </button>
+          <button type="button" className="configure-top-btn primary next-action" onClick={goToAnalyse}>
+            Go to Analyse
+          </button>
+        </div>
+      </div>
+      <div className="configure-header">
+        <div className="workflow-hint workflow-hint-inline" role="status">
+          <span className="workflow-hint-label">Workflow</span>
+          <span className="workflow-hint-text">
+            {mode === 'create'
+              ? <>You are here: <strong>Configure</strong>. The pipeline will use ingested elements and the <strong>policy layer</strong> (principle layer in time) to build your new document. Next: <strong>Analyse</strong> (top-right or sidebar) → <strong>Draft for HITL</strong> → <strong>Submit to Library</strong>.</>
+              : <>You are here: <strong>Configure</strong>. Next: go to <strong>Analyse</strong> (top-right or sidebar) and run analysis, then <strong>Draft for HITL</strong> → <strong>Submit to Library</strong>.</>}
+          </span>
+        </div>
         <p className="configure-subtitle">
           {mode === 'create'
-            ? 'Choose the document type and upload reference materials. The pipeline will draft from your standards and policies.'
-            : 'Set the document context and choose your analysis mode.'}
+            ? 'Build brand-new SOPs (and in time, principle-layer docs) using ingested standards, the policy layer, and project logic. Choose document type and upload reference materials; the pipeline drafts from your policies and ingested content.'
+            : '1. Pick a document from Library (or upload to add it). 2. Set options below. 3. Run analysis. Documents come from your ingested store until SharePoint is connected.'}
         </p>
       </div>
 
-      <form onSubmit={handleContinue} className="configure-form">
+      <form onSubmit={handleIngest} className="configure-form">
 
-        {/* Request type */}
+        {/* Request type — create only; review always uses single_document_review (Review SOP) */}
+        {mode === 'create' && (
         <section className="config-section">
           <h3 className="config-section-title">Request Type</h3>
           <div className="request-type-grid">
@@ -157,6 +304,7 @@ export default function ConfigurePage({ mode = 'review' }) {
             ))}
           </div>
         </section>
+        )}
 
         {/* Document details */}
         <section className="config-section">
@@ -165,7 +313,12 @@ export default function ConfigurePage({ mode = 'review' }) {
           </h3>
           {mode === 'create' && (
             <p className="config-section-hint">
-              The document type determines the structure and which sections are required (Purpose, Scope, Procedure, etc.).
+              Build new SOPs or principle-layer docs using ingested content and project logic. The <strong>policy layer</strong> underpins all documents; we adhere to it. The <strong>principle layer</strong> (design rules — the &quot;What&quot;) is being built out; procedures and work instructions are the procedural &quot;How&quot;.
+            </p>
+          )}
+          {mode === 'review' && (
+            <p className="config-section-hint">
+              Choose a document already in Library, or select &quot;Add new document (upload)&quot; and upload a file below. This is your ingested document store (SharePoint not yet connected).
             </p>
           )}
           <div className="config-fields">
@@ -173,7 +326,7 @@ export default function ConfigurePage({ mode = 'review' }) {
               <div className="form-row">
                 <label>Document Type</label>
                 <div className="doc-type-grid">
-                  {DOC_LAYER_OPTIONS.map(opt => (
+                  {CREATE_DOC_LAYER_OPTIONS.map(opt => (
                     <button
                       key={opt.value}
                       type="button"
@@ -188,33 +341,64 @@ export default function ConfigurePage({ mode = 'review' }) {
               </div>
             ) : null}
             <div className="form-row">
-              <label>Document ID</label>
-              <input
-                type="text"
-                placeholder={mode === 'create' ? 'e.g. GEN-OP-01-Goods-In, CMS-v2' : 'e.g. CMS-v2, BRCGS-FS-v9-meat, GEN-OP-01'}
-                value={config.documentId || ''}
-                onChange={e => setField('documentId', e.target.value)}
-              />
+              <label>Document</label>
+              {mode === 'review' ? (
+                <>
+                  <select
+                    value={config.documentId || ''}
+                    onChange={e => handleDocumentSelect(e.target.value)}
+                    disabled={loadingDocs}
+                  >
+                    <option value="">Add new document (upload)</option>
+                    {filteredDocs.map(d => (
+                      <option key={d.document_id} value={d.document_id}>
+                        {d.title || d.document_id}
+                        {d.document_id !== (d.title || d.document_id) ? ` — ${d.document_id}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  {loadingDocs ? (
+                    <span className="form-hint">Loading documents…</span>
+                  ) : selectedSite !== 'all' ? (
+                    <span className="form-hint">Documents for {selectedSite}</span>
+                  ) : null}
+                </>
+              ) : (
+                <input
+                  type="text"
+                  placeholder="e.g. GEN-OP-01-Goods-In, CMS-v2"
+                  value={config.documentId || ''}
+                  onChange={e => setField('documentId', e.target.value)}
+                />
+              )}
             </div>
             {mode !== 'create' && (
               <div className="form-row">
                 <label>Document Layer</label>
                 <select value={config.docLayer || 'sop'} onChange={e => setField('docLayer', e.target.value)}>
                   <option value="policy">Policy</option>
+                  <option value="policy_brcgs">BRCGS</option>
+                  <option value="policy_cranswick">Cranswick Standards</option>
                   <option value="principle">Principle</option>
                   <option value="sop">SOP</option>
                   <option value="work_instruction">Work Instruction</option>
                 </select>
               </div>
             )}
-            <div className="form-row">
-              <label>Sites</label>
-              <SitesSelect
-                id="config-sites"
-                value={config.sites}
-                onChange={v => setField('sites', v)}
-              />
-            </div>
+            {mode === 'review' && (
+              <div className="form-row">
+                <label>Site</label>
+                <select
+                  value={Array.isArray(config.sites) && config.sites.length === 1 ? config.sites[0] : (config.sites?.[0] || 'all')}
+                  onChange={e => setField('sites', [e.target.value])}
+                >
+                  {SITES_OPTIONS.map(opt => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+                <span className="form-hint">Site this document belongs to. Used for ingest and dashboard filtering.</span>
+              </div>
+            )}
             <div className="form-row">
               <label>Policy Reference</label>
               <input
@@ -233,76 +417,102 @@ export default function ConfigurePage({ mode = 'review' }) {
                 onChange={e => setField('requester', e.target.value)}
               />
             </div>
+            <div className="form-row">
+              <label>{mode === 'create' ? 'Relevant documents' : 'Additional relevant documents'}</label>
+              <input
+                type="text"
+                placeholder="e.g. P-001, GEN-OP-02 (comma-separated document IDs from Library)"
+                value={(config.additionalDocIds || []).join(', ')}
+                onChange={e => {
+                  const ids = e.target.value.split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
+                  setField('additionalDocIds', ids);
+                }}
+              />
+              <span className="form-hint">
+                {mode === 'create'
+                  ? 'Ingested policies or standards from the Library to use as source material for this new document. Comma-separated document IDs.'
+                  : 'Reference documents to tighten guardrails and find anomalies. Document IDs from the Library.'}
+              </span>
+            </div>
+            <div className="form-row">
+              <label>Agent instructions</label>
+              <textarea
+                placeholder="e.g. Site-specific context, known constraints, or knowledge the agents may find useful. Never supersedes policy."
+                value={config.agentInstructions || ''}
+                onChange={e => setField('agentInstructions', e.target.value)}
+                rows={3}
+                className="config-textarea"
+              />
+              <span className="form-hint">Additional knowledge for agents (site context, constraints, etc.). Policy and standards always take precedence.</span>
+            </div>
           </div>
         </section>
 
-        {/* Analysis mode — only for review */}
-        {mode === 'review' && (
+        {/* Supporting docs / reference materials upload */}
         <section className="config-section">
-          <h3 className="config-section-title">Analysis Mode</h3>
-          <div className="mode-buttons">
-            <button type="button" className={`mode-btn ${analysisMode === 'full' ? 'active' : ''}`} onClick={() => setAnalysisMode('full')}>
-              <Search size={20} />
-              <span>Full Analysis</span>
-              <span className="mode-desc">All 8 agents</span>
-            </button>
-            <button type="button" className={`mode-btn ${analysisMode === 'targeted' ? 'active' : ''}`} onClick={() => setAnalysisMode('targeted')}>
-              <Crosshair size={20} />
-              <span>Targeted</span>
-              <span className="mode-desc">Choose agents</span>
-            </button>
-            <button type="button" className={`mode-btn ${analysisMode === 'quick' ? 'active' : ''}`} onClick={() => setAnalysisMode('quick')}>
-              <Zap size={20} />
-              <span>Quick Check</span>
-              <span className="mode-desc">3 agents</span>
-            </button>
+          <h3 className="config-section-title">
+            {isCreate ? 'Reference Materials' : 'Document to Review'}
+          </h3>
+          <p className="config-section-hint">
+            {isCreate
+              ? 'Add policies, standards, or example documents to inform the draft.'
+              : 'Upload the document to review. First file is the main document; additional files are reference docs for guardrails.'}
+          </p>
+          <div
+            className={`upload-zone ${dragOver ? 'drag-over' : ''} ${pendingFiles?.length ? 'has-file' : ''}`}
+            onDrop={handleDrop}
+            onDragOver={e => { e.preventDefault(); e.stopPropagation(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onClick={triggerFileInput}
+            role="button"
+            tabIndex={0}
+            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); triggerFileInput(); } }}
+          >
+            <Upload className="upload-icon" size={36} />
+            <p>Drag and drop, or click to browse</p>
+            <span className="upload-formats">PDF, DOCX, DOC, TXT</span>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".docx,.pdf,.doc,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,text/plain"
+              multiple
+              onChange={handleFileSelect}
+              className="upload-input"
+              id="config-upload-input"
+            />
+            {pendingFiles?.length > 0 && (
+              <div className="upload-file-list" onClick={e => e.stopPropagation()}>
+                {pendingFiles.map((f, i) => (
+                  <span key={`${f.name}-${i}`} className="upload-filename">
+                    {f.name}
+                    <button type="button" className="upload-remove" onClick={() => removeFile(i)} aria-label="Remove"><X size={14} /></button>
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
         </section>
+
+        {loading && (
+          <div className="ingest-progress-wrap">
+            <div className="ingest-progress-bar" />
+            <p className="ingest-progress-text">Processing documents — chunking and embedding…</p>
+          </div>
         )}
 
-        {/* Agent selection (targeted only) — review only */}
-        {mode === 'review' && analysisMode === 'targeted' && (
-          <section className="config-section">
-            <h3 className="config-section-title">Select Agents</h3>
-            <div className="agent-grid">
-              {allAgentKeys.map(key => {
-                const Icon = AGENT_ICONS[key] || Target;
-                const selected = selectedAgents.includes(key);
-                return (
-                  <button
-                    key={key}
-                    type="button"
-                    className={`agent-btn ${selected ? 'selected' : ''}`}
-                    onClick={() => toggleAgent(key)}
-                  >
-                    <Icon size={16} />
-                    {agentLabels[key] || key}
-                  </button>
-                );
-              })}
-            </div>
-          </section>
+        {status && (
+          <div className={`upload-status ${status.ok ? 'success' : 'error'}`}>
+            {status.message}
+          </div>
         )}
 
         <div className="configure-footer">
-          <button
-            type="button"
-            className={`configure-save-btn ${saveStatus === 'saved' ? 'saved' : ''} ${saveStatus === 'error' ? 'error' : ''}`}
-            onClick={handleSave}
-            title="Save amendments"
-          >
-            <Save size={16} />
-            {saveStatus === 'saved' ? 'Saved' : saveStatus === 'error' ? 'Save failed' : 'Save'}
-          </button>
-          {mode === 'review' && config.documentId ? (
-            <button type="button" className="configure-skip-btn" onClick={handleSkipToAnalyse} title="Document is already in Library — skip upload">
-              Skip to Analysis →
-            </button>
-          ) : null}
-          <button type="submit" className="configure-next-btn">
-            {mode === 'create'
-              ? 'Upload Reference Materials →'
-              : config.documentId ? 'Upload new version' : 'Continue to Upload'} →
+          <button type="submit" className="configure-next-btn next-action" disabled={loading}>
+            {loading
+              ? (isCreate ? 'Creating…' : 'Ingesting…')
+              : isCreate
+                ? 'Create'
+                : (config.documentId && !pendingFiles?.length) ? 'Continue to Analyse' : 'Ingest'}
           </button>
         </div>
       </form>

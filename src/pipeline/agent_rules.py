@@ -31,3 +31,11 @@ PURPOSE_OBJECTIVE_RULE = """
 PURPOSE AND OBJECTIVE — IMPLICIT IS ACCEPTABLE
 Purpose and objective are often conveyed by the document's title, introduction, or procedure content. Do NOT flag "purpose/objective missing" or "purpose/objective required" when the document clearly explains what it is for. Only flag if the document's intent is genuinely unclear.
 """
+
+# Corrective actions can be described in narrative form — do not flag when already present
+CORRECTIVE_ACTIONS_RULE = """
+CORRECTIVE ACTIONS — NARRATIVE FORM IS ACCEPTABLE
+Corrective actions (what to do when something goes wrong) may be described in narrative prose within the same paragraph or section as the failure scenario. They do NOT require a separate "Corrective Actions" heading or numbered list.
+Do NOT flag "corrective actions missing" or "no specific corrective actions" when the document describes specific actions in the same paragraph or nearby text, such as: who to inform, what to do (e.g. keep doors closed, call engineering, transfer product), timeframes (e.g. within an hour), escalation steps, or product handling (e.g. quarantine).
+Only flag when a failure scenario is mentioned but NO actionable steps are given (e.g. only "inform X" with no further guidance on what happens next).
+"""

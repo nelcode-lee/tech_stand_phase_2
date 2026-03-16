@@ -38,8 +38,8 @@ Identify terminology issues ONLY for terms that actually appear in the document.
 - defined differently in multiple places
 - undefined or ambiguous (these will be routed to HITL for glossary addition)
 
-CITATIONS
-When a terminology issue relates to BRCGS, Cranswick standards, or glossary definitions, include a "citations" array. Format: "BRCGS Clause X.Y", "Cranswick Std §X.Y". Leave [] when not applicable.
+CITATIONS — ALWAYS INCLUDE WHEN POSSIBLE
+When a terminology issue relates to BRCGS, Cranswick standards, or glossary definitions, include a "citations" array. Format: "BRCGS Clause X.Y", "Cranswick Std §X.Y". If such sources are in the context and apply, include at least one citation. Leave [] only when no such source could apply.
 
 OUTPUT FORMAT
 Return ONLY a JSON array. Each object: {"term": "<exact term as it appears>", "location": "<exact quote from document containing the term>", "issue": "<fact-based description>", "recommendation": "<precise correction>", "glossary_candidate": true/false, "citations": ["<BRCGS/Cranswick ref>"]}
@@ -64,9 +64,12 @@ class TerminologyAgent(BaseAgent):
             return ctx
 
         content = ctx.cleansed_content[:12000]
-        prompt = f"DOCUMENTS:\n{content}"
+        prompt_parts = [f"DOCUMENTS:\n{content}"]
+        if ctx.parent_policy and ctx.parent_policy.content:
+            prompt_parts.append(f"\n\nPARENT POLICY (use for citations when applicable):\n{ctx.parent_policy.content[:6000]}")
+        prompt = "".join(prompt_parts)
 
-        glossary = get_glossary_block(load_domain_context())
+        glossary = (getattr(ctx, "glossary_block", None) or "").strip() or get_glossary_block(load_domain_context())
         system_prompt = f"{TERMINOLOGY_SYSTEM_PROMPT}\n\n{glossary}" if glossary else TERMINOLOGY_SYSTEM_PROMPT
 
         try:

@@ -187,6 +187,9 @@ class PipelineContext(BaseModel):
     parent_policy: Document | None = None
     current_version: Document | None = None
     sibling_docs: list[Document] = Field(default_factory=list)
+    agent_instructions: str | None = None  # User-provided knowledge for agents; never supersedes policy
+    prior_feedback: list[dict] = Field(default_factory=list)  # Prior user notes for this document (from finding_notes), checked before reasoning
+    glossary_block: str | None = None  # Standard glossary (from domain_context.json) — use for all docs so agents can cite definitions
 
     # Agent outputs
     cleansed_content: str | None = None

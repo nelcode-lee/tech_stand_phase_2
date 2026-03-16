@@ -16,6 +16,13 @@ from src.rag.models import DocumentChunk
 router = APIRouter(tags=["pipeline"])
 
 
+class QueryRequest(BaseModel):
+    """Q&A over document library. Returns answer with citations."""
+    question: str
+    document_id: str | None = None  # Optional: scope to one document
+    doc_layer: str | None = None  # Optional: filter by layer (policy, principle, sop, work_instruction)
+
+
 class AnalyseRequest(BaseModel):
     tracking_id: str
     request_type: str
@@ -30,6 +37,8 @@ class AnalyseRequest(BaseModel):
     retrieved_chunks: list[dict] | None = None
     query: str | None = None  # Optional: semantic search query when using vector retrieval
     agents: list[str] | None = None  # Optional: run only these agents (e.g. for targeted mode)
+    additional_doc_ids: list[str] | None = None  # Optional: reference docs to tighten guardrails and find anomalies
+    agent_instructions: str | None = None  # Optional: specific knowledge for agents; never supersedes policy
 
 
 def _to_doc_layer(s: str) -> DocLayer:
@@ -110,17 +119,73 @@ def _chunks_from_request(req: AnalyseRequest) -> list[DocumentChunk]:
     # Vector retrieval: fetch relevant chunks from Supabase
     # When document_id is provided, only chunks from that document are returned (scoped analysis)
     from src.rag.retriever import retrieve
+    from src.rag.document_registry import get_document_content
     if req.document_id:
         log.info("Retrieving chunks for document_id=%s", req.document_id)
     else:
         log.warning("No document_id in request — retrieval will be unfiltered (all documents)")
-    return retrieve(
+    chunks = retrieve(
         doc_layer=req.doc_layer,
         sites=req.sites or None,
         policy_ref=req.policy_ref,
         document_id=req.document_id,
         query_text=req.query,
     )
+    # Fallback: when vector store returns no chunks but we have document_id, use full content from registry
+    # (handles fresh ingest, indexing delay, or vecs filter mismatch)
+    if not chunks and req.document_id:
+        try:
+            content, _ = get_document_content(req.document_id)
+            if content and content.strip():
+                log.info("Using document registry content for document_id=%s (vector store had 0 chunks)", req.document_id)
+                return [
+                    DocumentChunk(
+                        text=content,
+                        doc_layer=_to_doc_layer(req.doc_layer),
+                        sites=req.sites or [],
+                        policy_ref=req.policy_ref,
+                        document_id=req.document_id,
+                        chunk_index=0,
+                    )
+                ]
+        except Exception as e:
+            log.warning("Fallback to document registry failed for %s: %s", req.document_id, e)
+    return chunks
+
+
+def _fetch_additional_documents(additional_doc_ids: list[str] | None) -> list[Document]:
+    """Fetch content from additional reference documents for guardrails and anomaly detection."""
+    if not additional_doc_ids:
+        return []
+    from src.rag.document_registry import get_document_content
+    from src.rag.retriever import retrieve
+    from src.rag.models import DocLayer
+    sibling_docs: list[Document] = []
+    for doc_id in additional_doc_ids:
+        doc_id = (doc_id or "").strip()
+        if not doc_id:
+            continue
+        try:
+            content, _ = get_document_content(doc_id)
+            if content:
+                sibling_docs.append(Document(
+                    id=doc_id,
+                    title=doc_id,
+                    content=content[:30000],  # cap per doc
+                    doc_layer=DocLayer.sop,
+                    sites=[],
+                    policy_ref=None,
+                ))
+            else:
+                # Fallback: fetch chunks if full content not stored
+                chunks = retrieve(doc_layer=DocLayer.sop, document_id=doc_id, limit=100)
+                if chunks:
+                    chunks.sort(key=lambda c: c.chunk_index)
+                    content = "\n\n".join(c.text for c in chunks)[:30000]
+                    sibling_docs.append(Document(id=doc_id, title=doc_id, content=content, doc_layer=DocLayer.sop, sites=[], policy_ref=None))
+        except Exception as e:
+            log.warning("Could not fetch additional doc %s: %s", doc_id, e)
+    return sibling_docs
 
 
 def _fetch_parent_policy(req: AnalyseRequest) -> Document | None:
@@ -128,18 +193,33 @@ def _fetch_parent_policy(req: AnalyseRequest) -> Document | None:
     Fetch policy-layer chunks and build a parent policy Document for harmonisation.
     Policy layer is treated as the reference; procedure is checked against it.
     - harmonisation_review: always fetch policy chunks (all policies, or specific if policy_ref set)
-    - single_document_review with policy_ref: fetch that specific policy
+    - single_document_review: fetch policy when policy_ref is set (request or document registry),
+      or when document layer is sop/work_instruction/principle (fetch all policy for citations)
     """
     from src.rag.retriever import retrieve
     from src.rag.models import DocLayer
+    from src.rag.document_registry import get_document_policy_ref
+
     is_harmonisation = _to_request_type(req.request_type) == RequestType.harmonisation_review
-    has_policy_ref = bool((req.policy_ref or "").strip())
-    if not is_harmonisation and not has_policy_ref:
+    is_single_review = _to_request_type(req.request_type) == RequestType.single_document_review
+    policy_ref = (req.policy_ref or "").strip()
+    if not policy_ref and req.document_id:
+        policy_ref = (get_document_policy_ref(req.document_id) or "").strip()
+    has_policy_ref = bool(policy_ref)
+    # Fetch policy for harmonisation, when policy_ref is set, or for any single-document review (so agents can cite)
+    needs_policy = is_harmonisation or has_policy_ref
+    if not needs_policy and req.doc_layer:
+        dl = (req.doc_layer or "").strip().lower()
+        if dl in ("sop", "work_instruction", "principle"):
+            needs_policy = True
+    if not needs_policy and is_single_review and req.document_id:
+        needs_policy = True
+    if not needs_policy:
         return None
     try:
         policy_chunks = retrieve(
             doc_layer=DocLayer.policy,
-            document_id=req.policy_ref.strip() if has_policy_ref else None,
+            document_id=policy_ref if has_policy_ref else None,
             limit=150,
         )
         if not policy_chunks:
@@ -157,7 +237,7 @@ def _fetch_parent_policy(req: AnalyseRequest) -> Document | None:
             content=content[:50000],  # cap for LLM context
             doc_layer=DocLayer.policy,
             sites=[],
-            policy_ref=req.policy_ref,
+            policy_ref=policy_ref or req.policy_ref,
         )
     except Exception as e:
         log.warning("Failed to fetch parent policy: %s", e)
@@ -178,26 +258,43 @@ _FINDING_KEYS_TO_AGENT = {
 }
 
 
+def _doc_id_matches(request_id: str, chunk_doc_id: str) -> bool:
+    """Strict match: request doc ID matches chunk doc ID or chunk prefix (e.g. FSP003 matches FSP003-VEHICLE-LOADING), never a different doc."""
+    req = (request_id or "").strip().upper()
+    chunk = (chunk_doc_id or "").strip().upper()
+    if not req or not chunk:
+        return False
+    if req == chunk:
+        return True
+    # Request "FSP003" matches chunk "FSP003-VEHICLE-LOADING" (same doc, extended id)
+    if chunk.startswith(req) and (len(chunk) == len(req) or chunk[len(req)] in "-:_ "):
+        return True
+    # Request "FSP003 - Vehicle Loading" matches chunk "FSP003" (take base id from request)
+    base = req.split()[0] if req else ""
+    if base and chunk == base:
+        return True
+    if base and len(chunk) >= len(base) and chunk.startswith(base):
+        return len(chunk) == len(base) or (len(chunk) > len(base) and chunk[len(base)] in "-:_ ")
+    return False
+
+
 def _filter_chunks_by_document(chunks: list[DocumentChunk], document_id: str | None) -> list[DocumentChunk]:
-    """When document_id is set, keep only chunks from that document to avoid cross-doc contamination."""
+    """When document_id is set, keep only chunks from that document. Reject any mismatched doc IDs."""
     if not document_id or not chunks:
         return chunks
-    doc_id = (document_id or "").strip().upper()
+    doc_id = (document_id or "").strip()
     if not doc_id:
         return chunks
-    # Exact match first
-    filtered = [c for c in chunks if (c.document_id or "").strip().upper() == doc_id]
-    if filtered:
-        return filtered
-    # Partial match: request "FSP003" may match chunk "FSP003-VEHICLE-LOADING-..." (doc_id in chunk_id)
-    filtered = [c for c in chunks if doc_id in ((c.document_id or "").strip().upper())]
-    if filtered:
-        return filtered
-    # Reverse: chunk "FSP003" when request has "FSP003 - Vehicle Loading and Unloading"
-    filtered = [c for c in chunks if (c.document_id or "").strip().upper() in doc_id]
-    if filtered:
-        return filtered
-    return chunks
+    filtered = [c for c in chunks if _doc_id_matches(doc_id, c.document_id or "")]
+    # Log contamination if vector store returned wrong-document chunks
+    if chunks and not filtered:
+        seen_ids = list(dict.fromkeys((c.document_id or "").strip() for c in chunks if (c.document_id or "").strip()))
+        log.warning(
+            "Document mismatch: requested document_id=%s but vector store returned chunks for %s. "
+            "Using registry fallback if available.",
+            document_id, seen_ids[:5] or ["unknown"]
+        )
+    return filtered
 
 
 @router.post("/analyse")
@@ -205,10 +302,16 @@ async def post_analyse(body: AnalyseRequest):
     """Run the agent pipeline. Accepts content or retrieved_chunks for testing."""
     chunks = _chunks_from_request(body)
     chunks = _filter_chunks_by_document(chunks, body.document_id)
+    if body.document_id and not chunks:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No content found for document '{body.document_id}'. The document may not be ingested yet, or ingestion may have failed. Try re-uploading the document.",
+        )
     doc_id = (body.document_id or "").strip() or (chunks[0].document_id if chunks else "") or ""
     doc_title = (body.title or "").strip() or (chunks[0].title if chunks else "") or doc_id or ""
     agents_override = body.agents if body.agents else None
     parent_policy = _fetch_parent_policy(body)
+    sibling_docs = _fetch_additional_documents(body.additional_doc_ids)
 
     # When document_id set: use full document content to avoid chunk overlap duplicates
     full_content = None
@@ -218,6 +321,23 @@ async def post_analyse(body: AnalyseRequest):
             full_content, _ = get_document_content(doc_id)
         except Exception:
             pass
+
+    # Prior user feedback for this document (from finding_notes) — checked before reasoning
+    prior_feedback: list[dict] = []
+    if doc_id:
+        try:
+            from src.rag.finding_notes import get_relevant_finding_notes
+            prior_feedback = get_relevant_finding_notes(doc_id, limit=20)
+        except Exception as e:
+            log.debug("Could not load prior feedback for pipeline: %s", e)
+
+    # Glossary for all docs (from domain_context.json) — agents use for terminology and citations
+    glossary_block: str | None = None
+    try:
+        from src.pipeline.domain import get_glossary_block, load_domain_context
+        glossary_block = get_glossary_block(load_domain_context()) or None
+    except Exception as e:
+        log.debug("Could not load glossary for pipeline: %s", e)
 
     ctx = PipelineContext(
         tracking_id=body.tracking_id,
@@ -231,6 +351,10 @@ async def post_analyse(body: AnalyseRequest):
         retrieved_chunks=chunks,
         full_document_content=full_content,
         parent_policy=parent_policy,
+        sibling_docs=sibling_docs,
+        agent_instructions=(body.agent_instructions or "").strip() or None,
+        prior_feedback=prior_feedback,
+        glossary_block=glossary_block,
     )
     router_instance = PipelineRouter(agents_override=agents_override)
     ctx = await router_instance.run(ctx)
@@ -326,29 +450,129 @@ class DraftRequest(BaseModel):
     filename: str = "draft"
 
 
+class ValidateSolutionRequest(BaseModel):
+    """Re-validate a proposed solution against the original excerpt."""
+    excerpt: str = ""
+    proposed_solution: str = ""
+
+
 def _text_to_docx(content: str) -> bytes:
-    """Convert plain text (with optional markdown headings) to DOCX bytes."""
+    """Convert plain text (markdown-style headings, lists, simple tables) to DOCX bytes."""
     from docx import Document
 
     doc = Document()
     lines = content.split("\n")
-    for line in lines:
+
+    # Line classification
+    BLANK = "blank"
+    H1 = "h1"
+    H2 = "h2"
+    H3 = "h3"
+    CAPS_HEADING = "caps"
+    BULLET = "bullet"
+    NUMBERED = "numbered"
+    TABLE_ROW = "table"
+    NORMAL = "normal"
+
+    def classify(line: str) -> tuple[str, str]:
+        """Return (kind, payload). payload is text without prefix for lists; row cells for table."""
         stripped = line.strip()
         if not stripped:
+            return (BLANK, "")
+        if re.match(r"^#\s+.+$", stripped):
+            return (H1, re.match(r"^#\s+(.+)$", stripped).group(1).strip())
+        if re.match(r"^##\s+.+$", stripped):
+            return (H2, re.match(r"^##\s+(.+)$", stripped).group(1).strip())
+        if re.match(r"^###\s+.+$", stripped):
+            return (H3, re.match(r"^###\s+(.+)$", stripped).group(1).strip())
+        # ALL CAPS short line as optional heading (e.g. "SCOPE", "REFERENCES")
+        if len(stripped) < 120 and stripped.replace(" ", "").replace("&", "").isupper() and any(c.isalpha() for c in stripped):
+            return (CAPS_HEADING, stripped)
+        # Bullet: - , * , •
+        bullet = re.match(r"^[\s]*[-*•]\s+(.*)$", stripped)
+        if bullet:
+            return (BULLET, bullet.group(1).strip())
+        # Numbered: 1. 2. 2a. 2b. or 1) 2)
+        numbered = re.match(r"^[\s]*\d+[a-zA-Z]?[.)]\s+(.*)$", stripped)
+        if numbered:
+            return (NUMBERED, numbered.group(1).strip())
+        # Table: contains |...| or tab-separated
+        if "|" in stripped and stripped.count("|") >= 2:
+            cells = [c.strip() for c in stripped.split("|") if c.strip()]
+            if cells:
+                return (TABLE_ROW, "|".join(cells))
+        if "\t" in stripped:
+            cells = [c.strip() for c in stripped.split("\t")]
+            if any(c for c in cells):
+                return (TABLE_ROW, "\t".join(cells))
+        return (NORMAL, stripped)
+
+    i = 0
+    while i < len(lines):
+        kind, payload = classify(lines[i])
+        if kind == BLANK:
             doc.add_paragraph()
+            i += 1
             continue
-        # Markdown-style headings: # H1, ## H2, ### H3
-        h1 = re.match(r"^#\s+(.+)$", stripped)
-        h2 = re.match(r"^##\s+(.+)$", stripped)
-        h3 = re.match(r"^###\s+(.+)$", stripped)
-        if h1:
-            doc.add_heading(h1.group(1).strip(), level=1)
-        elif h2:
-            doc.add_heading(h2.group(1).strip(), level=2)
-        elif h3:
-            doc.add_heading(h3.group(1).strip(), level=3)
-        else:
-            doc.add_paragraph(stripped)
+        if kind == H1:
+            doc.add_heading(payload, level=1)
+            i += 1
+            continue
+        if kind == H2:
+            doc.add_heading(payload, level=2)
+            i += 1
+            continue
+        if kind == H3:
+            doc.add_heading(payload, level=3)
+            i += 1
+            continue
+        if kind == CAPS_HEADING:
+            doc.add_heading(payload, level=2)
+            i += 1
+            continue
+        if kind == BULLET:
+            while i < len(lines):
+                k, p = classify(lines[i])
+                if k != BULLET:
+                    break
+                doc.add_paragraph(p, style="List Bullet")
+                i += 1
+            continue
+        if kind == NUMBERED:
+            while i < len(lines):
+                k, p = classify(lines[i])
+                if k != NUMBERED:
+                    break
+                doc.add_paragraph(p, style="List Number")
+                i += 1
+            continue
+        if kind == TABLE_ROW:
+            sep = "|" if "|" in payload else "\t"
+            rows = [payload]
+            j = i + 1
+            while j < len(lines):
+                k, p = classify(lines[j])
+                if k != TABLE_ROW:
+                    break
+                rows.append(p)
+                j += 1
+            cells_per_row = [len(r.split(sep)) for r in rows]
+            ncols = max(cells_per_row) if cells_per_row else 1
+            nrows = len(rows)
+            table = doc.add_table(rows=nrows, cols=ncols)
+            table.style = "Table Grid"
+            for ri, row_text in enumerate(rows):
+                cell_vals = row_text.split(sep)
+                for ci, val in enumerate(cell_vals):
+                    if ci < ncols:
+                        table.rows[ri].cells[ci].text = val.strip()
+            doc.add_paragraph()
+            i = j
+            continue
+        # NORMAL
+        doc.add_paragraph(payload)
+        i += 1
+
     buf = io.BytesIO()
     doc.save(buf)
     buf.seek(0)
@@ -369,6 +593,30 @@ async def post_draft(body: DraftRequest):
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.post("/analyse/validate-solution")
+async def post_validate_solution(body: ValidateSolutionRequest):
+    """Lightweight check: is the proposed solution appropriate for the excerpt? Returns one-sentence feedback."""
+    from src.pipeline.llm import completion
+    excerpt = (body.excerpt or "").strip()[:500]
+    proposed = (body.proposed_solution or "").strip()[:1000]
+    if not excerpt or not proposed:
+        return {"feedback": "Provide both excerpt and proposed solution to validate."}
+    system = (
+        "You are a technical standards reviewer. Given an original document excerpt and a proposed replacement/solution, "
+        "you MUST reply in one of two ways:\n"
+        "(1) If the solution resolves the finding: clearly agree, e.g. 'This resolves the issue.', 'Agreed — this addresses the gap.', or 'Solution is appropriate.'\n"
+        "(2) If the solution needs improvement: give specific further suggestions, e.g. 'Suggest improvement: [specific correction with proper spelling and spacing].' "
+        "When suggesting corrections, use proper spelling and spaces between words so the user can copy the text. Be concise and factual."
+    )
+    prompt = f"Original excerpt:\n{excerpt}\n\nProposed solution:\n{proposed}\n\nDoes this solution resolve the finding? Reply with either agreement or 'Suggest improvement: ...' with specific correction:"
+    try:
+        feedback = await completion(prompt, system=system)
+        return {"feedback": (feedback or "").strip() or "No feedback generated."}
+    except Exception as e:
+        log.warning("validate-solution failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/analysis/sessions")
@@ -416,6 +664,53 @@ class SaveAnalysisRequest(BaseModel):
     total_findings: int = 0
     agents_run: list[str] = []
     agent_findings: dict = {}
+    corrections_implemented: int = 0
+
+
+class FindingNoteAttachment(BaseModel):
+    name: str
+    contentType: str = "application/octet-stream"
+    dataBase64: str
+
+
+class FindingNoteRequest(BaseModel):
+    """Add a user note to a finding. Logged and fed into knowledge base."""
+    user_name: str = ""
+    document_id: str = ""
+    tracking_id: str = ""
+    finding_id: str
+    finding_summary: dict = {}
+    agent_key: str = ""
+    note: str
+    attachments: list[FindingNoteAttachment] | None = None
+
+
+@router.get("/analysis/finding-notes")
+async def list_finding_notes_route(limit: int = Query(100, ge=1, le=500)):
+    """Return recent user finding notes (logs view)."""
+    from src.rag.finding_notes import list_finding_notes
+    return list_finding_notes(limit=limit)
+
+
+@router.post("/analysis/finding-notes")
+async def add_finding_note_route(body: FindingNoteRequest):
+    """Store a user note on a finding. Logs to DB and adds to vector store for retrieval."""
+    from src.rag.finding_notes import add_finding_note
+    attachments = [{"name": a.name, "contentType": a.contentType, "dataBase64": a.dataBase64} for a in (body.attachments or [])]
+    result = add_finding_note(
+        user_name=body.user_name,
+        document_id=body.document_id,
+        tracking_id=body.tracking_id,
+        finding_id=body.finding_id,
+        finding_summary=body.finding_summary,
+        agent_key=body.agent_key,
+        note=body.note,
+        attachments=attachments,
+        add_to_vector_store=True,
+    )
+    if not result:
+        raise HTTPException(status_code=400, detail="Could not save finding note (empty note?)")
+    return {"ok": True, "note": result}
 
 
 @router.post("/analysis/save")
@@ -435,7 +730,69 @@ async def save_analysis_session(body: SaveAnalysisRequest):
             agents_run=body.agents_run,
             agent_findings=body.agent_findings,
             workflow_type="review",
+            corrections_implemented=body.corrections_implemented or 0,
         )
         return {"ok": True, "message": "Changes saved"}
     except Exception as e:
         return {"ok": False, "message": str(e)}
+
+
+@router.post("/query")
+async def post_query(body: QueryRequest):
+    """
+    Q&A over the document library. Retrieves relevant chunks, builds context, and returns
+    an answer with citations. Optionally scope to document_id or filter by doc_layer.
+    """
+    from src.rag.retriever import retrieve
+    from src.pipeline.llm import completion
+
+    question = (body.question or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="question is required")
+
+    doc_layer = body.doc_layer if body.doc_layer in ("policy", "principle", "sop", "work_instruction") else None
+    chunks = retrieve(
+        doc_layer=doc_layer,
+        document_id=body.document_id,
+        query_text=question,
+        limit=15,
+    )
+    if not chunks:
+        return {"answer": "No relevant documents were found for your question. Try rephrasing or broadening your query.", "citations": []}
+
+    context_parts = []
+    seen = set()
+    for i, c in enumerate(chunks):
+        key = (c.document_id or "", c.chunk_index or 0)
+        if key in seen:
+            continue
+        seen.add(key)
+        title = getattr(c, "title", None) or c.document_id or "Document"
+        context_parts.append(f"[{i + 1}] ({title}):\n{c.text}")
+    context = "\n\n".join(context_parts)
+
+    system = (
+        "You are a helpful assistant answering questions about technical standards documents. "
+        "Use only the provided context. If the context does not contain enough information, say so. "
+        "Cite sources by number (e.g. [1], [2]). Be concise and accurate."
+    )
+    prompt = f"Context:\n\n{context}\n\nQuestion: {question}\n\nAnswer:"
+
+    try:
+        answer = await completion(prompt, system=system)
+    except Exception as e:
+        log.warning("Query LLM failed: %s", e)
+        raise HTTPException(status_code=500, detail="Failed to generate answer")
+
+    seen_ids = set()
+    unique_citations = []
+    for c in chunks:
+        doc_id = c.document_id or ""
+        if doc_id and doc_id not in seen_ids:
+            seen_ids.add(doc_id)
+            unique_citations.append({
+                "document_id": doc_id,
+                "title": getattr(c, "title", None) or doc_id or "Document",
+            })
+
+    return {"answer": answer, "citations": unique_citations}

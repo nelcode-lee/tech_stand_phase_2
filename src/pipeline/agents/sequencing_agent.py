@@ -38,8 +38,8 @@ ABSOLUTE RULES
 - No guessing the correct sequence.
 - Only flag issues that are demonstrably wrong based on the text.
 
-CITATIONS
-When a sequencing issue relates to BRCGS, Cranswick standards, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y", "Cranswick Std §X.Y". Leave [] when not applicable.
+CITATIONS — ALWAYS INCLUDE WHEN POSSIBLE
+When a sequencing issue relates to BRCGS, Cranswick standards, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y", "Cranswick Std §X.Y". If such sources are in the context and apply, include at least one citation. Leave [] only when no such source could apply.
 
 OUTPUT
 Return only a JSON array. Each item has:
@@ -48,7 +48,7 @@ Return only a JSON array. Each item has:
 - issue: specific sequencing or logic problem
 - impact: risk or operational consequence (factual only)
 - recommendation: required change while staying within document content
-- citations: array of BRCGS/Cranswick/policy refs when applicable (optional)
+- citations: array of BRCGS/Cranswick/policy refs — include when applicable
 
 Example: [{"location": "Step 5", "excerpt": "5. Pack product into boxes. 6. Record temperature.", "issue": "Temperature check occurs after product has been packed", "impact": "CCP verification too late", "recommendation": "Move temperature verification before packing step", "citations": ["BRCGS Clause 5.8"]}]
 If no issues, return [].""" + DOCUMENT_REFERENCE_RULE
@@ -67,8 +67,14 @@ class SequencingAgent(BaseAgent):
             return ctx
 
         try:
-            prompt = f"Analyse the following procedure for sequencing and logical flow issues:\n\n{content[:12000]}"
-            raw = await completion(prompt, system=SEQUENCING_SYSTEM_PROMPT)
+            prompt_parts = ["Analyse the following procedure for sequencing and logical flow issues:\n\n", content[:12000]]
+            if ctx.parent_policy and ctx.parent_policy.content:
+                prompt_parts.append(f"\n\nPARENT POLICY (use for citations when applicable):\n{ctx.parent_policy.content[:6000]}")
+            prompt = "".join(prompt_parts)
+            system = SEQUENCING_SYSTEM_PROMPT
+            if getattr(ctx, "glossary_block", None) and (ctx.glossary_block or "").strip():
+                system += "\n\n" + (ctx.glossary_block or "").strip()
+            raw = await completion(prompt, system=system)
             items = parse_json_array(raw)
             for item in items:
                 if isinstance(item, dict) and item.get("location") and item.get("issue") and item.get("impact") and item.get("recommendation"):

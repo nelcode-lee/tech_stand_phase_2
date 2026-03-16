@@ -1,3 +1,5 @@
+import { useState, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -6,19 +8,40 @@ import {
   FilePlus2,
   Settings,
   CheckCircle2,
-  Upload,
+  Database,
   FlaskConical,
+  Info,
 } from 'lucide-react';
 import { AnalysisProvider, useAnalysis } from '../context/AnalysisContext';
+import { SITES_OPTIONS } from '../constants/sites';
+import ChatBotWidget from './ChatBotWidget';
 import './Layout.css';
 
 function Sidebar() {
-  const { workflowMode, setWorkflowMode } = useAnalysis();
+  const { workflowMode, setWorkflowMode, selectedSite, setSelectedSite } = useAnalysis();
   const location = useLocation();
   const path = location.pathname;
+  const [createInfoOpen, setCreateInfoOpen] = useState(false);
+  const [createInfoPos, setCreateInfoPos] = useState({ top: 0, left: 0 });
+  const createInfoTriggerRef = useRef(null);
+
+  function showCreateInfo() {
+    const el = createInfoTriggerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    setCreateInfoPos({
+      top: rect.top + rect.height / 2,
+      left: rect.right + 8,
+    });
+    setCreateInfoOpen(true);
+  }
+
+  function hideCreateInfo() {
+    setCreateInfoOpen(false);
+  }
 
   function inSession() {
-    return ['/configure', '/ingest', '/analyse', '/finalize', '/review/configure', '/review/ingest', '/review/analyse', '/review/finalize', '/create/configure', '/create/ingest', '/create/analyse', '/create/finalize'].some(p => path.startsWith(p));
+    return ['/configure', '/analyse', '/finalize', '/review/configure', '/review/analyse', '/review/finalize', '/create/configure', '/create/analyse', '/create/finalize'].some(p => path.startsWith(p));
   }
 
   return (
@@ -26,6 +49,20 @@ function Sidebar() {
       <div className="sidebar-brand">
         <img src="/cranswick.png" alt="Cranswick" className="sidebar-logo" />
         <span className="sidebar-brand-sub">Technical Standards Agent</span>
+      </div>
+
+      <div className="sidebar-site-select">
+        <label htmlFor="sidebar-site" className="sidebar-site-label">Site</label>
+        <select
+          id="sidebar-site"
+          className="sidebar-site-dropdown"
+          value={selectedSite}
+          onChange={(e) => setSelectedSite(e.target.value)}
+        >
+          {SITES_OPTIONS.map(({ value, label }) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
+        </select>
       </div>
 
       <nav className="sidebar-nav">
@@ -48,14 +85,41 @@ function Sidebar() {
           <FileSearch size={16} />
           Review a Document
         </NavLink>
-        <NavLink
-          to="/create/configure"
-          className={({ isActive }) => `sidebar-link ${isActive || path.startsWith('/create') ? 'active' : ''}`}
-          onClick={() => setWorkflowMode('create')}
-        >
-          <FilePlus2 size={16} />
-          Create a Document
-        </NavLink>
+        <div className="sidebar-link-with-info">
+          <NavLink
+            to="/create/configure"
+            className={({ isActive }) => `sidebar-link ${isActive || path.startsWith('/create') ? 'active' : ''}`}
+            onClick={() => setWorkflowMode('create')}
+          >
+            <FilePlus2 size={16} />
+            Create a Document
+          </NavLink>
+          <span
+            ref={createInfoTriggerRef}
+            className="sidebar-info-trigger"
+            title="For new docs only"
+            onMouseEnter={showCreateInfo}
+            onMouseLeave={hideCreateInfo}
+          >
+            <Info size={14} />
+          </span>
+          {createInfoOpen && createPortal(
+            <div
+              className="sidebar-info-popup sidebar-info-popup-portal"
+              style={{
+                position: 'fixed',
+                top: createInfoPos.top,
+                left: createInfoPos.left,
+                transform: 'translateY(-50%)',
+              }}
+              onMouseEnter={showCreateInfo}
+              onMouseLeave={hideCreateInfo}
+            >
+              For new documents only. Use to build brand-new SOPs from ingested policies and standards — not for reviewing existing documents.
+            </div>,
+            document.body
+          )}
+        </div>
 
         {inSession() && (
           <>
@@ -77,18 +141,19 @@ function Sidebar() {
 
 function SessionSteps({ mode, path }) {
   const base = mode === 'create' ? '/create' : '/review';
+  // Core usability flow: locate/upload → analyse → review findings → draft for HITL → submit to Library
   const steps = mode === 'create'
     ? [
-        { to: `${base}/configure`, label: 'Configure', icon: Settings },
-        { to: `${base}/ingest`, label: 'Upload', icon: Upload },
-        { to: `${base}/analyse`, label: 'Analyse', icon: FlaskConical },
-        { to: `${base}/finalize`, label: 'Finalise', icon: CheckCircle2 },
+        { to: `${base}/configure`, label: 'Configure', icon: Database },
+        { to: `${base}/analyse/overview`, label: 'Analyse', icon: FlaskConical },
+        { to: `${base}/analyse/draft`, label: 'Draft for HITL', icon: FilePlus2 },
+        { to: `${base}/finalize`, label: 'Submit to Library', icon: CheckCircle2 },
       ]
     : [
-        { to: `${base}/configure`, label: 'Configure', icon: Settings },
-        { to: `${base}/ingest`, label: 'Upload', icon: Upload },
-        { to: `${base}/analyse`, label: 'Review Findings', icon: FileSearch },
-        { to: `${base}/finalize`, label: 'Resolve & Close', icon: CheckCircle2 },
+        { to: `${base}/configure`, label: 'Configure', icon: Database },
+        { to: `${base}/analyse/overview`, label: 'Analyse', icon: FlaskConical },
+        { to: `${base}/analyse/draft`, label: 'Draft for HITL', icon: FilePlus2 },
+        { to: `${base}/finalize`, label: 'Submit to Library', icon: CheckCircle2 },
       ];
 
   return (
@@ -111,6 +176,7 @@ function SessionSteps({ mode, path }) {
 }
 
 function LayoutInner() {
+  const { config } = useAnalysis();
   return (
     <div className="app-shell">
       <Sidebar />
@@ -119,6 +185,7 @@ function LayoutInner() {
           <Outlet />
         </main>
       </div>
+      <ChatBotWidget documentId={config?.documentId || undefined} docLayer={config?.docLayer || undefined} />
     </div>
   );
 }

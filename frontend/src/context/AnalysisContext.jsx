@@ -36,6 +36,8 @@ export function AnalysisProvider({ children }) {
     documentId: '',
   });
   const [workflowMode, setWorkflowMode] = useState('review'); // 'review' | 'create'
+  const [pendingFiles, setPendingFiles] = useState([]); // Files added on Upload step, to be ingested on Ingest step
+  const [selectedSite, setSelectedSite] = useState('all'); // Global site filter for Library/Dashboard
 
   // Append-only log of completed analysis sessions for Dashboard / Library.
   // Each entry: { trackingId, documentId, title, docLayer, sites, overallRisk,
@@ -55,6 +57,17 @@ export function AnalysisProvider({ children }) {
 
   const reloadSessionLog = useCallback(() => {
     setSessionLog(loadPersistedSessions());
+  }, []);
+
+  const removeSessionFromLog = useCallback((trackingId) => {
+    setSessionLog(log => {
+      const next = log.filter(s => s.trackingId !== trackingId);
+      try {
+        const toPersist = next.slice(0, 100).map(({ result: _r, ...rest }) => rest);
+        localStorage.setItem(SESSION_LOG_KEY, JSON.stringify(toPersist));
+      } catch (_) { /* ignore */ }
+      return next;
+    });
   }, []);
 
   function recordSession(apiResult, sessionConfig, wfMode) {
@@ -117,9 +130,14 @@ export function AnalysisProvider({ children }) {
         setConfig,
         workflowMode,
         setWorkflowMode,
+        pendingFiles,
+        setPendingFiles,
+        selectedSite,
+        setSelectedSite,
         sessionLog,
         recordSession,
         reloadSessionLog,
+        removeSessionFromLog,
         allAgentKeys: ALL_AGENTS_KEYS,
         agentLabels: AGENT_LABELS,
       }}
@@ -144,6 +162,14 @@ const DEFAULTS = {
   setConfig: () => {},
   workflowMode: 'review',
   setWorkflowMode: () => {},
+  pendingFiles: [],
+  setPendingFiles: () => {},
+  selectedSite: 'all',
+  setSelectedSite: () => {},
+  sessionLog: [],
+  recordSession: () => {},
+  reloadSessionLog: () => {},
+  removeSessionFromLog: () => {},
   allAgentKeys: ALL_AGENTS_KEYS,
   agentLabels: AGENT_LABELS,
 };

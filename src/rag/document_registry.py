@@ -10,6 +10,7 @@ from psycopg2.extras import RealDictCursor
 SUPABASE_DB_URL = os.environ.get("SUPABASE_DB_URL", "")
 TABLE_NAME = "documents"
 CONTENT_TABLE_NAME = "document_content"
+SOURCE_FILE_TABLE_NAME = "document_source_files"
 
 
 def _get_conn():
@@ -157,6 +158,57 @@ def ensure_document_content_table():
             pass
 
 
+def ensure_source_file_table():
+    """Create document_source_files table for storing original DOCX bytes (procedures only)."""
+    with _cursor() as cur:
+        cur.execute(f"""
+            CREATE TABLE IF NOT EXISTS public.{SOURCE_FILE_TABLE_NAME} (
+                document_id TEXT PRIMARY KEY,
+                file_bytes BYTEA NOT NULL,
+                content_type TEXT NOT NULL DEFAULT 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+
+
+def upsert_source_file(document_id: str, file_bytes: bytes, content_type: str = "application/vnd.openxmlformats-officedocument.wordprocessingml.document") -> None:
+    """Store or update original file bytes for a document (procedures: DOCX)."""
+    if not document_id or not file_bytes:
+        return
+    try:
+        ensure_source_file_table()
+        with _cursor() as cur:
+            cur.execute(f"""
+                INSERT INTO public.{SOURCE_FILE_TABLE_NAME} (document_id, file_bytes, content_type, created_at)
+                VALUES (%s, %s, %s, NOW())
+                ON CONFLICT (document_id) DO UPDATE SET
+                    file_bytes = EXCLUDED.file_bytes,
+                    content_type = EXCLUDED.content_type,
+                    created_at = NOW()
+            """, (document_id, psycopg2.Binary(file_bytes), content_type))
+    except Exception:
+        pass
+
+
+def get_source_file(document_id: str) -> tuple[bytes | None, str | None]:
+    """Return (file_bytes, content_type) for a document. Returns (None, None) if not stored."""
+    if not document_id:
+        return None, None
+    try:
+        ensure_source_file_table()
+        with _cursor() as cur:
+            cur.execute(
+                f"SELECT file_bytes, content_type FROM public.{SOURCE_FILE_TABLE_NAME} WHERE document_id = %s",
+                (document_id,),
+            )
+            row = cur.fetchone()
+        if row and row.get("file_bytes"):
+            return bytes(row["file_bytes"]), row.get("content_type") or "application/octet-stream"
+    except Exception:
+        pass
+    return None, None
+
+
 def upsert_document_content(document_id: str, content: str) -> None:
     """Store or update full document text and parsed sections for cross-reference with findings."""
     if not document_id or not content:
@@ -250,6 +302,21 @@ def delete_document_content(document_id: str) -> None:
         pass
 
 
+def delete_source_file(document_id: str) -> None:
+    """Remove stored source file when document is deleted."""
+    if not document_id:
+        return
+    try:
+        ensure_source_file_table()
+        with _cursor() as cur:
+            cur.execute(
+                f"DELETE FROM public.{SOURCE_FILE_TABLE_NAME} WHERE document_id = %s",
+                (document_id,),
+            )
+    except Exception:
+        pass
+
+
 def upsert_document(
     document_id: str,
     title: str,
@@ -293,6 +360,23 @@ def upsert_document(
             source_path,
             chunk_count,
         ))
+
+
+def get_document_policy_ref(document_id: str) -> str | None:
+    """Return policy_ref for a document, or None if not found/not set."""
+    if not document_id:
+        return None
+    try:
+        ensure_table()
+    except Exception:
+        return None
+    with _cursor() as cur:
+        cur.execute(
+            f"SELECT policy_ref FROM public.{TABLE_NAME} WHERE document_id = %s",
+            (document_id,),
+        )
+        row = cur.fetchone()
+    return (row.get("policy_ref") or "").strip() or None if row else None
 
 
 def list_documents() -> list[dict]:
@@ -437,6 +521,7 @@ def delete_document(document_id: str) -> None:
     if not document_id:
         return
     delete_document_content(document_id)
+    delete_source_file(document_id)
     with _cursor() as cur:
         cur.execute(f"DELETE FROM public.{TABLE_NAME} WHERE document_id = %s", (document_id,))
 

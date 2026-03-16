@@ -2,7 +2,12 @@
 import json
 from pathlib import Path
 
-from src.pipeline.agent_rules import DOCUMENT_REFERENCE_RULE, JOB_TITLE_RULE, TOLERANCE_VS_REFERENCE_RULE
+from src.pipeline.agent_rules import (
+    DOCUMENT_REFERENCE_RULE,
+    JOB_TITLE_RULE,
+    TOLERANCE_VS_REFERENCE_RULE,
+    CORRECTIVE_ACTIONS_RULE,
+)
 from src.pipeline.base_agent import BaseAgent
 from src.pipeline.llm import completion, parse_json_array
 from src.pipeline.models import PipelineContext, RiskGap, RiskLevel
@@ -92,6 +97,9 @@ DOCUMENT CONTEXT
 - Parent policy: {parent_policy_summary}
 - Sibling documents (same layer, other sites): {sibling_summary}
 - Conflicts already identified by the Conflict agent: {conflict_summary}
+{agent_instructions_block}
+{prior_feedback_block}
+{glossary_block}
 
 DOMAIN SEVERITY RULES (apply these when scoring)
 {severity_rules}
@@ -114,7 +122,7 @@ CORE PRINCIPLES
 YOU MUST IDENTIFY (inclusive of, but not limited to):
 1. Unstated assumptions: assumed operator skills/knowledge, assumed equipment conditions, calibration or hygiene baseline assumed, prerequisites not stated
 2. Missing critical information:
-   - Corrective actions (what to do when something goes wrong)
+   - Corrective actions (what to do when something goes wrong) — but do NOT flag when the document describes specific actions in the same paragraph (who to inform, what to do, timeframes, escalation, product handling). See CORRECTIVE_ACTIONS_RULE.
    - Escalation procedure: who to escalate to, the trigger point (condition or threshold), and how to escalate
    - Verification methods and record-keeping requirements (what must be recorded, where, and for how long)
    - Responsible role or job title not named (job titles are appropriate; named individuals are not for controlled procedures)
@@ -130,8 +138,8 @@ RULES
 - Each gap must be a separate JSON object. Never merge two gaps into one object.
 - Score every gap using the FMEA dimensions above.
 
-CITATIONS
-When a gap relates to BRCGS, Cranswick standards, parent policy, or regulatory requirements, include a "citations" array with the relevant reference(s). Format: "BRCGS Clause X.Y", "Cranswick Std §X.Y", "parent policy [title]", or "Reg (EC) 852/2004 Art X". Leave [] when not applicable.
+CITATIONS — INCLUDE FOR EVERY FINDING WHERE APPLICABLE
+You MUST include a "citations" array for each gap when it relates to BRCGS, Cranswick standards, parent policy, or regulatory requirements. When the PARENT POLICY section is provided below, use it: if the gap relates to a requirement that appears in that policy, cite it as "parent policy [<exact title from context>]". Also use "BRCGS Clause X.Y", "Cranswick Std §X.Y", or "Reg (EC) 852/2004 Art X" when applicable. Prefer at least one citation per finding for safety, traceability, corrective action, or compliance-related gaps. Leave [] only when no provided source could reasonably apply.
 
 OUTPUT FORMAT
 Return ONLY a JSON array. Each object:
@@ -140,7 +148,7 @@ Return ONLY a JSON array. Each object:
 CRITICAL: "excerpt" must be the exact text from the document that relates to the gap — this is used to highlight the relevant passage in the original. If the gap concerns missing content, quote the nearest surrounding text (e.g. the step or paragraph where the gap applies).
 
 If no issues found, return [].
-""" + DOCUMENT_REFERENCE_RULE + JOB_TITLE_RULE + TOLERANCE_VS_REFERENCE_RULE
+""" + DOCUMENT_REFERENCE_RULE + JOB_TITLE_RULE + TOLERANCE_VS_REFERENCE_RULE + CORRECTIVE_ACTIONS_RULE
 
 
 def _build_system_prompt(ctx: PipelineContext) -> str:
@@ -171,6 +179,26 @@ def _build_system_prompt(ctx: PipelineContext) -> str:
         sibling_summary = "\n" + "\n".join(sibling_lines)
     else:
         sibling_summary = "none retrieved"
+
+    # --- agent instructions (user-provided knowledge; never supersedes policy) ---
+    if ctx.agent_instructions and ctx.agent_instructions.strip():
+        agent_instructions_block = (
+            "\nADDITIONAL CONTEXT (from requester — use to inform your analysis; policy and standards always take precedence):\n"
+            f"{ctx.agent_instructions.strip()}\n"
+        )
+    else:
+        agent_instructions_block = ""
+
+    # --- prior feedback (user-added knowledge; check before reasoning) ---
+    if getattr(ctx, "prior_feedback", None):
+        prior = [f for f in ctx.prior_feedback if (f.get("note") or "").strip()]
+        if prior:
+            prior_lines = [f"  - [{f.get('agent_key', '')}] {f.get('note', '').strip()}" for f in prior[:15]]
+            prior_feedback_block = "\nPRIOR FEEDBACK (from users — check before reasoning; align recommendations with this where relevant):\n" + "\n".join(prior_lines) + "\n"
+        else:
+            prior_feedback_block = ""
+    else:
+        prior_feedback_block = ""
 
     # --- conflicts summary ---
     if ctx.conflicts:
@@ -212,12 +240,19 @@ def _build_system_prompt(ctx: PipelineContext) -> str:
     ]
     escalation_contacts = "\n".join(escalation_lines) if escalation_lines else "  (not configured)"
 
+    glossary_block = ""
+    if getattr(ctx, "glossary_block", None) and (ctx.glossary_block or "").strip():
+        glossary_block = "\nSTANDARD GLOSSARY (use for consistent terminology; cite 'glossary' when a finding relates to a defined term):\n" + (ctx.glossary_block or "").strip()
+
     return _SYSTEM_PROMPT_TEMPLATE.format(
         doc_layer=doc_layer,
         sites=sites,
         parent_policy_summary=parent_policy_summary,
         sibling_summary=sibling_summary,
         conflict_summary=conflict_summary,
+        agent_instructions_block=agent_instructions_block,
+        prior_feedback_block=prior_feedback_block,
+        glossary_block=glossary_block,
         severity_rules=severity_rules,
         severity_scale=severity_scale,
         scope_scale=scope_scale,
@@ -252,12 +287,12 @@ def _build_prompt(ctx: PipelineContext) -> str:
 
     # Primary document (cleansed)
     if ctx.cleansed_content:
-        sections.append(f"PRIMARY DOCUMENT (cleansed):\n{ctx.cleansed_content[:8000]}")
+        sections.append(f"PRIMARY DOCUMENT (cleansed):\n{ctx.cleansed_content[:12000]}")
 
-    # Parent policy (if available)
+    # Parent policy (if available) — enough content for citations
     if ctx.parent_policy:
         sections.append(
-            f"PARENT POLICY — {ctx.parent_policy.title}:\n{ctx.parent_policy.content[:2000]}"
+            f"PARENT POLICY — {ctx.parent_policy.title} (cite as 'parent policy [{ctx.parent_policy.title}]' when the finding relates to this):\n{ctx.parent_policy.content[:6000]}"
         )
 
     # Sibling docs (other sites — capped to avoid token overrun)

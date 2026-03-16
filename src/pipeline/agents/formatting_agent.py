@@ -41,8 +41,8 @@ ABSOLUTE RULES
 - No inventing new information. Use the document title only when provided in the prompt or explicitly stated in the document text.
 - Only enforce Golden Template elements if explicitly provided.
 
-CITATIONS
-When a formatting gap relates to BRCGS, Cranswick Golden Template, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y", "Cranswick Template §X". Leave [] when not applicable.
+CITATIONS — ALWAYS INCLUDE WHEN POSSIBLE
+When a formatting gap relates to BRCGS, Cranswick Golden Template, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y", "Cranswick Template §X". If such sources are in the context and apply, include at least one citation. Leave [] only when no such source could apply.
 
 OUTPUT
 Return only a JSON array. Each item has:
@@ -50,7 +50,7 @@ Return only a JSON array. Each item has:
 - excerpt: exact quote from document — the text that relates to this issue (copy-paste from source). Used to highlight the relevant passage.
 - issue: format or structural problem
 - recommendation: specific fix to align with template or improve structure
-- citations: array of BRCGS/Cranswick refs when applicable (optional)
+- citations: array of BRCGS/Cranswick refs — include when applicable
 
 Example: [{"location": "Section 3", "excerpt": "3. Procedure steps - Check temperature - Record result", "issue": "Steps not numbered", "recommendation": "Add step numbers (1, 2, 3...) for clarity", "citations": ["Cranswick Template §3"]}]
 If no issues, return [].""" + DOCUMENT_REFERENCE_RULE + PURPOSE_OBJECTIVE_RULE
@@ -75,8 +75,13 @@ class FormattingAgent(BaseAgent):
             if doc_title:
                 prompt_parts.append(f"\nDocument title (from metadata): {doc_title}")
             prompt_parts.append(f"\n\nContent:\n{content[:12000]}")
+            if ctx.parent_policy and ctx.parent_policy.content:
+                prompt_parts.append(f"\n\nPARENT POLICY (use for citations when applicable):\n{ctx.parent_policy.content[:6000]}")
             prompt = "".join(prompt_parts)
-            raw = await completion(prompt, system=FORMATTING_SYSTEM_PROMPT)
+            system = FORMATTING_SYSTEM_PROMPT
+            if getattr(ctx, "glossary_block", None) and (ctx.glossary_block or "").strip():
+                system += "\n\n" + (ctx.glossary_block or "").strip()
+            raw = await completion(prompt, system=system)
             items = parse_json_array(raw)
             for item in items:
                 if isinstance(item, dict) and item.get("location") and item.get("issue") and item.get("recommendation"):

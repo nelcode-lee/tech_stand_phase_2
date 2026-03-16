@@ -3,6 +3,21 @@
  */
 const BASE = import.meta.env.VITE_API_URL || '/api';
 
+/** Policy-layer variants sent as 'policy' to the backend. */
+export function docLayerForApi(layer) {
+  if (layer === 'policy_brcgs' || layer === 'policy_cranswick') return 'policy';
+  return layer || 'sop';
+}
+
+function errorMessage(err, fallback) {
+  if (err.detail) {
+    return Array.isArray(err.detail)
+      ? err.detail.map((d) => d.msg || JSON.stringify(d)).join('; ')
+      : String(err.detail);
+  }
+  return err.message || fallback;
+}
+
 async function request(path, options = {}) {
   const url = `${BASE}${path}`;
   const res = await fetch(url, {
@@ -15,7 +30,7 @@ async function request(path, options = {}) {
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || err.message || res.statusText || `HTTP ${res.status}`);
+    throw new Error(errorMessage(err, res.statusText || `HTTP ${res.status}`));
   }
   return res.json();
 }
@@ -26,8 +41,9 @@ export async function health() {
 
 export async function ingestFile(file, metadata = {}) {
   const form = new FormData();
+  const docId = (metadata.document_id || '').trim() || file.name.replace(/\.[^.]+$/, '').replace(/\s+/g, '-') || 'document';
   form.append('file', file);
-  form.append('document_id', metadata.document_id || file.name.replace(/\.[^.]+$/, ''));
+  form.append('document_id', docId);
   form.append('doc_layer', metadata.doc_layer || 'sop');
   form.append('sites', metadata.sites ? (Array.isArray(metadata.sites) ? metadata.sites.join(',') : metadata.sites) : '');
   if (metadata.policy_ref) form.append('policy_ref', metadata.policy_ref);
@@ -37,7 +53,13 @@ export async function ingestFile(file, metadata = {}) {
   const res = await fetch(url, { method: 'POST', body: form });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.detail || res.statusText || `HTTP ${res.status}`);
+    const detail = err.detail;
+    const message = Array.isArray(detail)
+      ? detail.map((d) => d.msg || JSON.stringify(d)).join('; ')
+      : typeof detail === 'string'
+        ? detail
+        : res.statusText || `HTTP ${res.status}`;
+    throw new Error(message);
   }
   return res.json();
 }
@@ -46,6 +68,36 @@ export async function analyse(body) {
   return request('/analyse', {
     method: 'POST',
     body: JSON.stringify(body),
+  });
+}
+
+/**
+ * Re-validate a proposed solution against the original excerpt. Returns { feedback }.
+ */
+export async function validateSolution(excerpt, proposedSolution) {
+  return request('/analyse/validate-solution', {
+    method: 'POST',
+    body: JSON.stringify({
+      excerpt: excerpt || '',
+      proposed_solution: proposedSolution || '',
+    }),
+  });
+}
+
+/**
+ * Q&A over the document library. Returns { answer, citations }.
+ * @param {string} question - The question to answer
+ * @param {string} [documentId] - Optional: scope to one document
+ * @param {string} [docLayer] - Optional: filter by layer (policy, principle, sop, work_instruction)
+ */
+export async function queryDocuments(question, documentId, docLayer) {
+  return request('/query', {
+    method: 'POST',
+    body: JSON.stringify({
+      question,
+      document_id: documentId || undefined,
+      doc_layer: docLayer || undefined,
+    }),
   });
 }
 
@@ -78,11 +130,37 @@ export async function deleteDocument(documentId) {
 }
 
 /**
+ * Reset dashboard metrics (delete all analysis sessions) and prune library to only
+ * "local-Cranswick Manufacturing Standard v2" and "BRCGS - Food Safety Standard - V9".
+ * Returns { ok, sessions_deleted, documents_removed, documents_kept }.
+ */
+export async function resetMetricsAndPruneLibrary() {
+  return request('/ingest/admin/reset-metrics-and-library', {
+    method: 'POST',
+  });
+}
+
+/**
  * Fetch full document content for cross-reference with findings (split view).
  * Returns { document_id, content, sections }.
  */
 export async function getDocumentContent(documentId) {
   return request(`/ingest/documents/${encodeURIComponent(documentId)}/content`);
+}
+
+/**
+ * Fetch original DOCX file bytes for procedures (sop, work_instruction).
+ * Returns a Blob for use with mammoth.js. 404 if source file not stored.
+ */
+export async function getDocumentFile(documentId) {
+  const url = `${BASE}/ingest/documents/${encodeURIComponent(documentId)}/file`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    if (res.status === 404) return null;
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || res.statusText || `HTTP ${res.status}`);
+  }
+  return res.blob();
 }
 
 /**
@@ -99,6 +177,24 @@ export async function listAnalysisSessions(limit = 50) {
  */
 export async function getAnalysisSession(trackingId) {
   return request(`/analysis/sessions/${encodeURIComponent(trackingId)}`);
+}
+
+/**
+ * Fetch user finding notes (logs). Returns [{ id, user_name, document_id, tracking_id, finding_id, finding_summary, agent_key, note, attachments, created_at }].
+ */
+export async function listFindingNotes(limit = 100) {
+  return request(`/analysis/finding-notes?limit=${limit}`);
+}
+
+/**
+ * Add a user note to a finding. Logged and fed into knowledge base.
+ * @param {object} body - { user_name, document_id, tracking_id, finding_id, finding_summary, agent_key, note, attachments? }
+ */
+export async function addFindingNote(body) {
+  return request('/analysis/finding-notes', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
 }
 
 /**

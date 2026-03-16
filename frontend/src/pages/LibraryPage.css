@@ -13,8 +13,12 @@
   align-items: flex-start;
   justify-content: space-between;
   margin-bottom: var(--space-xl);
-  gap: var(--space-md);
+  gap: var(--space-lg);
   flex-shrink: 0;
+}
+
+.library-header > div:first-child {
+  min-width: 0;
 }
 
 .library-title {
@@ -31,6 +35,81 @@
   color: var(--text-secondary);
 }
 
+/* Header actions: single row when space allows, compact, top-right */
+.library-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+}
+
+@media (max-width: 760px) {
+  .library-header-actions {
+    flex-wrap: wrap;
+  }
+}
+
+.library-header-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border-radius: 6px;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: opacity 0.15s, box-shadow 0.15s, border-color 0.15s;
+  border: none;
+}
+
+.library-header-btn.icon-only {
+  padding: var(--space-sm);
+  background: transparent;
+  color: var(--yb-blue);
+  border: 1px solid var(--border-card);
+}
+
+.library-header-btn.icon-only:hover {
+  background: rgba(50,65,87,0.05);
+  border-color: var(--yb-blue);
+}
+
+.library-header-btn.primary {
+  background: var(--yb-blue);
+  color: white;
+}
+
+.library-header-btn.primary:hover {
+  opacity: 0.92;
+  box-shadow: 0 4px 12px rgba(50,65,87,0.3);
+}
+
+.library-header-btn.secondary {
+  background: transparent;
+  color: var(--yb-blue);
+  border: 1px solid var(--border-card);
+}
+
+.library-header-btn.secondary:hover {
+  background: rgba(50,65,87,0.05);
+  border-color: var(--yb-blue);
+}
+
+/* Gold next-action (matches sidebar current step) — overrides .primary when present */
+.library-header-btn.primary.next-action {
+  background: var(--cranswick-di-serria);
+  border: none;
+}
+
+.library-header-btn.primary.next-action:hover {
+  box-shadow: 0 4px 12px rgba(210, 159, 80, 0.35);
+}
+
+/* Legacy class for table row actions (unchanged) */
 .library-create-btn {
   display: flex;
   align-items: center;

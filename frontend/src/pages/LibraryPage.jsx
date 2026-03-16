@@ -7,10 +7,12 @@ import SitesSelect from '../components/SitesSelect';
 import { ALL_SITES_VALUES, resolveSitesForApi, formatSitesForDisplay } from '../constants/sites';
 import './LibraryPage.css';
 
-const LAYER_ORDER = { policy: 0, principle: 1, sop: 2, work_instruction: 3 };
+const LAYER_ORDER = { policy: 0, policy_brcgs: 0, policy_cranswick: 0, principle: 1, sop: 2, work_instruction: 3 };
 
 const LAYER_LABEL = {
   policy: 'Policy',
+  policy_brcgs: 'BRCGS',
+  policy_cranswick: 'Cranswick Standards',
   principle: 'Principle',
   sop: 'SOP',
   work_instruction: 'Work Instruction',
@@ -43,7 +45,7 @@ function deriveStatus(/* doc */) {
 export default function LibraryPage() {
   const navigate = useNavigate();
   const location = useLocation();
-  const { setWorkflowMode, setConfig, sessionLog } = useAnalysis();
+  const { setWorkflowMode, setConfig, sessionLog, selectedSite } = useAnalysis();
 
   const [docs, setDocs] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -152,9 +154,16 @@ export default function LibraryPage() {
     });
   }, [docs, sessionLog]);
 
-  // Filter
+  // Filter (policy docs always show; otherwise filter by selected site)
   const displayed = useMemo(() => {
     let rows = merged;
+    if (selectedSite !== 'all') {
+      rows = rows.filter((doc) => {
+        if (doc.doc_layer === 'policy') return true;
+        const sites = Array.isArray(doc.sites) ? doc.sites : (doc.sites ? String(doc.sites).split(/[,\s]+/).filter(Boolean) : []);
+        return sites.includes(selectedSite);
+      });
+    }
     if (layerFilter !== 'all') rows = rows.filter(d => d.doc_layer === layerFilter);
     if (search.trim()) {
       const q = search.toLowerCase();
@@ -165,7 +174,7 @@ export default function LibraryPage() {
       );
     }
     return rows;
-  }, [merged, layerFilter, search]);
+  }, [merged, selectedSite, layerFilter, search]);
 
   const overdueCount = merged.filter(d => d.status === 'overdue').length;
   const dueCount     = merged.filter(d => d.status === 'review-due').length;
@@ -250,19 +259,23 @@ export default function LibraryPage() {
         <div>
           <h1 className="library-title">Document Library</h1>
           <p className="library-subtitle">
-            Technical standards across all sites
-            {docs.length > 0 && ` — ${docs.length} document${docs.length !== 1 ? 's' : ''} in store`}
+            Ingested document store — pick a document and use Review to run analysis, or add new documents via Upload.
+            {docs.length > 0 && ` ${docs.length} document${docs.length !== 1 ? 's' : ''} in store.`}
           </p>
         </div>
-        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <button type="button" className="row-action-btn" onClick={fetchDocs} title="Refresh">
+        <div className="library-header-actions">
+          <button type="button" className="library-header-btn icon-only" onClick={fetchDocs} title="Refresh">
             <RefreshCw size={14} />
           </button>
-          <button type="button" className="library-create-btn" onClick={() => navigate('/library/upload')}>
+          <button type="button" className="library-header-btn primary next-action" onClick={() => navigate('/review/configure')}>
+            <FileSearch size={16} />
+            Review a document
+          </button>
+          <button type="button" className="library-header-btn secondary" onClick={() => navigate('/library/upload')}>
             <Upload size={16} />
             Add to Library
           </button>
-          <button type="button" className="library-create-btn secondary" onClick={startCreate}>
+          <button type="button" className="library-header-btn secondary" onClick={startCreate} title="Build a new SOP from ingested policies and standards">
             <FilePlus2 size={16} />
             New Document
           </button>

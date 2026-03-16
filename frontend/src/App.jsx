@@ -5,7 +5,6 @@ import LibraryPage from './pages/LibraryPage'
 import SettingsPage from './pages/SettingsPage'
 import LibraryUploadPage from './pages/LibraryUploadPage'
 import ConfigurePage from './pages/ConfigurePage'
-import IngestPage from './pages/IngestPage'
 import AnalysePage from './pages/AnalysePage'
 import FinalizePage from './pages/FinalizePage'
 import './App.css'
@@ -27,8 +26,10 @@ function App() {
         <Route path="review">
           <Route index element={<Navigate to="configure" replace />} />
           <Route path="configure" element={<ConfigurePage mode="review" />} />
-          <Route path="ingest" element={<IngestPage mode="review" />} />
-          <Route path="analyse" element={<AnalysePage mode="review" />} />
+          <Route path="analyse" element={<Navigate to="overview" replace />} />
+          <Route path="analyse/overview" element={<AnalysePage mode="review" step="overview" />} />
+          <Route path="analyse/review" element={<Navigate to="overview" replace />} />
+          <Route path="analyse/draft" element={<AnalysePage mode="review" step="draft" />} />
           <Route path="finalize" element={<FinalizePage mode="review" />} />
         </Route>
 
@@ -36,14 +37,17 @@ function App() {
         <Route path="create">
           <Route index element={<Navigate to="configure" replace />} />
           <Route path="configure" element={<ConfigurePage mode="create" />} />
-          <Route path="ingest" element={<IngestPage mode="create" />} />
-          <Route path="analyse" element={<AnalysePage mode="create" />} />
+          <Route path="analyse" element={<Navigate to="overview" replace />} />
+          <Route path="analyse/overview" element={<AnalysePage mode="create" step="overview" />} />
+          <Route path="analyse/review" element={<Navigate to="overview" replace />} />
+          <Route path="analyse/draft" element={<AnalysePage mode="create" step="draft" />} />
           <Route path="finalize" element={<FinalizePage mode="create" />} />
         </Route>
 
         {/* Legacy flat routes – redirect to review workflow */}
-        <Route path="ingest" element={<Navigate to="/review/ingest" replace />} />
-        <Route path="analyse" element={<Navigate to="/review/analyse" replace />} />
+        <Route path="upload" element={<Navigate to="/review/configure" replace />} />
+        <Route path="ingest" element={<Navigate to="/review/configure" replace />} />
+        <Route path="analyse" element={<Navigate to="/review/analyse/overview" replace />} />
         <Route path="finalize" element={<Navigate to="/review/finalize" replace />} />
       </Route>
     </Routes>

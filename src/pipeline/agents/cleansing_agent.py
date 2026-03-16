@@ -34,15 +34,16 @@ _TEMPLATE_SECTIONS: list[dict] = (
 )
 
 # If the JSON doesn't have a detailed template list yet, use the full canonical order.
+# SOP structure: scope → reference docs → responsibility → frequency → procedure (then Definitions, Record Keeping, etc.)
 if not _TEMPLATE_SECTIONS:
     _TEMPLATE_SECTIONS = [
         {"name": "Purpose / Objective",  "required": False, "aliases": ["purpose", "objective", "aim", "intent"]},
         {"name": "Scope",                "required": True,  "aliases": ["scope", "applicability", "applies to"]},
-        {"name": "References",           "required": True,  "aliases": ["references", "related documents", "associated documents", "see also"]},
-        {"name": "Responsibilities",     "required": True,  "aliases": ["responsibilities", "accountabilities", "roles", "ownership"]},
-        {"name": "Definitions",          "required": False, "aliases": ["definitions", "glossary", "terms", "abbreviations"]},
+        {"name": "References",           "required": True,  "aliases": ["references", "reference documents", "related documents", "associated documents", "see also"]},
+        {"name": "Responsibilities",     "required": True,  "aliases": ["responsibilities", "responsibility", "accountabilities", "roles", "ownership"]},
+        {"name": "Frequency",            "required": True,  "aliases": ["frequency", "schedule", "periodicity", "how often"]},
         {"name": "Procedure / Method",   "required": True,  "aliases": ["procedure", "method", "process", "instructions", "steps", "how to"]},
-        {"name": "Frequency",            "required": False, "aliases": ["frequency", "schedule", "periodicity", "how often"]},
+        {"name": "Definitions",          "required": False, "aliases": ["definitions", "glossary", "terms", "abbreviations"]},
         {"name": "Record Keeping",       "required": True,  "aliases": ["record keeping", "records", "documentation", "forms", "logs"]},
         {"name": "Corrective Actions",   "required": True,  "aliases": ["corrective action", "non-conformance", "deviation", "failure response"]},
         {"name": "Review Schedule",      "required": False, "aliases": ["review", "review date", "review schedule", "next review"]},
@@ -94,8 +95,8 @@ ABSOLUTE RULES
 - If missing, state that a specific measurable value must be provided.
 - For complex terms: recommend adding to Definitions/Glossary or replacing with plain-language equivalent.
 
-CITATIONS
-When an issue relates to BRCGS, Cranswick standards, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y", "Cranswick Std §X.Y". Leave [] when not applicable.
+CITATIONS — ALWAYS INCLUDE WHEN POSSIBLE
+When an issue relates to BRCGS, Cranswick standards, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y", "Cranswick Std §X.Y". If such sources are in the context and apply, include at least one citation. Leave [] only when no such source could apply.
 
 OUTPUT
 Return a JSON array only. Each item:
@@ -377,7 +378,7 @@ def _is_table_context(lines: list[str], line_idx: int) -> bool:
         Previous Version No.
         Reason for change
         Authorised
-    which appear in the FSP003 history-of-change table.
+    which appear in a history-of-change table.
     """
     window: list[str] = []
     for offset in (-3, -2, -1, 1, 2, 3):
@@ -816,7 +817,7 @@ class CleansingAgent(BaseAgent):
 
         # --- Pass 1: specification / vagueness analysis (LLM) ---
         try:
-            glossary = get_glossary_block(_DOMAIN_CTX)
+            glossary = (getattr(ctx, "glossary_block", None) or "").strip() or get_glossary_block(_DOMAIN_CTX)
             system_prompt = CLEANSING_SPEC_PROMPT
             if glossary:
                 system_prompt = f"{system_prompt}\n\n{glossary}"

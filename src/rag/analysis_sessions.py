@@ -62,6 +62,10 @@ def ensure_table():
             ALTER TABLE public.{TABLE_NAME}
             ADD COLUMN IF NOT EXISTS requester TEXT NOT NULL DEFAULT ''
         """)
+        cur.execute(f"""
+            ALTER TABLE public.{TABLE_NAME}
+            ADD COLUMN IF NOT EXISTS corrections_implemented INTEGER NOT NULL DEFAULT 0
+        """)
 
 
 def record_session(
@@ -77,6 +81,7 @@ def record_session(
     agent_findings: dict | None = None,
     workflow_type: str = "review",
     result_json: dict | None = None,
+    corrections_implemented: int = 0,
 ) -> None:
     """Insert or update an analysis session record."""
     if not tracking_id:
@@ -88,13 +93,14 @@ def record_session(
     agents_json = json.dumps(agents_run or [])
     findings_json = json.dumps(agent_findings or {})
     result_json_str = json.dumps(result_json) if result_json else None
+    corrections = max(0, int(corrections_implemented))
     with _cursor() as cur:
         cur.execute(f"""
             INSERT INTO public.{TABLE_NAME} (
                 tracking_id, document_id, title, requester, doc_layer, sites,
                 overall_risk, total_findings, agents_run, agent_findings,
-                workflow_type, result_json, completed_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s::jsonb, NOW())
+                workflow_type, result_json, corrections_implemented, completed_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s::jsonb, %s, NOW())
             ON CONFLICT (tracking_id) DO UPDATE SET
                 document_id = EXCLUDED.document_id,
                 title = EXCLUDED.title,
@@ -107,11 +113,12 @@ def record_session(
                 agent_findings = EXCLUDED.agent_findings,
                 workflow_type = EXCLUDED.workflow_type,
                 result_json = COALESCE(EXCLUDED.result_json, {TABLE_NAME}.result_json),
+                corrections_implemented = EXCLUDED.corrections_implemented,
                 completed_at = EXCLUDED.completed_at
         """, (
             tracking_id, document_id, title, requester or "", doc_layer, sites,
             overall_risk, total_findings, agents_json, findings_json,
-            workflow_type, result_json_str,
+            workflow_type, result_json_str, corrections,
         ))
 
 
@@ -126,7 +133,7 @@ def get_session(tracking_id: str) -> dict | None:
         cur.execute(f"""
             SELECT tracking_id, document_id, title, requester, doc_layer, sites,
                    overall_risk, total_findings, agents_run, agent_findings,
-                   workflow_type, result_json, completed_at
+                   workflow_type, result_json, corrections_implemented, completed_at
             FROM public.{TABLE_NAME}
             WHERE tracking_id = %s
         """, (tracking_id,))
@@ -167,9 +174,37 @@ def get_session(tracking_id: str) -> dict | None:
         "agentsRun": agents,
         "agentFindings": findings,
         "workflowType": r["workflow_type"] or "review",
+        "correctionsImplemented": r.get("corrections_implemented") or 0,
         "completedAt": r["completed_at"].isoformat() if r.get("completed_at") else None,
         "result": result_json,
     }
+
+
+def delete_sessions_for_non_policy_docs() -> int:
+    """Delete analysis sessions for non-policy documents. Returns count deleted."""
+    try:
+        ensure_table()
+        with _cursor() as cur:
+            cur.execute(f"""
+                DELETE FROM public.{TABLE_NAME}
+                WHERE COALESCE(LOWER(doc_layer), 'sop') != 'policy'
+            """)
+            return cur.rowcount
+    except Exception as e:
+        log.warning("analysis_sessions delete_sessions_for_non_policy_docs failed: %s", e)
+        return 0
+
+
+def delete_all_sessions() -> int:
+    """Delete all analysis sessions (reset dashboard metrics and clear Attention Required). Returns count deleted."""
+    try:
+        ensure_table()
+        with _cursor() as cur:
+            cur.execute(f"DELETE FROM public.{TABLE_NAME}")
+            return cur.rowcount
+    except Exception as e:
+        log.warning("analysis_sessions delete_all_sessions failed: %s", e)
+        return 0
 
 
 def list_sessions(limit: int = 50) -> list[dict]:
@@ -180,7 +215,7 @@ def list_sessions(limit: int = 50) -> list[dict]:
             cur.execute(f"""
                 SELECT tracking_id, document_id, title, requester, doc_layer, sites,
                        overall_risk, total_findings, agents_run, agent_findings,
-                       workflow_type, completed_at
+                       workflow_type, corrections_implemented, completed_at
                 FROM public.{TABLE_NAME}
                 ORDER BY completed_at DESC
                 LIMIT %s
@@ -220,6 +255,7 @@ def list_sessions(limit: int = 50) -> list[dict]:
             "agentsRun": agents,
             "agentFindings": findings,
             "workflowType": r["workflow_type"] or "review",
+            "correctionsImplemented": r.get("corrections_implemented") or 0,
             "completedAt": r["completed_at"].isoformat() if r.get("completed_at") else None,
         })
     return result

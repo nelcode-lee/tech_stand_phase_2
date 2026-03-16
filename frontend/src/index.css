@@ -18,8 +18,8 @@
   --space-lg: 1.5rem;
   --space-xl: 2rem;
   --space-2xl: 3rem;
-  --content-max: 1100px;
-  --content-max-narrow: 640px;
+  --content-max: min(98vw, 2400px);
+  --content-max-narrow: min(95vw, 1600px);
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   line-height: 1.6;
   font-weight: 400;
@@ -39,17 +39,61 @@ body {
   min-height: 100vh;
 }
 
-/* Larger screens: expand content to use available space */
-@media (min-width: 1400px) {
-  :root {
-    --content-max: 1400px;
-    --content-max-narrow: 880px;
-  }
+/* Workflow / Start here hint — used on Dashboard and Configure */
+.workflow-hint {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-lg);
+  margin-bottom: var(--space-lg);
+  background: rgba(50, 65, 87, 0.06);
+  border: 1px solid rgba(50, 65, 87, 0.12);
+  border-radius: 8px;
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+}
+.workflow-hint-label {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--yb-blue);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.workflow-hint-text {
+  line-height: 1.5;
+}
+.workflow-hint-text strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.workflow-hint-inline {
+  margin-bottom: var(--space-md);
 }
 
-@media (min-width: 1800px) {
+/* Next action — gold main button per step (matches sidebar current step) */
+.dash-action-btn.primary.next-action,
+.configure-next-btn.next-action,
+.doc-btn.primary.next-action {
+  background: var(--cranswick-di-serria);
+  border-color: var(--cranswick-di-serria);
+  color: #fff;
+}
+.dash-action-btn.primary.next-action:hover:not(:disabled),
+.configure-next-btn.next-action:hover:not(:disabled),
+.doc-btn.primary.next-action:hover:not(:disabled) {
+  opacity: 0.95;
+  box-shadow: 0 4px 12px rgba(210, 159, 80, 0.35);
+}
+.dash-action-btn.primary.next-action:disabled,
+.configure-next-btn.next-action:disabled,
+.doc-btn.primary.next-action:disabled {
+  opacity: 0.6;
+}
+
+/* Desktop-first: use full page width (not optimised for mobile) */
+@media (min-width: 1200px) {
   :root {
-    --content-max: 1600px;
-    --content-max-narrow: 960px;
+    --content-max: 98vw;
+    --content-max-narrow: 95vw;
   }
 }
