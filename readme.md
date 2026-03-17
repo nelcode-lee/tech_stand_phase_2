@@ -68,12 +68,21 @@ pip install -r requirements.txt
 # Copy and fill env vars
 cp .env.example .env
 
-# Run locally
-uvicorn src.main:app --reload
+# Run backend (from repo root; default port 8000)
+uvicorn main:app --reload --port 8000
+
+# Run frontend (separate terminal)
+cd frontend && npm install && npm run dev
 
 # Run tests
 pytest tests/
 ```
+
+**Is the backend running?** The frontend proxies `/api` to `http://127.0.0.1:8000`. If you see "Internal server error" when analysing, check:
+
+1. **Backend up:** Open [http://localhost:8000/health](http://localhost:8000/health) — you should see `{"status":"ok"}`.
+2. **Start backend:** From the repo root run `uvicorn main:app --reload --port 8000`.
+3. **Error message:** If the backend is up but analyse still fails, the UI now shows the backend error detail (e.g. missing env, LLM or DB error).
 
 ---
 

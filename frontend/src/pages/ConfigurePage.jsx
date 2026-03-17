@@ -89,10 +89,16 @@ export default function ConfigurePage({ mode = 'review' }) {
       if (stored) {
         const parsed = JSON.parse(stored);
         setConfig(c => ({
-          ...c,
           ...parsed,
-          additionalDocIds: Array.isArray(parsed.additionalDocIds) ? parsed.additionalDocIds : [],
-          agentInstructions: parsed.agentInstructions || '',
+          ...c,
+          // Do not let saved config overwrite a document just selected from Library/Dashboard.
+          documentId: c.documentId || parsed.documentId || '',
+          title: c.title || parsed.title || '',
+          additionalDocIds:
+            Array.isArray(c.additionalDocIds) && c.additionalDocIds.length > 0
+              ? c.additionalDocIds
+              : (Array.isArray(parsed.additionalDocIds) ? parsed.additionalDocIds : []),
+          agentInstructions: c.agentInstructions || parsed.agentInstructions || '',
         }));
       }
     } catch {
@@ -221,15 +227,15 @@ export default function ConfigurePage({ mode = 'review' }) {
           docTitleForNav = pendingFiles[0].name.replace(/\.[^.]+$/, '') || docIdForNav;
           const restAsAdditional = ingestedIds.slice(1);
           const mergedAdditional = [...new Set([...existingAdditional, ...restAsAdditional])];
-          setConfig(c => ({ ...c, documentId: docIdForNav, title: docTitleForNav, additionalDocIds: mergedAdditional }));
+          setConfig(c => ({ ...c, documentId: docIdForNav, title: docTitleForNav, docLayer: c.docLayer || 'sop', additionalDocIds: mergedAdditional }));
           const stored = JSON.parse(localStorage.getItem(`${CONFIG_STORAGE_KEY}-${mode}`) || '{}');
-          localStorage.setItem(`${CONFIG_STORAGE_KEY}-${mode}`, JSON.stringify({ ...stored, documentId: docIdForNav, title: docTitleForNav, additionalDocIds: mergedAdditional }));
+          localStorage.setItem(`${CONFIG_STORAGE_KEY}-${mode}`, JSON.stringify({ ...stored, documentId: docIdForNav, title: docTitleForNav, docLayer: config?.docLayer || 'sop', additionalDocIds: mergedAdditional }));
         } else {
           docIdForNav = ingestedIds[0];
           docTitleForNav = pendingFiles[0].name.replace(/\.[^.]+$/, '') || docIdForNav;
-          setConfig(c => ({ ...c, documentId: docIdForNav, title: docTitleForNav }));
+          setConfig(c => ({ ...c, documentId: docIdForNav, title: docTitleForNav, docLayer: c.docLayer || 'sop' }));
           const stored = JSON.parse(localStorage.getItem(`${CONFIG_STORAGE_KEY}-${mode}`) || '{}');
-          localStorage.setItem(`${CONFIG_STORAGE_KEY}-${mode}`, JSON.stringify({ ...stored, documentId: docIdForNav, title: docTitleForNav }));
+          localStorage.setItem(`${CONFIG_STORAGE_KEY}-${mode}`, JSON.stringify({ ...stored, documentId: docIdForNav, title: docTitleForNav, docLayer: config?.docLayer || 'sop' }));
         }
 
         setStatus({ ok: true, message: `Ingested ${ingestedIds.length} document(s).` });
@@ -244,13 +250,13 @@ export default function ConfigurePage({ mode = 'review' }) {
 
     const docId = docIdForNav;
     const analyseUrl = docId ? `${base}/analyse?documentId=${encodeURIComponent(docId)}` : `${base}/analyse`;
-    navigate(analyseUrl, { state: { fromIngest: true, documentId: docId, title: docTitleForNav }, replace: true });
+    navigate(analyseUrl, { state: { fromIngest: true, documentId: docId, title: docTitleForNav, docLayer: config?.docLayer || 'sop' }, replace: true });
   }
 
   function goToAnalyse() {
     const docId = config?.documentId?.trim() || '';
     const url = docId ? `${base}/analyse?documentId=${encodeURIComponent(docId)}` : `${base}/analyse`;
-    navigate(url, { state: docId ? { fromIngest: false, documentId: docId, title: config?.title || docId } : undefined });
+    navigate(url, { state: docId ? { fromIngest: false, documentId: docId, title: config?.title || docId, docLayer: config?.docLayer || 'sop' } : undefined });
   }
 
   return (

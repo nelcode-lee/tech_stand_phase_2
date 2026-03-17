@@ -7,7 +7,7 @@ from src.pipeline.agent_rules import DOCUMENT_REFERENCE_RULE, JOB_TITLE_RULE, TO
 from src.pipeline.base_agent import BaseAgent
 from src.pipeline.domain import get_glossary_block
 from src.pipeline.llm import completion, parse_json_array
-from src.pipeline.models import ContentIntegrityFlag, PipelineContext, SpecifyingFlag, StructureFlag
+from src.pipeline.models import CleanserFlag, ContentIntegrityFlag, PipelineContext, StructureFlag
 
 # ---------------------------------------------------------------------------
 # Domain context — load group template from domain_context.json.
@@ -56,47 +56,43 @@ if not _TEMPLATE_SECTIONS:
 # rule-based passes (Pass 4 / Pass 5) and do NOT need to be re-checked here.
 # ---------------------------------------------------------------------------
 
-CLEANSING_SPEC_PROMPT = """You are the Specification and Precision Analyst for Cranswick PLC, a UK food manufacturing group.
-Your role is to identify vague, subjective, ambiguous, unmeasurable, or complex language in procedures.
+CLEANSING_SPEC_PROMPT = """You are the Clarity and Accessibility Analyst ("Cleanser") for Cranswick PLC, a UK food manufacturing group.
+Your role is to improve clarity, readability, and accessibility in procedures.
 
 READABILITY PRINCIPLE
-Documents must be understandable by readers with no prior company or technical knowledge. Flag any word, phrase, or term that assumes familiarity with Cranswick processes, food manufacturing jargon, or internal terminology.
+Documents must be understandable by readers with no prior company or technical knowledge. Flag any word, phrase, or term that assumes familiarity with Cranswick processes, food manufacturing jargon, or internal terminology.  Imagine we are communicating in a way that can be understood by a 14 year old.
 
 PLAIN LANGUAGE
 - Replace difficult phrasing with simpler words (e.g. "adhered" → "followed", "how much product is required" → "quantity").
-- Remove ambiguous language such as "appropriate stock".
+- Remove confusing or inaccessible language such as "appropriate, approximate, sufficient, etc." when the issue is readability rather than missing measurable criteria.
 - Replace repetitive phrases (e.g. "next product to be picked…" repeated) with clearer steps (e.g. "Repeat the process for each remaining product until the order is complete.").
-- Simplify stock rotation wording: avoid "old"; prefer "Pick stock in correct rotation. The CMEX system ensures rotation is followed."
+- Use "less than" or "greater than" in full words, not symbols (< or >), where this improves readability for operatives.
 
-EQUIPMENT TERMINOLOGY
-- Flag interchangeable terms for outload equipment (pallet, dolly, dolav, rack) — recommend a standard term such as "logistic unit" or define in glossary.
-- Clarify terms: "closed", "new vehicle", "load documents", "pallet sheet" — these often carry specific meaning and need definition.
+TERMINOLOGY
+- Flag words and terms that are used interchangeablely but where consistency would improve understanding; e.g. terms that are  for outload equipment (pallet, dolly, dolav, rack) — recommend a standard term such as "logistic unit" or define in glossary.
+- Clarify terms which may be generic but in the document carry a specific meaning: "e.g. 'closed' could be a door, IT ticket, issue, task, etc. 
+
 
 CORE PRINCIPLES
-- No invention of specifications.
-- Only replace vague language with specificity if the data is explicitly available in the document.
-- If specificity is missing, flag it as a requirement rather than invent a value.
-- Assume zero tacit knowledge — any step that relies on prior experience must be flagged.
-- Each finding must be a separate item. Do not combine multiple issues into one.
+- Ensure procedures are clearly written and accessible to all operatives with an assumed reading age of 14, and a limited knowledge of food manufacturing.
+- Do NOT police missing measurable limits, tolerances, timings, or pass/fail criteria here — that belongs to the Specifier.
+- Focus on whether the wording is understandable, not whether it is sufficiently precise for compliance.
 
 YOU MUST IDENTIFY (inclusive of, but not limited to):
 1. Complex or jargon terms: technical words, industry acronyms, or company-specific terms used without definition (e.g. HACCP, CCP, BRC, COSHH, QMS, NCR, KPI, traceability codes, site codes). Flag if a reader new to the business would not understand.
 2. Undefined abbreviations: any abbreviation or acronym that is not spelled out or explained in a Definitions/Glossary section.
-3. Vague frequency terms: "regularly", "often", "as needed", "periodically", "as required", "frequently"
-4. Subjective quality descriptors: "clean", "adequate", "proper", "acceptable", "good condition", "satisfactory"
-5. Undefined quantities: "high temperature", "low risk", "sufficient time", "check temperature is correct"
-6. Missing units or tolerances: temperatures without °C/°F, weights without kg/g, times without minutes/hours
-7. Site-type specifics: undefined trim levels, undefined yield expectations, undefined chilling/resting times, unspecified microbiological limits
-8. Operator judgement without criteria: any instruction asking the operator to "determine if acceptable", "decide", "judge", or "assess" without defined pass/fail criteria
-9. Confusing or unclear sentences: sentences where the meaning is unclear even to an experienced reader (e.g. "on the day of outload it details the quantity of products required by type and by depot location" — clarify intent).
+3. Confusing or unclear sentences: sentences where the meaning is hard to follow, too dense, or grammatically awkward.
+4. Accessibility issues: wording that assumes tacit process knowledge, unexplained shorthand, or inconsistent everyday terminology.
+5. Needlessly complex phrasing: text that could be rewritten in simpler, more direct language without changing meaning.
+6. Sentence clarity and readability: flag sentences that are grammatically awkward, too long, overloaded with clauses, or structured in a way that makes the instruction difficult to follow in one reading. Recommend rewriting into shorter, direct sentences with one action per sentence where possible.
 
 ABSOLUTE RULES
 - Never invent a number, time, limit, or criterion.
-- If missing, state that a specific measurable value must be provided.
+- If the real problem is a missing measurable value or operational criterion, do NOT flag it here — that belongs to the Specifier.
 - For complex terms: recommend adding to Definitions/Glossary or replacing with plain-language equivalent.
 
 CITATIONS — ALWAYS INCLUDE WHEN POSSIBLE
-When an issue relates to BRCGS, Cranswick standards, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y", "Cranswick Std §X.Y". If such sources are in the context and apply, include at least one citation. Leave [] only when no such source could apply.
+When an issue relates to BRCGS, Cranswick standards, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y.Z" or "Cranswick Std §X.Y.Z". Use only exact structured citations shown in the provided parent policy context. Never cite broad section headers such as "BRCGS Clause 5.8" or "Cranswick Std §2.1". If no exact clause is shown, leave structured policy citations empty.
 
 OUTPUT
 Return a JSON array only. Each item:
@@ -838,8 +834,8 @@ class CleansingAgent(BaseAgent):
                 ):
                     raw_citations = item.get("citations") or []
                     citations = [str(x).strip() for x in (raw_citations if isinstance(raw_citations, list) else [raw_citations]) if x]
-                    ctx.specifying_flags.append(
-                        SpecifyingFlag(
+                    ctx.cleanser_flags.append(
+                        CleanserFlag(
                             location=str(item["location"]),
                             current_text=str(item["current_text"]),
                             issue=str(item["issue"]),

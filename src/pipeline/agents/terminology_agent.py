@@ -39,7 +39,7 @@ Identify terminology issues ONLY for terms that actually appear in the document.
 - undefined or ambiguous (these will be routed to HITL for glossary addition)
 
 CITATIONS — ALWAYS INCLUDE WHEN POSSIBLE
-When a terminology issue relates to BRCGS, Cranswick standards, or glossary definitions, include a "citations" array. Format: "BRCGS Clause X.Y", "Cranswick Std §X.Y". If such sources are in the context and apply, include at least one citation. Leave [] only when no such source could apply.
+When a terminology issue relates to BRCGS, Cranswick standards, or glossary definitions, include a "citations" array. Format: "BRCGS Clause X.Y.Z" or "Cranswick Std §X.Y.Z". Use only exact structured citations shown in the provided parent policy context. Never cite broad section headers such as "BRCGS Clause 5.8" or "Cranswick Std §2.1". If no exact clause is shown, leave structured policy citations empty.
 
 OUTPUT FORMAT
 Return ONLY a JSON array. Each object: {"term": "<exact term as it appears>", "location": "<exact quote from document containing the term>", "issue": "<fact-based description>", "recommendation": "<precise correction>", "glossary_candidate": true/false, "citations": ["<BRCGS/Cranswick ref>"]}
@@ -65,8 +65,9 @@ class TerminologyAgent(BaseAgent):
 
         content = ctx.cleansed_content[:12000]
         prompt_parts = [f"DOCUMENTS:\n{content}"]
-        if ctx.parent_policy and ctx.parent_policy.content:
-            prompt_parts.append(f"\n\nPARENT POLICY (use for citations when applicable):\n{ctx.parent_policy.content[:6000]}")
+        policy_block = self._policy_context_block(ctx, max_chars_per_doc=3000)
+        if policy_block:
+            prompt_parts.append(f"\n\nPARENT POLICY (use for citations when applicable):\n{policy_block[:6000]}")
         prompt = "".join(prompt_parts)
 
         glossary = (getattr(ctx, "glossary_block", None) or "").strip() or get_glossary_block(load_domain_context())

@@ -7,10 +7,13 @@ from contextlib import contextmanager
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
+from src.rag.policy_clauses import build_clause_context_block, parse_policy_clauses
+
 SUPABASE_DB_URL = os.environ.get("SUPABASE_DB_URL", "")
 TABLE_NAME = "documents"
 CONTENT_TABLE_NAME = "document_content"
 SOURCE_FILE_TABLE_NAME = "document_source_files"
+POLICY_CLAUSE_TABLE_NAME = "policy_clause_records"
 
 
 def _get_conn():
@@ -171,6 +174,189 @@ def ensure_source_file_table():
         """)
 
 
+def ensure_policy_clause_table():
+    """Create the structured policy clause table for stable standards docs like BRCGS."""
+    with _cursor() as cur:
+        cur.execute(f"""
+            CREATE TABLE IF NOT EXISTS public.{POLICY_CLAUSE_TABLE_NAME} (
+                document_id TEXT NOT NULL,
+                standard_name TEXT NOT NULL,
+                version TEXT,
+                clause_id TEXT NOT NULL,
+                heading TEXT,
+                requirement_text TEXT NOT NULL,
+                keywords JSONB NOT NULL DEFAULT '[]',
+                canonical_citation TEXT NOT NULL,
+                source_title TEXT,
+                active BOOLEAN NOT NULL DEFAULT TRUE,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (document_id, clause_id)
+            )
+        """)
+
+
+def upsert_policy_clauses(document_id: str, title: str | None, content: str, *, source_path: str | None = None) -> int:
+    """Parse and store structured clause records for a policy/standards document. Returns clauses upserted."""
+    if not document_id or not content:
+        return 0
+    rows = parse_policy_clauses(document_id, title, content, source_path=source_path)
+    if not rows:
+        return 0
+    try:
+        ensure_policy_clause_table()
+    except Exception:
+        return 0
+    with _cursor() as cur:
+        cur.execute(f"DELETE FROM public.{POLICY_CLAUSE_TABLE_NAME} WHERE document_id = %s", (document_id,))
+        for row in rows:
+            cur.execute(
+                f"""
+                INSERT INTO public.{POLICY_CLAUSE_TABLE_NAME} (
+                    document_id, standard_name, version, clause_id, heading,
+                    requirement_text, keywords, canonical_citation, source_title,
+                    active, updated_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, NOW())
+                ON CONFLICT (document_id, clause_id) DO UPDATE SET
+                    standard_name = EXCLUDED.standard_name,
+                    version = EXCLUDED.version,
+                    heading = EXCLUDED.heading,
+                    requirement_text = EXCLUDED.requirement_text,
+                    keywords = EXCLUDED.keywords,
+                    canonical_citation = EXCLUDED.canonical_citation,
+                    source_title = EXCLUDED.source_title,
+                    active = EXCLUDED.active,
+                    updated_at = NOW()
+                """,
+                (
+                    row["document_id"],
+                    row["standard_name"],
+                    row["version"],
+                    row["clause_id"],
+                    row["heading"],
+                    row["requirement_text"],
+                    json.dumps(row["keywords"]),
+                    row["canonical_citation"],
+                    row["source_title"],
+                    bool(row.get("active", True)),
+                ),
+            )
+    return len(rows)
+
+
+def get_policy_clauses(
+    *,
+    document_id: str | None = None,
+    standard_name: str | None = None,
+    limit: int | None = None,
+) -> list[dict]:
+    """Return structured policy clauses filtered by document_id and/or standard_name."""
+    if not SUPABASE_DB_URL:
+        return []
+    try:
+        ensure_policy_clause_table()
+    except Exception:
+        return []
+    where = []
+    params: list = []
+    if document_id:
+        where.append("document_id = %s")
+        params.append(document_id)
+    if standard_name:
+        where.append("LOWER(standard_name) = LOWER(%s)")
+        params.append(standard_name)
+    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    with _cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT document_id, standard_name, version, clause_id, heading, requirement_text,
+                   keywords, canonical_citation, source_title, active
+            FROM public.{POLICY_CLAUSE_TABLE_NAME}
+            {where_sql}
+            """,
+            tuple(params),
+        )
+        rows = cur.fetchall()
+    out = []
+    for row in rows:
+        keywords = row.get("keywords")
+        if isinstance(keywords, str):
+            try:
+                keywords = json.loads(keywords) if keywords else []
+            except json.JSONDecodeError:
+                keywords = []
+        out.append({**row, "keywords": keywords or []})
+    out.sort(key=lambda row: _clause_sort_key(row.get("clause_id") or ""))
+    if limit and limit > 0:
+        return out[:limit]
+    return out
+
+
+def query_policy_clauses(
+    query_text: str,
+    *,
+    document_id: str | None = None,
+    standard_name: str | None = None,
+    limit: int = 25,
+) -> list[dict]:
+    """Return the most relevant structured policy clauses using lightweight keyword overlap."""
+    rows = get_policy_clauses(document_id=document_id, standard_name=standard_name)
+    if not rows:
+        return []
+    query_words = re.findall(r"[A-Za-z][A-Za-z0-9\-]{3,}", (query_text or "").lower())
+    query_terms = {w for w in query_words if w not in {
+        "shall", "must", "with", "that", "this", "from", "there", "their", "where", "when",
+        "procedure", "document", "process", "record", "check", "checks", "using", "used",
+    }}
+    scored: list[tuple[int, dict]] = []
+    for row in rows:
+        haystack = " ".join(
+            [
+                row.get("clause_id") or "",
+                row.get("heading") or "",
+                row.get("requirement_text") or "",
+                " ".join(row.get("keywords") or []),
+            ]
+        ).lower()
+        score = 0
+        for term in query_terms:
+            if term in haystack:
+                score += 1
+        if score > 0 or not query_terms:
+            scored.append((score, row))
+    scored.sort(key=lambda item: (-item[0], item[1].get("clause_id") or ""))
+    return [row for _, row in scored[:limit]]
+
+
+def get_policy_citation_set(*, document_id: str | None = None, standard_name: str | None = None) -> set[str]:
+    """Return canonical citations for structured policy clauses."""
+    rows = get_policy_clauses(document_id=document_id, standard_name=standard_name)
+    return {str(r.get("canonical_citation") or "").strip() for r in rows if (r.get("canonical_citation") or "").strip()}
+
+
+def get_policy_context_block(
+    *,
+    document_id: str | None = None,
+    standard_name: str | None = None,
+    query_text: str = "",
+    limit: int = 25,
+    max_chars: int = 12000,
+) -> tuple[str, list[dict]]:
+    """Return a rendered policy clause block plus the underlying clause rows."""
+    rows = query_policy_clauses(query_text, document_id=document_id, standard_name=standard_name, limit=limit)
+    return build_clause_context_block(rows, max_chars=max_chars), rows
+
+
+def _clause_sort_key(clause_id: str) -> tuple:
+    parts = re.findall(r"\d+|[A-Za-z]+", clause_id or "")
+    key: list[int | str] = []
+    for part in parts:
+        if part.isdigit():
+            key.append(int(part))
+        else:
+            key.append(part.lower())
+    return tuple(key)
+
+
 def upsert_source_file(document_id: str, file_bytes: bytes, content_type: str = "application/vnd.openxmlformats-officedocument.wordprocessingml.document") -> None:
     """Store or update original file bytes for a document (procedures: DOCX)."""
     if not document_id or not file_bytes:
@@ -230,6 +416,24 @@ def upsert_document_content(document_id: str, content: str) -> None:
         """, (document_id, content, sections_json))
 
 
+def _fetch_chunks_via_vector_store(document_id: str) -> list[dict]:
+    """Reconstruct chunks list from vector store query when raw SQL fails. Returns list of {text}."""
+    try:
+        from src.rag.vector_store import query_chunks
+        from src.rag.embedding import embed_text, get_embedding_client
+        emb = embed_text("document content sections", client=get_embedding_client())
+        if not emb:
+            return []
+        chunks = query_chunks(
+            embedding=emb,
+            document_id=document_id,
+            limit=200,
+        )
+        return [{"text": (c.text or "").strip()} for c in chunks if (c.text or "").strip()]
+    except Exception:
+        return []
+
+
 def get_document_content(document_id: str) -> tuple[str | None, list[dict]]:
     """
     Return (content, sections). First checks document_content table.
@@ -259,11 +463,20 @@ def get_document_content(document_id: str) -> tuple[str | None, list[dict]]:
             return row["content"], sections
     except Exception:
         pass
-    # 2. Fallback: reconstruct from chunks
+    # 2. Fallback: reconstruct from chunks (raw SQL on vecs/public document_chunks)
     chunks = _fetch_chunks_for_document(document_id)
     if not chunks:
+        # 3. Fallback: get chunks via vector store query (e.g. when SQL table name differs)
+        chunks = _fetch_chunks_via_vector_store(document_id)
+    if not chunks:
         return None, []
-    content = "\n\n".join(c["text"] for c in chunks)
+    if isinstance(chunks[0], dict):
+        content = "\n\n".join((c.get("text") or "").strip() for c in chunks if c.get("text"))
+    else:
+        content = "\n\n".join((getattr(c, "text", "") or "").strip() for c in chunks)
+    content = content.strip() or None
+    if not content:
+        return None, []
     sections = _parse_sections(content)
     return content, sections
 
@@ -311,6 +524,21 @@ def delete_source_file(document_id: str) -> None:
         with _cursor() as cur:
             cur.execute(
                 f"DELETE FROM public.{SOURCE_FILE_TABLE_NAME} WHERE document_id = %s",
+                (document_id,),
+            )
+    except Exception:
+        pass
+
+
+def delete_policy_clauses(document_id: str) -> None:
+    """Remove structured policy clauses when the source document is deleted."""
+    if not document_id:
+        return
+    try:
+        ensure_policy_clause_table()
+        with _cursor() as cur:
+            cur.execute(
+                f"DELETE FROM public.{POLICY_CLAUSE_TABLE_NAME} WHERE document_id = %s",
                 (document_id,),
             )
     except Exception:
@@ -522,6 +750,7 @@ def delete_document(document_id: str) -> None:
         return
     delete_document_content(document_id)
     delete_source_file(document_id)
+    delete_policy_clauses(document_id)
     with _cursor() as cur:
         cur.execute(f"DELETE FROM public.{TABLE_NAME} WHERE document_id = %s", (document_id,))
 

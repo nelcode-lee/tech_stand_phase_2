@@ -19,3 +19,23 @@ class BaseAgent(ABC):
         ctx.errors.append(
             PipelineError(agent=self.name, message=message, severity=severity)
         )
+
+    def _policy_documents(self, ctx: PipelineContext):
+        docs = []
+        if getattr(ctx, "parent_policy", None):
+            docs.append(ctx.parent_policy)
+        docs.extend(getattr(ctx, "higher_order_policies", None) or [])
+        return docs
+
+    def _policy_context_block(self, ctx: PipelineContext, *, max_chars_per_doc: int = 3000) -> str:
+        docs = self._policy_documents(ctx)
+        if not docs:
+            return ""
+        blocks = []
+        for i, doc in enumerate(docs):
+            label = "DIRECT PARENT POLICY" if i == 0 else f"HIGHER-ORDER POLICY {i}"
+            blocks.append(
+                f"{label} - {doc.title} (cite as 'parent policy [{doc.title}]' when the finding relates to this):\n"
+                f"{(doc.content or '')[:max_chars_per_doc]}"
+            )
+        return "\n\n".join(blocks)

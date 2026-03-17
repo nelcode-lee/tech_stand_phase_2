@@ -8,6 +8,12 @@ DOCUMENT REFERENCE RULE (apply across all findings)
 When procedures mention forms, logs, schedules, SOPs, summaries, or related documents:
 - If a child/supporting document is already referred to (by name, code, or reference) → allow for non-specificity; do not flag.
 - If no document reference is given → flag it and ask for one. Recommend adding the specific document name, code, or reference.
+
+CONTROLLED CHILD / SUPPORTING DOCUMENTS
+If a measurable parameter, limit, tolerance, or acceptance criterion is held in a linked controlled document, record form, setup sheet, or work instruction:
+- Do NOT require the value to be repeated in the SOP when the SOP explicitly identifies the source document and makes clear when it must be consulted.
+- Accept this only when the dependency is unambiguous at point of use (e.g. the document or record is named or coded, and the operator can tell what it is for).
+- Flag only when the reference is generic, unnamed, inaccessible, or leaves the user guessing where the criterion comes from or when to check it.
 """
 
 # Job title vs named individual — controlled procedures must use roles, not person names
@@ -23,6 +29,7 @@ TOLERANCE CHECKS vs MISSING REFERENCE DOCUMENTS (do not confuse)
 When reviewing intake, specification, or reference sections:
 - TOLERANCE/PARAMETER GAP: missing numeric limits, units, or ranges (e.g. "check temperature" without °C; "verify weight" without kg). Flag as missing tolerance or parameter.
 - MISSING REFERENCE DOCUMENT: mentions a form, procedure, or document without naming it (e.g. "as per the procedure", "complete the check"). Flag as missing document reference.
+- LINKED CONTROLLED DOCUMENT: if the SOP clearly names the controlled source for the parameter (e.g. a setup sheet, form, or work instruction), do NOT flag the SOP just for not repeating the value. Flag only if the linkage is unclear or unusable.
 These are distinct. Do not flag a tolerance gap as a missing document, or vice versa.
 """
 

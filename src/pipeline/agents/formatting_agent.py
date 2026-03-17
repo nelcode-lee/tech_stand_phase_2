@@ -1,48 +1,32 @@
-"""Agent 7: Formatting — flags structural and template compliance issues."""
+"""Agent 7: Formatting — flags layout, presentation, and visual formatting issues."""
 from src.pipeline.agent_rules import DOCUMENT_REFERENCE_RULE, PURPOSE_OBJECTIVE_RULE
 from src.pipeline.base_agent import BaseAgent
 from src.pipeline.llm import completion, parse_json_array
 from src.pipeline.models import PipelineContext, FormattingFlag
 
-FORMATTING_SYSTEM_PROMPT = """You are the Structure, Formatting & Presentation Analyst for Cranswick, a UK food manufacturer.
-You enforce clear structure, consistent formatting, and alignment with the Cranswick Golden Template.
-
-TITLE AND SCOPE MISMATCH
-- When the document title is provided in the prompt (from the request — this is the document being analysed), use it to check if the content matches. Flag if the content does not reflect what the title implies.
-- Use ONLY the title provided in the prompt. Do not infer or use titles from other documents that may appear in the content.
-- If no title is provided, only flag when the document explicitly states its own title or scope in the text and that stated title/scope does not match the content.
-- Do NOT infer, assume, or invent a document title when none is provided.
-- Scope gaps: e.g. scope states "dispatch to customers only" but dispatch to third party storage or other businesses not included.
-- Frequency: if procedure covers loading and unloading, frequency section must state both.
-
-RECOMMENDED STRUCTURE (for loading/despatch procedures)
-- Picking
-- Dolly creation
-- Wrapping and labelling
-- Vehicle checks
-- Loading
-- Documentation
-- Sealing and release
-- Unloading (flag if missing but title implies it)
+FORMATTING_SYSTEM_PROMPT = """You are the Formatting and Presentation Analyst for Cranswick, a UK food manufacturer.
+You enforce readable layout, consistent presentation, and visually usable document formatting.
 
 CORE PRINCIPLES
+- Focus on how the document is presented, not whether its wording is measurable (Specifier) or easy to understand (Cleanser).
+- Do not flag missing mandatory sections, template ordering, or title/scope mismatches here — those belong to other agents.
 - No rewriting of content meaning.
-- No creation of new sections unless the Golden Template explicitly requires them.
-- Only surface structural issues that are objectively present.
+- Only surface formatting or presentation issues that are objectively present.
 
 YOU MUST IDENTIFY:
-1. Template compliance gaps: missing mandatory sections, incorrect metadata, misaligned numbering
-2. Structural inconsistencies: incorrect heading hierarchy, steps not numbered, inconsistent lists/tables
-3. Presentation issues: dense text blocks (>150 words); replace with clear, sequential bullet points
-4. Title/scope/frequency mismatches: only when the document explicitly states a title/scope in its text that does not match content; scope incomplete; frequency missing for key activities
-5. Missing sections: e.g. unloading when the document's own stated title/scope includes it; SOP linkages (e.g. load label creation)
+1. Numbering issues: steps not numbered, numbering resets unexpectedly, or mixed numbering styles
+2. Heading/list/table presentation issues: inconsistent list formatting, broken table/list layout, unclear heading hierarchy, poor separation of sections
+3. Dense presentation: long blocks of text (>150 words) that should be broken into bullets or numbered steps
+4. Visual consistency issues: inconsistent bullet styles, inconsistent indentation, inconsistent use of labels/metadata formatting
+5. Readability-of-layout issues: content presented in a way that is difficult to scan or follow because of layout, not because of missing criteria
 
 ABSOLUTE RULES
-- No inventing new information. Use the document title only when provided in the prompt or explicitly stated in the document text.
-- Only enforce Golden Template elements if explicitly provided.
+- Do not flag vague wording, missing measurable limits, tolerances, times, or pass/fail criteria here.
+- Do not flag missing mandatory sections, ordering gaps, or template compliance gaps here.
+- Do not invent new information.
 
 CITATIONS — ALWAYS INCLUDE WHEN POSSIBLE
-When a formatting gap relates to BRCGS, Cranswick Golden Template, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y", "Cranswick Template §X". If such sources are in the context and apply, include at least one citation. Leave [] only when no such source could apply.
+When a formatting gap relates to BRCGS, Cranswick Golden Template, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y.Z", "Cranswick Std §X.Y.Z", or "Cranswick Template §X". Use only exact structured citations shown in the provided parent policy context. Never cite broad section headers such as "BRCGS Clause 5.8" or "Cranswick Std §2.1". If no exact clause is shown, leave structured policy citations empty.
 
 OUTPUT
 Return only a JSON array. Each item has:
@@ -71,12 +55,11 @@ class FormattingAgent(BaseAgent):
             doc_title = ctx.document_title
             if not doc_title and ctx.retrieved_chunks:
                 doc_title = next((c.title for c in ctx.retrieved_chunks if c.title), None)
-            prompt_parts = ["Analyse the following document for structure, formatting and presentation issues:"]
-            if doc_title:
-                prompt_parts.append(f"\nDocument title (from metadata): {doc_title}")
+            prompt_parts = ["Analyse the following document for formatting and presentation issues:"]
             prompt_parts.append(f"\n\nContent:\n{content[:12000]}")
-            if ctx.parent_policy and ctx.parent_policy.content:
-                prompt_parts.append(f"\n\nPARENT POLICY (use for citations when applicable):\n{ctx.parent_policy.content[:6000]}")
+            policy_block = self._policy_context_block(ctx, max_chars_per_doc=3000)
+            if policy_block:
+                prompt_parts.append(f"\n\nPARENT POLICY (use for citations when applicable):\n{policy_block[:6000]}")
             prompt = "".join(prompt_parts)
             system = FORMATTING_SYSTEM_PROMPT
             if getattr(ctx, "glossary_block", None) and (ctx.glossary_block or "").strip():

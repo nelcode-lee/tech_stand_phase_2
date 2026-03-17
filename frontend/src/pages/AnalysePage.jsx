@@ -46,6 +46,7 @@ function groupBy(arr, key) {
 // Flag count key -> section id for scroll target (metric tiles)
 const FLAG_KEY_TO_SECTION_ID = {
   'risk gaps': 'agent-card-risk',
+  'cleanser': 'agent-card-cleanser',
   'specifying': 'agent-card-specifying',
   'structure': 'agent-card-structure',
   'content integrity': 'agent-card-content-integrity',
@@ -59,6 +60,7 @@ const FLAG_KEY_TO_SECTION_ID = {
 // Agent key (from findingId) -> flag count key (for tracking applied by metric)
 const AGENT_KEY_TO_FLAG = {
   'risk': 'risk gaps',
+  'cleanser': 'cleanser',
   'structure': 'structure',
   'content-integrity': 'content integrity',
   'specifying': 'specifying',
@@ -72,6 +74,7 @@ const AGENT_KEY_TO_FLAG = {
 // Flag count key -> agent display name (for Proposed Solutions filter)
 const FLAG_KEY_TO_AGENT = {
   'risk gaps': 'Risk',
+  'cleanser': 'Cleanser',
   'structure': 'Structure',
   'content integrity': 'Content Integrity',
   'specifying': 'Specifying',
@@ -85,6 +88,7 @@ const FLAG_KEY_TO_AGENT = {
 // Agent display name -> section id for scroll target (Proposed Solutions table)
 const AGENT_SECTION_IDS = {
   'Risk': 'agent-card-risk',
+  'Cleanser': 'agent-card-cleanser',
   'Structure': 'agent-card-structure',
   'Content Integrity': 'agent-card-content-integrity',
   'Specifying': 'agent-card-specifying',
@@ -108,6 +112,7 @@ function scrollToSection(sectionId) {
 function findFindingById(result, id, findingIdFn) {
   const agents = [
     { key: 'risk', items: result.risk_gaps },
+    { key: 'cleanser', items: result.cleanser_flags },
     { key: 'structure', items: result.structure_flags },
     { key: 'specifying', items: result.specifying_flags },
     { key: 'sequencing', items: result.sequencing_flags },
@@ -135,6 +140,7 @@ function findFindingById(result, id, findingIdFn) {
 // Get excerpt text for validate-solution API (original context for the finding).
 function getExcerptForValidation(agentKey, item) {
   if (agentKey === 'risk') return item.excerpt || item.location || '';
+  if (agentKey === 'cleanser') return item.current_text || item.location || '';
   if (agentKey === 'structure') return item.section || item.detail || '';
   if (agentKey === 'content-integrity') return item.excerpt || item.location || item.detail || '';
   if (agentKey === 'specifying') return item.current_text || item.location || '';
@@ -154,6 +160,7 @@ function getSearchAndReplacement(agentKey, item, replacementOverride = undefined
   if (!rec) return null;
   let search = '';
   if (agentKey === 'risk') search = item.excerpt || item.location || '';
+  else if (agentKey === 'cleanser') search = item.current_text || item.location || '';
   else if (agentKey === 'structure') search = item.section || item.detail || '';
   else if (agentKey === 'content-integrity') search = item.excerpt || item.location || item.detail || '';
   else if (agentKey === 'specifying') search = item.current_text || item.location || '';
@@ -190,6 +197,7 @@ function buildProposedSolutions(result) {
   };
 
   (result.risk_gaps || []).forEach(g => push('Risk', [g.location, g.issue].filter(Boolean).join(' · '), g.recommendation, g.excerpt || g.location));
+  (result.cleanser_flags || []).forEach(f => push('Cleanser', [f.location, f.current_text, f.issue].filter(Boolean).join(' · '), f.recommendation, f.current_text || f.location));
   (result.structure_flags || []).forEach(f => push('Structure', [f.section, f.detail].filter(Boolean).join(' — '), f.recommendation, f.section));
   (result.content_integrity_flags || []).forEach(f => push('Content Integrity', [f.location, f.detail].filter(Boolean).join(' · ') || f.excerpt, f.recommendation, f.excerpt || f.location));
   (result.specifying_flags || []).forEach(f => push('Specifying', [f.location, f.current_text, f.issue].filter(Boolean).join(' · '), f.recommendation, f.current_text || f.location));
@@ -470,7 +478,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
     if (!result || appliedFindings.size === 0) return;
     let currentDraft = draftContent || result?.draft_content || '';
     if (!currentDraft) return;
-    const agentOrder = ['risk', 'structure', 'specifying', 'sequencing', 'formatting', 'compliance', 'terminology', 'conflict', 'content-integrity'];
+    const agentOrder = ['risk', 'cleanser', 'structure', 'specifying', 'sequencing', 'formatting', 'compliance', 'terminology', 'conflict', 'content-integrity'];
     const collected = [];
     for (const id of appliedFindings) {
       const found = findFindingById(result, id, findingId);
@@ -539,17 +547,74 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
   }, [result?.tracking_id]);
 
   const fromIngestState = location.state?.fromIngest && location.state?.documentId;
-  // Effective document: URL (from fresh ingest) overrides everything — cannot be overwritten by config/session
-  const effectiveDocId = documentIdFromUrl || (location.state?.fromIngest && location.state?.documentId) || config.documentId || '';
-  const effectiveTitle = titleFromUrl || (location.state?.fromIngest && location.state?.title) || config.title || config.documentId || '';
+  // Effective document: URL / state / config first; fall back to result so split view and click-to-highlight work after analysis
+  const effectiveDocId = documentIdFromUrl || (location.state?.fromIngest && location.state?.documentId) || config.documentId || (result?.document_id || '');
+  const effectiveTitle = titleFromUrl || (location.state?.fromIngest && location.state?.title) || config.title || config.documentId || (result?.title || result?.document_id || '');
+  const effectiveDocLayer = (
+    location.state?.docLayer ||
+    result?.doc_layer ||
+    config.docLayer ||
+    'sop'
+  ).toLowerCase();
+
+  // If the user navigates to Analyse for a different document, clear any prior result
+  // so findings from the previous document cannot be shown for the new one.
+  useEffect(() => {
+    if (!documentIdFromUrl || trackingIdFromUrl) return;
+    const resultDocId = (result?.document_id || '').trim();
+    if (!resultDocId) return;
+    if (resultDocId !== documentIdFromUrl.trim()) {
+      setResult(null);
+      setDraftContent('');
+      setHighlightSearch('');
+    }
+  }, [documentIdFromUrl, trackingIdFromUrl, result?.document_id, setResult]);
 
   // When arriving from Ingest (state or URL), sync config so it matches the document we're analysing
   useEffect(() => {
     const docId = documentIdFromUrl || (location.state?.fromIngest && location.state?.documentId) || '';
     const docTitle = titleFromUrl || (location.state?.fromIngest && location.state?.title) || docId;
+    const docLayer = (location.state?.docLayer || result?.doc_layer || 'sop');
     if (!docId) return;
-    setConfig(c => ({ ...c, documentId: docId, title: docTitle }));
-  }, [documentIdFromUrl, titleFromUrl, fromIngestState, location.state?.documentId, location.state?.title, setConfig]);
+    setConfig(c => {
+      const nextDocLayer = docLayer || c.docLayer || 'sop';
+      if (c.documentId === docId && c.title === docTitle && c.docLayer === nextDocLayer) return c;
+      return { ...c, documentId: docId, title: docTitle, docLayer: nextDocLayer };
+    });
+  }, [documentIdFromUrl, titleFromUrl, fromIngestState, location.state?.documentId, location.state?.title, location.state?.docLayer, result?.doc_layer, setConfig]);
+
+  // When result has document_id but config doesn't, sync so form and split view stay in sync (e.g. after run from Library)
+  useEffect(() => {
+    if (!result?.document_id) return;
+    setConfig(c => {
+      const nextDocId = c.documentId || result.document_id || '';
+      const nextTitle = c.title || result.title || result.document_id || '';
+      const nextDocLayer = c.docLayer || result.doc_layer || 'sop';
+      if (c.documentId && c.title && c.docLayer) return c;
+      return { ...c, documentId: nextDocId, title: nextTitle, docLayer: nextDocLayer };
+    });
+  }, [result?.document_id, result?.title, result?.doc_layer, setConfig]);
+
+  // Auto-select first finding category when result loads so citations and findings are visible without clicking a metric
+  const metricOrder = ['risk gaps', 'cleanser', 'specifying', 'structure', 'content integrity', 'sequencing', 'formatting', 'compliance', 'terminology', 'conflicts'];
+  useEffect(() => {
+    if (!result || selectedMetricFilter) return;
+    const count = (key) => {
+      if (key === 'risk gaps') return result.risk_gaps?.length || 0;
+      if (key === 'cleanser') return result.cleanser_flags?.length || 0;
+      if (key === 'structure') return result.structure_flags?.length || 0;
+      if (key === 'content integrity') return result.content_integrity_flags?.length || 0;
+      if (key === 'specifying') return result.specifying_flags?.length || 0;
+      if (key === 'sequencing') return result.sequencing_flags?.length || 0;
+      if (key === 'formatting') return result.formatting_flags?.length || 0;
+      if (key === 'compliance') return result.compliance_flags?.length || 0;
+      if (key === 'terminology') return result.terminology_flags?.length || 0;
+      if (key === 'conflicts') return result.conflicts?.length || 0;
+      return 0;
+    };
+    const first = metricOrder.find((key) => count(key) > 0);
+    if (first) setSelectedMetricFilter(first);
+  }, [result, selectedMetricFilter]);
 
   // When trackingId in URL, use passed result or fetch stored session
   // Do NOT overwrite documentId when documentIdFromUrl is set (fresh ingest takes precedence)
@@ -610,8 +675,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
       setDocumentSourceType(null);
       return;
     }
-    const docLayer = (config.docLayer || 'sop').toLowerCase();
-    const isProcedure = docLayer === 'sop' || docLayer === 'work_instruction';
+    const isProcedure = effectiveDocLayer === 'sop' || effectiveDocLayer === 'work_instruction';
 
     setLoadingContent(true);
     setDocumentContent(null);
@@ -646,7 +710,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
       }
     }
     load();
-  }, [result, effectiveDocId, config.docLayer]);
+  }, [result, effectiveDocId, effectiveDocLayer]);
 
   // Scroll to specific section or highlight when user clicks a finding
   useEffect(() => {
@@ -742,11 +806,12 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
       }
       // Auto-save to backend so dashboard reflects metrics
       const totalFindings =
-        (res.risk_gaps?.length || 0) + (res.specifying_flags?.length || 0) + (res.structure_flags?.length || 0) +
+        (res.risk_gaps?.length || 0) + (res.cleanser_flags?.length || 0) + (res.specifying_flags?.length || 0) + (res.structure_flags?.length || 0) +
         (res.content_integrity_flags?.length || 0) + (res.sequencing_flags?.length || 0) + (res.formatting_flags?.length || 0) +
         (res.compliance_flags?.length || 0) + (res.terminology_flags?.length || 0) + (res.conflicts?.length || 0);
       const agentFindings = {};
       if (res.risk_gaps?.length) agentFindings.risk = res.risk_gaps.length;
+      if (res.cleanser_flags?.length) agentFindings.cleansing = (agentFindings.cleansing || 0) + res.cleanser_flags.length;
       if (res.specifying_flags?.length) agentFindings.specifying = res.specifying_flags.length;
       if (res.structure_flags?.length) agentFindings.cleansing = (agentFindings.cleansing || 0) + res.structure_flags.length;
       if (res.content_integrity_flags?.length) agentFindings.cleansing = (agentFindings.cleansing || 0) + res.content_integrity_flags.length;
@@ -777,6 +842,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
 
   const flagCounts = result ? {
     'risk gaps':         result.risk_gaps?.length || 0,
+    'cleanser':          result.cleanser_flags?.length || 0,
     'specifying':        result.specifying_flags?.length || 0,
     'structure':         result.structure_flags?.length || 0,
     'content integrity': result.content_integrity_flags?.length || 0,
@@ -817,6 +883,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         : (config.sites || '');
       const agentFindings = {};
       if (result.risk_gaps?.length) agentFindings.risk = result.risk_gaps.length;
+      if (result.cleanser_flags?.length) agentFindings.cleansing = (agentFindings.cleansing || 0) + result.cleanser_flags.length;
       if (result.specifying_flags?.length) agentFindings.specifying = (agentFindings.specifying || 0) + result.specifying_flags.length;
       if (result.structure_flags?.length) agentFindings.cleansing = (agentFindings.cleansing || 0) + result.structure_flags.length;
       if (result.content_integrity_flags?.length) agentFindings.cleansing = (agentFindings.cleansing || 0) + result.content_integrity_flags.length;
@@ -858,6 +925,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         : (config.sites || '');
       const agentFindings = {};
       if (result.risk_gaps?.length) agentFindings.risk = result.risk_gaps.length;
+      if (result.cleanser_flags?.length) agentFindings.cleansing = (agentFindings.cleansing || 0) + result.cleanser_flags.length;
       if (result.specifying_flags?.length) agentFindings.specifying = (agentFindings.specifying || 0) + result.specifying_flags.length;
       if (result.structure_flags?.length) agentFindings.cleansing = (agentFindings.cleansing || 0) + result.structure_flags.length;
       if (result.content_integrity_flags?.length) agentFindings.cleansing = (agentFindings.cleansing || 0) + result.content_integrity_flags.length;
@@ -1080,7 +1148,11 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
               <div className="analyse-split-left" ref={originalDocRef}>
                 <h3 className="split-panel-title">Original Document</h3>
                 {loadingContent && <p className="split-loading">Loading document…</p>}
-                {!loadingContent && !documentHtml && !documentContent && <p className="split-unavailable">Document content not available. Re-ingest to enable cross-reference.</p>}
+                {!loadingContent && !documentHtml && !documentContent && (
+                  <p className="split-unavailable">
+                    Original document not available for highlights. Re-ingest the document (Library or Configure) to enable the left panel and click-to-highlight. Excerpts are still shown in each finding below.
+                  </p>
+                )}
                 {!loadingContent && (documentHtml || documentContent) && (
                   <OriginalDocumentPanel
                     htmlContent={documentHtml}
@@ -1123,6 +1195,15 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
             )}
             {result.risk_gaps?.length > 0 && selectedMetricFilter === 'risk gaps' && (
               <div id="agent-card-risk"><RiskGapCard items={result.risk_gaps} agentKey="risk"
+                onFindingClick={effectiveDocId ? setHighlightSearch : undefined}
+                onApplyChange={handleApplyFinding} onAddNote={handleAddNote}
+                appliedFindings={appliedFindings} findingId={findingId}
+                customSolutionByFindingId={customSolutionByFindingId} onCustomSolutionChange={(id, text) => setCustomSolutionByFindingId(prev => ({ ...prev, [id]: text }))}
+                onCheckWithAgent={handleCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId} /></div>
+            )}
+            {result.cleanser_flags?.length > 0 && selectedMetricFilter === 'cleanser' && (
+              <div id="agent-card-cleanser"><AgentCard title="Cleanser" items={result.cleanser_flags} agentKey="cleanser"
+                keys={['location', 'current_text', 'issue', 'citations', 'recommendation']} searchTextKeys={['current_text', 'location']}
                 onFindingClick={effectiveDocId ? setHighlightSearch : undefined}
                 onApplyChange={handleApplyFinding} onAddNote={handleAddNote}
                 appliedFindings={appliedFindings} findingId={findingId}
@@ -1237,6 +1318,9 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
           <section className="draft-section">
             <div className="draft-header">
               <h3>Draft Content</h3>
+              {!draftEditMode && (
+                <span className="draft-layout-hint">Structured layout (sections, numbered steps, bullets)</span>
+              )}
               {lastAppliedRange && !draftEditMode && (
                 <span className="draft-highlight-hint">Highlighted: your last applied change — check it fits well</span>
               )}
@@ -1274,10 +1358,11 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
 // (so we can render FSP003-style layout: section headings, numbered steps, bullets)
 // ---------------------------------------------------------------------------
 const STANDARD_SECTION_NAMES = [
-  'Responsibility', 'Responsibilities', 'Frequency', 'Procedure', 'Procedures',
-  'Method', 'Methods', 'Scope', 'References', 'Record Keeping', 'Corrective Actions',
-  'Picking orders', 'Loading Procedure', 'Trailer information', 'Definitions',
-  'Overview', 'Introduction', 'Related documents', 'Revision history'
+  'Scope', 'Reference documents', 'References', 'Responsibility', 'Responsibilities',
+  'Frequency', 'Procedure', 'Procedures', 'Method', 'Methods',
+  'Record Keeping', 'Corrective Actions', 'Picking orders', 'Loading Procedure',
+  'Trailer information', 'Definitions', 'Overview', 'Introduction',
+  'Related documents', 'Revision history', 'History of Change'
 ];
 
 function parseDraftStructure(text) {

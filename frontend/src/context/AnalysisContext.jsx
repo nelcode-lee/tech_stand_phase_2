@@ -73,6 +73,7 @@ export function AnalysisProvider({ children }) {
   function recordSession(apiResult, sessionConfig, wfMode) {
     const totalFindings =
       (apiResult.risk_gaps?.length || 0) +
+      (apiResult.cleanser_flags?.length || 0) +
       (apiResult.specifying_flags?.length || 0) +
       (apiResult.structure_flags?.length || 0) +
       (apiResult.content_integrity_flags?.length || 0) +
@@ -84,6 +85,7 @@ export function AnalysisProvider({ children }) {
 
     const agentFindings = {};
     if (apiResult.risk_gaps?.length) agentFindings.risk = apiResult.risk_gaps.length;
+    if (apiResult.cleanser_flags?.length) agentFindings.cleansing = (agentFindings.cleansing || 0) + apiResult.cleanser_flags.length;
     if (apiResult.specifying_flags?.length) agentFindings.specifying = apiResult.specifying_flags.length;
     if (apiResult.structure_flags?.length) agentFindings.cleansing = (agentFindings.cleansing || 0) + apiResult.structure_flags.length;
     if (apiResult.content_integrity_flags?.length) agentFindings.cleansing = (agentFindings.cleansing || 0) + apiResult.content_integrity_flags.length;

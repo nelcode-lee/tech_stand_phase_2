@@ -64,6 +64,10 @@ def _deduplicate_findings(ctx: PipelineContext) -> PipelineContext:
         return (s or "").strip().lower()[:200]
 
     ctx.risk_gaps = _dedup_key(ctx.risk_gaps, lambda g: norm(g.location) + "|" + norm(g.issue))
+    ctx.cleanser_flags = _dedup_key(
+        ctx.cleanser_flags,
+        lambda f: norm(f.location) + "|" + norm(f.current_text),
+    )
     ctx.structure_flags = _dedup_key(ctx.structure_flags, lambda f: norm(f.section) + "|" + norm(f.detail))
     ctx.content_integrity_flags = _dedup_key(
         ctx.content_integrity_flags,
@@ -82,6 +86,203 @@ def _deduplicate_findings(ctx: PipelineContext) -> PipelineContext:
     )
     ctx.conflicts = _dedup_key(ctx.conflicts, lambda c: norm(c.description))
     return ctx
+
+
+def _filter_invalid_policy_citations(ctx: PipelineContext, policy_document_id: str | None = None) -> PipelineContext:
+    """Drop invalid structured policy citations when they are not present in the clause store."""
+    try:
+        from src.rag.document_registry import get_policy_citation_set
+        valid: set[str] = set()
+        for policy_id in _policy_document_ids(ctx, policy_document_id):
+            valid |= get_policy_citation_set(document_id=policy_id)
+        if not valid:
+            valid = get_policy_citation_set(standard_name="BRCGS Food Safety")
+        if not valid:
+            valid = get_policy_citation_set(standard_name="Cranswick Manufacturing Standard")
+    except Exception:
+        return ctx
+    grounded = _extract_grounded_policy_citations(_combined_policy_contents(ctx))
+
+    def _clean(items):
+        for item in items or []:
+            citations = getattr(item, "citations", None)
+            if citations is None:
+                continue
+            filtered = []
+            for citation in citations:
+                cit = str(citation or "").strip()
+                if not cit:
+                    continue
+                if _is_exact_structured_policy_citation(cit):
+                    if (grounded and cit in grounded) or (not grounded and cit in valid):
+                        filtered.append(cit)
+                else:
+                    filtered.append(cit)
+            item.citations = filtered
+            req_ref = getattr(item, "requirement_reference", None)
+            if isinstance(req_ref, str) and _is_exact_structured_policy_citation(req_ref.strip()):
+                req_ref = req_ref.strip()
+                if not (((grounded and req_ref in grounded) or (not grounded and req_ref in valid))):
+                    item.requirement_reference = None
+
+    _clean(ctx.risk_gaps)
+    _clean(ctx.cleanser_flags)
+    _clean(ctx.specifying_flags)
+    _clean(ctx.sequencing_flags)
+    _clean(ctx.formatting_flags)
+    _clean(ctx.compliance_flags)
+    _clean(ctx.terminology_flags)
+    _clean(ctx.conflicts)
+    return ctx
+
+
+def _extract_grounded_policy_citations(policy_content: str) -> set[str]:
+    """Extract exact structured policy citations present in the returned parent policy context block."""
+    grounded: set[str] = set()
+    for raw in re.findall(r"\[([^\]\n]+)\]", policy_content or ""):
+        citation = raw.split(" - ", 1)[0].strip()
+        if _is_exact_structured_policy_citation(citation):
+            grounded.add(citation)
+    return grounded
+
+
+def _is_exact_structured_policy_citation(citation: str) -> bool:
+    """Accept exact structured citations like BRCGS Clause 5.8.3 or Cranswick Std §2.1.1."""
+    text = (citation or "").strip()
+    brcgs_match = re.fullmatch(r"BRCGS Clause\s+(\d+(?:\.\d+){2,4}[A-Za-z]?)", text, re.I)
+    if brcgs_match:
+        return True
+    cranswick_match = re.fullmatch(r"Cranswick Std\s*§\s*(\d+(?:\.\d+){2,4}[A-Za-z]?)", text, re.I)
+    return bool(cranswick_match)
+
+
+def _assign_structured_policy_citations(ctx: PipelineContext, policy_document_id: str | None = None) -> PipelineContext:
+    """Attach grounded structured policy citations by matching findings back to the clause store."""
+    try:
+        from src.rag.document_registry import get_policy_clauses
+        clause_rows: list[dict] = []
+        for policy_id in _policy_document_ids(ctx, policy_document_id):
+            clause_rows.extend(get_policy_clauses(document_id=policy_id))
+        if not clause_rows:
+            clause_rows.extend(get_policy_clauses(standard_name="Cranswick Manufacturing Standard"))
+            clause_rows.extend(get_policy_clauses(standard_name="BRCGS Food Safety"))
+    except Exception:
+        return ctx
+    citable_rows = [
+        row for row in clause_rows
+        if _is_exact_structured_policy_citation(str(row.get("canonical_citation") or "").strip())
+    ]
+    if not citable_rows:
+        return ctx
+
+    def _assign(items):
+        for item in items or []:
+            query_text = _build_policy_query_text(item)
+            if not query_text:
+                continue
+            matches = _match_structured_policy_clauses(query_text, citable_rows, limit=1)
+            if not matches:
+                continue
+            top_citation = str(matches[0].get("canonical_citation") or "").strip()
+            if not top_citation:
+                continue
+            citations = [str(c).strip() for c in (getattr(item, "citations", None) or []) if str(c).strip()]
+            if top_citation not in citations:
+                citations.append(top_citation)
+                item.citations = citations
+            req_ref = getattr(item, "requirement_reference", None)
+            if hasattr(item, "requirement_reference") and (not req_ref or not str(req_ref).strip()):
+                item.requirement_reference = top_citation
+
+    _assign(ctx.risk_gaps)
+    _assign(ctx.cleanser_flags)
+    _assign(ctx.specifying_flags)
+    _assign(ctx.sequencing_flags)
+    _assign(ctx.formatting_flags)
+    _assign(ctx.compliance_flags)
+    _assign(ctx.terminology_flags)
+    _assign(ctx.conflicts)
+    return ctx
+
+
+_POLICY_QUERY_STOPWORDS = {
+    "shall", "must", "with", "that", "this", "from", "there", "their", "where", "when",
+    "procedure", "document", "process", "record", "records", "check", "checks", "using",
+    "used", "ensure", "site", "step", "section", "issue", "risk", "impact", "current",
+    "text", "location", "finding", "recommendation", "needs", "review", "specific",
+    "provide", "added", "missing", "wording", "instruction", "instructions", "follow",
+}
+
+
+def _build_policy_query_text(item) -> str:
+    parts = []
+    for attr in ("term", "location", "excerpt", "current_text", "issue", "description", "risk", "impact"):
+        value = getattr(item, attr, None)
+        if value:
+            parts.append(str(value).strip())
+    return " ".join(part for part in parts if part).strip()
+
+
+def _match_structured_policy_clauses(query_text: str, clause_rows: list[dict], limit: int = 1) -> list[dict]:
+    query_terms = _policy_terms(query_text)
+    if len(query_terms) < 2:
+        return []
+    scored: list[tuple[int, int, dict]] = []
+    for row in clause_rows:
+        keywords = {str(k).lower() for k in (row.get("keywords") or []) if str(k).strip()}
+        haystack = " ".join(
+            [
+                str(row.get("heading") or ""),
+                str(row.get("requirement_text") or ""),
+                " ".join(sorted(keywords)),
+            ]
+        ).lower()
+        exact_hits = 0
+        partial_hits = 0
+        for term in query_terms:
+            if term in keywords:
+                exact_hits += 1
+            elif term in haystack:
+                partial_hits += 1
+        score = exact_hits * 3 + partial_hits
+        if exact_hits >= 2 or score >= 5:
+            scored.append((score, exact_hits, row))
+    scored.sort(key=lambda item: (-item[0], -item[1], item[2].get("canonical_citation") or ""))
+    return [row for _, _, row in scored[:limit]]
+
+
+def _policy_terms(text: str) -> list[str]:
+    words = re.findall(r"[A-Za-z][A-Za-z0-9\-]{3,}", (text or "").lower())
+    deduped: list[str] = []
+    for word in words:
+        if word in _POLICY_QUERY_STOPWORDS:
+            continue
+        if word not in deduped:
+            deduped.append(word)
+    return deduped
+
+
+def _policy_documents(ctx: PipelineContext) -> list[Document]:
+    docs: list[Document] = []
+    if ctx.parent_policy:
+        docs.append(ctx.parent_policy)
+    docs.extend(ctx.higher_order_policies or [])
+    return docs
+
+
+def _policy_document_ids(ctx: PipelineContext, primary_policy_document_id: str | None = None) -> list[str]:
+    ids: list[str] = []
+    if primary_policy_document_id:
+        ids.append(primary_policy_document_id)
+    for doc in _policy_documents(ctx):
+        doc_id = (doc.id or "").strip()
+        if doc_id and doc_id not in ids:
+            ids.append(doc_id)
+    return ids
+
+
+def _combined_policy_contents(ctx: PipelineContext) -> str:
+    return "\n\n".join((doc.content or "").strip() for doc in _policy_documents(ctx) if (doc.content or "").strip())
 
 
 def _to_request_type(s: str) -> RequestType:
@@ -188,42 +389,54 @@ def _fetch_additional_documents(additional_doc_ids: list[str] | None) -> list[Do
     return sibling_docs
 
 
-def _fetch_parent_policy(req: AnalyseRequest) -> Document | None:
-    """
-    Fetch policy-layer chunks and build a parent policy Document for harmonisation.
-    Policy layer is treated as the reference; procedure is checked against it.
-    - harmonisation_review: always fetch policy chunks (all policies, or specific if policy_ref set)
-    - single_document_review: fetch policy when policy_ref is set (request or document registry),
-      or when document layer is sop/work_instruction/principle (fetch all policy for citations)
-    """
+def _fetch_policy_document(
+    *,
+    query_text: str,
+    document_id: str | None = None,
+    standard_name: str | None = None,
+) -> Document | None:
+    """Fetch one policy document from structured clauses first, then chunk fallback."""
     from src.rag.retriever import retrieve
     from src.rag.models import DocLayer
-    from src.rag.document_registry import get_document_policy_ref
-
-    is_harmonisation = _to_request_type(req.request_type) == RequestType.harmonisation_review
-    is_single_review = _to_request_type(req.request_type) == RequestType.single_document_review
-    policy_ref = (req.policy_ref or "").strip()
-    if not policy_ref and req.document_id:
-        policy_ref = (get_document_policy_ref(req.document_id) or "").strip()
-    has_policy_ref = bool(policy_ref)
-    # Fetch policy for harmonisation, when policy_ref is set, or for any single-document review (so agents can cite)
-    needs_policy = is_harmonisation or has_policy_ref
-    if not needs_policy and req.doc_layer:
-        dl = (req.doc_layer or "").strip().lower()
-        if dl in ("sop", "work_instruction", "principle"):
-            needs_policy = True
-    if not needs_policy and is_single_review and req.document_id:
-        needs_policy = True
-    if not needs_policy:
-        return None
+    from src.rag.document_registry import get_policy_context_block
     try:
+        clause_block = ""
+        clause_rows: list[dict] = []
+        if document_id:
+            clause_block, clause_rows = get_policy_context_block(
+                document_id=document_id,
+                query_text=query_text,
+                limit=25,
+                max_chars=12000,
+            )
+        else:
+            clause_block, clause_rows = get_policy_context_block(
+                standard_name=standard_name,
+                query_text=query_text,
+                limit=25,
+                max_chars=12000,
+            )
+        if clause_rows and clause_block:
+            standard_name = clause_rows[0].get("standard_name") or "Policy"
+            version = clause_rows[0].get("version") or ""
+            title = f"{standard_name} {version}".strip() + " (relevant clauses)"
+            return Document(
+                id=document_id or clause_rows[0].get("document_id") or standard_name or "policy",
+                title=title,
+                content=clause_block,
+                doc_layer=DocLayer.policy,
+                sites=[],
+                policy_ref=document_id,
+            )
+        if standard_name and not document_id:
+            return None
+
         policy_chunks = retrieve(
             doc_layer=DocLayer.policy,
-            document_id=policy_ref if has_policy_ref else None,
+            document_id=document_id,
             limit=150,
         )
         if not policy_chunks:
-            log.warning("No policy chunks found — ensure policy documents are ingested with doc_layer=policy")
             return None
         # Sort by document_id then chunk_index for coherent order
         policy_chunks.sort(key=lambda c: ((c.document_id or ""), c.chunk_index))
@@ -237,16 +450,77 @@ def _fetch_parent_policy(req: AnalyseRequest) -> Document | None:
             content=content[:50000],  # cap for LLM context
             doc_layer=DocLayer.policy,
             sites=[],
-            policy_ref=policy_ref or req.policy_ref,
+            policy_ref=document_id,
         )
     except Exception as e:
-        log.warning("Failed to fetch parent policy: %s", e)
+        log.warning("Failed to fetch policy document: %s", e)
         return None
+
+
+def _fetch_parent_policies(req: AnalyseRequest) -> tuple[Document | None, list[Document]]:
+    """
+    Fetch layered policies for analysis.
+
+    Hierarchy for SOP-like docs:
+    BRCGS (higher layer) -> Cranswick Manufacturing Standard (direct parent) -> SOP/work instruction.
+    """
+    from src.rag.document_registry import get_document_content, get_document_policy_ref
+
+    is_harmonisation = _to_request_type(req.request_type) == RequestType.harmonisation_review
+    is_single_review = _to_request_type(req.request_type) == RequestType.single_document_review
+    policy_ref = (req.policy_ref or "").strip()
+    if not policy_ref and req.document_id:
+        policy_ref = (get_document_policy_ref(req.document_id) or "").strip()
+    has_policy_ref = bool(policy_ref)
+    needs_policy = is_harmonisation or has_policy_ref
+    dl = (req.doc_layer or "").strip().lower()
+    if not needs_policy and dl in ("sop", "work_instruction", "principle"):
+        needs_policy = True
+    if not needs_policy and is_single_review and req.document_id:
+        needs_policy = True
+    if not needs_policy:
+        return None, []
+
+    query_text = (req.query or "").strip()
+    if not query_text and req.document_id:
+        try:
+            current_content, _ = get_document_content(req.document_id)
+            query_text = (current_content or "")[:5000]
+        except Exception:
+            query_text = ""
+
+    parent_policy: Document | None = None
+    higher_order_policies: list[Document] = []
+
+    if dl in ("sop", "work_instruction", "principle"):
+        # Direct internal parent standard
+        parent_policy = _fetch_policy_document(
+            query_text=query_text,
+            standard_name="Cranswick Manufacturing Standard",
+        )
+        if not parent_policy and has_policy_ref and "brcgs" not in policy_ref.lower():
+            parent_policy = _fetch_policy_document(query_text=query_text, document_id=policy_ref)
+        # Highest external parent standard
+        higher = _fetch_policy_document(
+            query_text=query_text,
+            standard_name="BRCGS Food Safety",
+        )
+        if higher and (not parent_policy or higher.id != parent_policy.id):
+            higher_order_policies.append(higher)
+        return parent_policy, higher_order_policies
+
+    # Non-SOP fallback: explicit policy ref first, otherwise BRCGS only.
+    if has_policy_ref:
+        parent_policy = _fetch_policy_document(query_text=query_text, document_id=policy_ref)
+    if not parent_policy:
+        parent_policy = _fetch_policy_document(query_text=query_text, standard_name="BRCGS Food Safety")
+    return parent_policy, higher_order_policies
 
 
 # Map API result keys -> agent names for agent_findings
 _FINDING_KEYS_TO_AGENT = {
     "risk_gaps": "risk",
+    "cleanser_flags": "cleansing",
     "content_integrity_flags": "cleansing",
     "structure_flags": "cleansing",
     "conflicts": "conflict",
@@ -300,149 +574,165 @@ def _filter_chunks_by_document(chunks: list[DocumentChunk], document_id: str | N
 @router.post("/analyse")
 async def post_analyse(body: AnalyseRequest):
     """Run the agent pipeline. Accepts content or retrieved_chunks for testing."""
-    chunks = _chunks_from_request(body)
-    chunks = _filter_chunks_by_document(chunks, body.document_id)
-    if body.document_id and not chunks:
-        raise HTTPException(
-            status_code=400,
-            detail=f"No content found for document '{body.document_id}'. The document may not be ingested yet, or ingestion may have failed. Try re-uploading the document.",
-        )
-    doc_id = (body.document_id or "").strip() or (chunks[0].document_id if chunks else "") or ""
-    doc_title = (body.title or "").strip() or (chunks[0].title if chunks else "") or doc_id or ""
-    agents_override = body.agents if body.agents else None
-    parent_policy = _fetch_parent_policy(body)
-    sibling_docs = _fetch_additional_documents(body.additional_doc_ids)
+    try:
+        chunks = _chunks_from_request(body)
+        chunks = _filter_chunks_by_document(chunks, body.document_id)
+        if body.document_id and not chunks:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No content found for document '{body.document_id}'. The document may not be ingested yet, or ingestion may have failed. Try re-uploading the document.",
+            )
+        doc_id = (body.document_id or "").strip() or (chunks[0].document_id if chunks else "") or ""
+        doc_title = (body.title or "").strip() or (chunks[0].title if chunks else "") or doc_id or ""
+        agents_override = body.agents if body.agents else None
+        parent_policy, higher_order_policies = _fetch_parent_policies(body)
+        sibling_docs = _fetch_additional_documents(body.additional_doc_ids)
 
-    # When document_id set: use full document content to avoid chunk overlap duplicates
-    full_content = None
-    if doc_id:
-        try:
-            from src.rag.document_registry import get_document_content
-            full_content, _ = get_document_content(doc_id)
-        except Exception:
-            pass
+        # When document_id set: use full document content for excerpts/citations and to avoid chunk overlap duplicates
+        # If registry has no content, reconstruct from retrieved chunks so agents can still output excerpts and citations
+        full_content = None
+        if doc_id:
+            try:
+                from src.rag.document_registry import get_document_content
+                full_content, _ = get_document_content(doc_id)
+            except Exception:
+                pass
+            if not full_content and chunks:
+                chunks_sorted = sorted(chunks, key=lambda c: getattr(c, "chunk_index", 0))
+                full_content = "\n\n".join((c.text or "").strip() for c in chunks_sorted if (c.text or "").strip())
 
-    # Prior user feedback for this document (from finding_notes) — checked before reasoning
-    prior_feedback: list[dict] = []
-    if doc_id:
+        # Prior user feedback for this document (from finding_notes) — checked before reasoning
+        prior_feedback: list[dict] = []
+        if doc_id:
+            try:
+                from src.rag.finding_notes import get_relevant_finding_notes
+                prior_feedback = get_relevant_finding_notes(doc_id, limit=20)
+            except Exception as e:
+                log.debug("Could not load prior feedback for pipeline: %s", e)
+
+        # Glossary for all docs (from domain_context.json) — agents use for terminology and citations
+        glossary_block: str | None = None
         try:
-            from src.rag.finding_notes import get_relevant_finding_notes
-            prior_feedback = get_relevant_finding_notes(doc_id, limit=20)
+            from src.pipeline.domain import get_glossary_block, load_domain_context
+            glossary_block = get_glossary_block(load_domain_context()) or None
         except Exception as e:
-            log.debug("Could not load prior feedback for pipeline: %s", e)
+            log.debug("Could not load glossary for pipeline: %s", e)
 
-    # Glossary for all docs (from domain_context.json) — agents use for terminology and citations
-    glossary_block: str | None = None
-    try:
-        from src.pipeline.domain import get_glossary_block, load_domain_context
-        glossary_block = get_glossary_block(load_domain_context()) or None
-    except Exception as e:
-        log.debug("Could not load glossary for pipeline: %s", e)
-
-    ctx = PipelineContext(
-        tracking_id=body.tracking_id,
-        request_type=_to_request_type(body.request_type),
-        doc_layer=_to_doc_layer(body.doc_layer),
-        sites=body.sites,
-        policy_ref=body.policy_ref,
-        attached_doc_url=body.attached_doc_url,
-        document_id=doc_id or None,
-        document_title=doc_title or None,
-        retrieved_chunks=chunks,
-        full_document_content=full_content,
-        parent_policy=parent_policy,
-        sibling_docs=sibling_docs,
-        agent_instructions=(body.agent_instructions or "").strip() or None,
-        prior_feedback=prior_feedback,
-        glossary_block=glossary_block,
-    )
-    router_instance = PipelineRouter(agents_override=agents_override)
-    ctx = await router_instance.run(ctx)
-
-    # Deduplicate findings — chunk overlap or table extraction can produce same finding twice
-    ctx = _deduplicate_findings(ctx)
-
-    # Persist session for dashboard metrics
-    from src.rag.analysis_sessions import record_session
-
-    doc_id = body.document_id or (chunks[0].document_id if chunks else "") or ""
-    title = body.title or (chunks[0].title if chunks else "") or doc_id or "Unnamed"
-    sites_str = ",".join(body.sites) if body.sites else ""
-    total_findings = (
-        len(ctx.risk_gaps)
-        + len(ctx.specifying_flags)
-        + len(ctx.structure_flags)
-        + len(ctx.content_integrity_flags)
-        + len(ctx.sequencing_flags)
-        + len(ctx.formatting_flags)
-        + len(ctx.compliance_flags)
-        + len(ctx.terminology_flags)
-        + len(ctx.conflicts)
-    )
-    agent_findings = {}
-    for key, agent in _FINDING_KEYS_TO_AGENT.items():
-        val = getattr(ctx, key, None)
-        count = len(val) if val else 0
-        if count > 0:
-            agent_findings[agent] = agent_findings.get(agent, 0) + count
-    # Glossary candidates: vague terms to add to glossary (route to HITL)
-    glossary_candidates = [
-        {"term": t.term, "recommendation": t.recommendation}
-        for t in ctx.terminology_flags
-        if getattr(t, "glossary_candidate", False)
-    ]
-
-    analysis_date = datetime.now(timezone.utc).isoformat()
-    requester = (body.requester or "").strip()
-
-    response = {
-        "tracking_id": ctx.tracking_id,
-        "document_id": doc_id,
-        "title": title,
-        "requester": requester,
-        "analysis_date": analysis_date,
-        "draft_ready": ctx.draft_ready,
-        "draft_content": ctx.draft_content,
-        "overall_risk": ctx.overall_risk.value if ctx.overall_risk else None,
-        "conflict_count": ctx.conflict_count,
-        "blocker_count": ctx.blocker_count,
-        "conflicts": [c.model_dump() for c in ctx.conflicts],
-        "terminology_flags": [t.model_dump() for t in ctx.terminology_flags],
-        "glossary_candidates": glossary_candidates,
-        "risk_scores": [r.model_dump() for r in ctx.risk_scores],
-        "risk_gaps": [g.model_dump() for g in ctx.risk_gaps],
-        "specifying_flags": [s.model_dump() for s in ctx.specifying_flags],
-        "structure_flags": [s.model_dump() for s in ctx.structure_flags],
-        "content_integrity_flags": [c.model_dump() for c in ctx.content_integrity_flags],
-        "sequencing_flags": [s.model_dump() for s in ctx.sequencing_flags],
-        "formatting_flags": [f.model_dump() for f in ctx.formatting_flags],
-        "compliance_flags": [c.model_dump() for c in ctx.compliance_flags],
-        "warnings": ctx.warnings,
-        "errors": [e.model_dump() for e in ctx.errors],
-        "agents_run": ctx.agents_run,
-    }
-    session_saved = False
-    try:
-        record_session(
-            tracking_id=ctx.tracking_id,
-            document_id=doc_id,
-            title=title,
-            requester=requester,
-            doc_layer=ctx.doc_layer.value,
-            sites=sites_str,
-            overall_risk=ctx.overall_risk.value if ctx.overall_risk else None,
-            total_findings=total_findings,
-            agents_run=ctx.agents_run,
-            agent_findings=agent_findings,
-            workflow_type="review",
-            result_json=response,
+        ctx = PipelineContext(
+            tracking_id=body.tracking_id,
+            request_type=_to_request_type(body.request_type),
+            doc_layer=_to_doc_layer(body.doc_layer),
+            sites=body.sites,
+            policy_ref=body.policy_ref,
+            attached_doc_url=body.attached_doc_url,
+            document_id=doc_id or None,
+            document_title=doc_title or None,
+            retrieved_chunks=chunks,
+            full_document_content=full_content,
+            parent_policy=parent_policy,
+            higher_order_policies=higher_order_policies,
+            sibling_docs=sibling_docs,
+            agent_instructions=(body.agent_instructions or "").strip() or None,
+            prior_feedback=prior_feedback,
+            glossary_block=glossary_block,
         )
-        session_saved = True
-    except Exception as e:
-        log.warning("Failed to persist analysis session for dashboard: %s", e)
+        router_instance = PipelineRouter(agents_override=agents_override)
+        ctx = await router_instance.run(ctx)
 
-    response["session_saved"] = session_saved
-    return response
+        # Deduplicate findings — chunk overlap or table extraction can produce same finding twice
+        ctx = _deduplicate_findings(ctx)
+        ctx = _filter_invalid_policy_citations(ctx, parent_policy.id if parent_policy else None)
+        ctx = _assign_structured_policy_citations(ctx, parent_policy.id if parent_policy else None)
+
+        # Persist session for dashboard metrics
+        from src.rag.analysis_sessions import record_session
+
+        doc_id = body.document_id or (chunks[0].document_id if chunks else "") or ""
+        title = body.title or (chunks[0].title if chunks else "") or doc_id or "Unnamed"
+        sites_str = ",".join(body.sites) if body.sites else ""
+        total_findings = (
+            len(ctx.risk_gaps)
+            + len(ctx.cleanser_flags)
+            + len(ctx.specifying_flags)
+            + len(ctx.structure_flags)
+            + len(ctx.content_integrity_flags)
+            + len(ctx.sequencing_flags)
+            + len(ctx.formatting_flags)
+            + len(ctx.compliance_flags)
+            + len(ctx.terminology_flags)
+            + len(ctx.conflicts)
+        )
+        agent_findings = {}
+        for key, agent in _FINDING_KEYS_TO_AGENT.items():
+            val = getattr(ctx, key, None)
+            count = len(val) if val else 0
+            if count > 0:
+                agent_findings[agent] = agent_findings.get(agent, 0) + count
+        # Glossary candidates: vague terms to add to glossary (route to HITL)
+        glossary_candidates = [
+            {"term": t.term, "recommendation": t.recommendation}
+            for t in ctx.terminology_flags
+            if getattr(t, "glossary_candidate", False)
+        ]
+
+        analysis_date = datetime.now(timezone.utc).isoformat()
+        requester = (body.requester or "").strip()
+
+        response = {
+            "tracking_id": ctx.tracking_id,
+            "document_id": doc_id,
+            "title": title,
+            "doc_layer": ctx.doc_layer.value,
+            "requester": requester,
+            "analysis_date": analysis_date,
+            "draft_ready": ctx.draft_ready,
+            "draft_content": ctx.draft_content,
+            "overall_risk": ctx.overall_risk.value if ctx.overall_risk else None,
+            "conflict_count": ctx.conflict_count,
+            "blocker_count": ctx.blocker_count,
+            "conflicts": [c.model_dump() for c in ctx.conflicts],
+            "terminology_flags": [t.model_dump() for t in ctx.terminology_flags],
+            "glossary_candidates": glossary_candidates,
+            "risk_scores": [r.model_dump() for r in ctx.risk_scores],
+            "risk_gaps": [g.model_dump() for g in ctx.risk_gaps],
+            "cleanser_flags": [c.model_dump() for c in ctx.cleanser_flags],
+            "specifying_flags": [s.model_dump() for s in ctx.specifying_flags],
+            "structure_flags": [s.model_dump() for s in ctx.structure_flags],
+            "content_integrity_flags": [c.model_dump() for c in ctx.content_integrity_flags],
+            "sequencing_flags": [s.model_dump() for s in ctx.sequencing_flags],
+            "formatting_flags": [f.model_dump() for f in ctx.formatting_flags],
+            "compliance_flags": [c.model_dump() for c in ctx.compliance_flags],
+            "warnings": ctx.warnings,
+            "errors": [e.model_dump() for e in ctx.errors],
+            "agents_run": ctx.agents_run,
+        }
+        session_saved = False
+        try:
+            record_session(
+                tracking_id=ctx.tracking_id,
+                document_id=doc_id,
+                title=title,
+                requester=requester,
+                doc_layer=ctx.doc_layer.value,
+                sites=sites_str,
+                overall_risk=ctx.overall_risk.value if ctx.overall_risk else None,
+                total_findings=total_findings,
+                agents_run=ctx.agents_run,
+                agent_findings=agent_findings,
+                workflow_type="review",
+                result_json=response,
+            )
+            session_saved = True
+        except Exception as e:
+            log.warning("Failed to persist analysis session for dashboard: %s", e)
+
+        response["session_saved"] = session_saved
+        return response
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("Analysis failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 class DraftRequest(BaseModel):

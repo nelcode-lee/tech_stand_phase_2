@@ -139,7 +139,7 @@ RULES
 - Score every gap using the FMEA dimensions above.
 
 CITATIONS — INCLUDE FOR EVERY FINDING WHERE APPLICABLE
-You MUST include a "citations" array for each gap when it relates to BRCGS, Cranswick standards, parent policy, or regulatory requirements. When the PARENT POLICY section is provided below, use it: if the gap relates to a requirement that appears in that policy, cite it as "parent policy [<exact title from context>]". Also use "BRCGS Clause X.Y", "Cranswick Std §X.Y", or "Reg (EC) 852/2004 Art X" when applicable. Prefer at least one citation per finding for safety, traceability, corrective action, or compliance-related gaps. Leave [] only when no provided source could reasonably apply.
+You MUST include a "citations" array for each gap when it relates to BRCGS, Cranswick standards, parent policy, or regulatory requirements. When the PARENT POLICY section is provided below, use it: if the gap relates to a requirement that appears in that policy, cite it as "parent policy [<exact title from context>]". Also use "BRCGS Clause X.Y.Z", "Cranswick Std §X.Y.Z", or "Reg (EC) 852/2004 Art X" when applicable. Use only exact structured citations shown in the provided parent policy context. Never cite broad section headers such as "BRCGS Clause 5.8" or "Cranswick Std §2.1". If no exact clause is shown, leave structured policy citations empty.
 
 OUTPUT FORMAT
 Return ONLY a JSON array. Each object:
@@ -161,10 +161,14 @@ def _build_system_prompt(ctx: PipelineContext) -> str:
     sites = ", ".join(ctx.sites) if ctx.sites else "not specified"
 
     # --- parent policy summary ---
+    policy_docs = []
     if ctx.parent_policy:
-        parent_policy_summary = (
-            f'"{ctx.parent_policy.title}" ({ctx.parent_policy.doc_layer.value}): '
-            f"{ctx.parent_policy.content[:800].strip()}…"
+        policy_docs.append(ctx.parent_policy)
+    policy_docs.extend(ctx.higher_order_policies or [])
+    if policy_docs:
+        parent_policy_summary = "\n".join(
+            f'  - "{doc.title}" ({doc.doc_layer.value}): {(doc.content or "")[:400].strip()}…'
+            for doc in policy_docs[:2]
         )
     else:
         parent_policy_summary = "not provided"
@@ -290,9 +294,14 @@ def _build_prompt(ctx: PipelineContext) -> str:
         sections.append(f"PRIMARY DOCUMENT (cleansed):\n{ctx.cleansed_content[:12000]}")
 
     # Parent policy (if available) — enough content for citations
+    policy_docs = []
     if ctx.parent_policy:
+        policy_docs.append(ctx.parent_policy)
+    policy_docs.extend(ctx.higher_order_policies or [])
+    for i, doc in enumerate(policy_docs[:2]):
+        label = "DIRECT PARENT POLICY" if i == 0 else f"HIGHER-ORDER POLICY {i}"
         sections.append(
-            f"PARENT POLICY — {ctx.parent_policy.title} (cite as 'parent policy [{ctx.parent_policy.title}]' when the finding relates to this):\n{ctx.parent_policy.content[:6000]}"
+            f"{label} - {doc.title} (cite as 'parent policy [{doc.title}]' when the finding relates to this):\n{doc.content[:3000]}"
         )
 
     # Sibling docs (other sites — capped to avoid token overrun)

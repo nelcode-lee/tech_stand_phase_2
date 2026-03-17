@@ -281,6 +281,11 @@
   border-bottom: 2px solid var(--cranswick-di-serria);
 }
 
+.draft-layout-hint {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+}
+
 .draft-highlight-hint {
   font-size: 0.8125rem;
   color: var(--cranswick-di-serria);

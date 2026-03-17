@@ -27,7 +27,7 @@ RULES
 - blocks_draft: true only for critical UNSANCTIONED_CONFLICT.
 
 CITATIONS — ALWAYS INCLUDE WHEN POSSIBLE
-When a conflict relates to BRCGS, Cranswick standards, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y", "Cranswick Std §X.Y", "parent policy [title]". If such sources are in the context and apply, include at least one citation. Leave [] only when no such source could apply.
+When a conflict relates to BRCGS, Cranswick standards, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y.Z", "Cranswick Std §X.Y.Z", "parent policy [title]". Use only exact structured citations shown in the provided parent policy context. Never cite broad section headers such as "BRCGS Clause 5.8" or "Cranswick Std §2.1". If no exact clause is shown, leave structured policy citations empty.
 
 OUTPUT FORMAT
 Return ONLY a JSON array. Each object: {"conflict_type": "UNSANCTIONED_CONFLICT|SANCTIONED_VARIANCE|PENDING_REVIEW|PARENT_BREACH", "severity": "info|low|medium|high|critical", "layer": "<doc layer>", "sites": [], "document_refs": [], "description": "<explicit contradiction>", "recommendation": "<required alignment>", "blocks_draft": false, "citations": ["<BRCGS/Cranswick/policy ref>"]}
@@ -42,7 +42,7 @@ class ConflictAgent(BaseAgent):
         if not ctx.cleansed_content:
             return ctx
 
-        parent_text = ctx.parent_policy.content if ctx.parent_policy else "(No parent policy provided)"
+        parent_text = self._policy_context_block(ctx, max_chars_per_doc=2000) or "(No parent policy provided)"
         prompt = f"DOCUMENTS:\n{ctx.cleansed_content[:12000]}\n\nPARENT POLICY:\n{parent_text[:4000]}"
         system = CONFLICT_SYSTEM_PROMPT
         if getattr(ctx, "glossary_block", None) and (ctx.glossary_block or "").strip():

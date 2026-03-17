@@ -88,6 +88,15 @@ class SpecifyingFlag(BaseModel):
     citations: list[str] = Field(default_factory=list)  # BRCGS / Cranswick / regulatory refs when applicable
 
 
+class CleanserFlag(BaseModel):
+    """Clarity or accessibility issue flagged by Cleanser."""
+    location: str
+    current_text: str
+    issue: str
+    recommendation: str
+    citations: list[str] = Field(default_factory=list)  # BRCGS / Cranswick / regulatory refs when applicable
+
+
 class StructureFlag(BaseModel):
     """Group template compliance issue identified during cleansing."""
     flag_type: str       # omission | ordering | unexpected
@@ -185,6 +194,7 @@ class PipelineContext(BaseModel):
     retrieved_chunks: list[DocumentChunk] = Field(default_factory=list)
     full_document_content: str | None = None  # When document_id set: full text from document_content table (avoids chunk overlap)
     parent_policy: Document | None = None
+    higher_order_policies: list[Document] = Field(default_factory=list)
     current_version: Document | None = None
     sibling_docs: list[Document] = Field(default_factory=list)
     agent_instructions: str | None = None  # User-provided knowledge for agents; never supersedes policy
@@ -197,6 +207,7 @@ class PipelineContext(BaseModel):
     conflicts: list[Conflict] = Field(default_factory=list)
     risk_scores: list[RiskScore] = Field(default_factory=list)
     risk_gaps: list[RiskGap] = Field(default_factory=list)
+    cleanser_flags: list[CleanserFlag] = Field(default_factory=list)
     specifying_flags: list[SpecifyingFlag] = Field(default_factory=list)
     structure_flags: list[StructureFlag] = Field(default_factory=list)
     content_integrity_flags: list[ContentIntegrityFlag] = Field(default_factory=list)

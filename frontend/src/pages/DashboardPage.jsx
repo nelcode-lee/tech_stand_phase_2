@@ -19,6 +19,23 @@ import './DashboardPage.css';
 
 const SEVERITY_CLASS = { critical: 'alert-critical', high: 'alert-high', medium: 'alert-medium', low: 'alert-low' };
 
+const DISMISSED_ALERTS_KEY = 'tech-standards-dismissed-alerts';
+function loadDismissedAlerts() {
+  try {
+    const raw = localStorage.getItem(DISMISSED_ALERTS_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    return new Set(Array.isArray(parsed) ? parsed : []);
+  } catch {
+    return new Set();
+  }
+}
+function saveDismissedAlerts(set) {
+  try {
+    localStorage.setItem(DISMISSED_ALERTS_KEY, JSON.stringify([...set]));
+  } catch (_) { /* ignore */ }
+}
+
 // Map agent run-names from pipeline to display labels
 const AGENT_DISPLAY = {
   risk:        'Risk-Assessor',
@@ -116,6 +133,7 @@ export default function DashboardPage() {
   const [loadingDocs, setLoadingDocs] = useState(false);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [sessionsError, setSessionsError] = useState(null);
+  const [dismissedAlerts, setDismissedAlerts] = useState(loadDismissedAlerts);
 
   async function fetchDocs() {
     setLoadingDocs(true);
@@ -311,11 +329,11 @@ export default function DashboardPage() {
 
   const totalHealth = Object.values(healthCounts).reduce((a, b) => a + b, 0) || 1;
 
-  // Alerts: site-filtered sessions with findings (when a site is selected, only that site's docs; "All Sites" = all)
+  // Alerts: site-filtered sessions with findings, excluding user-dismissed (when a site is selected, only that site's docs; "All Sites" = all)
   const riskOrder = { critical: 0, high: 1, medium: 2, low: 3 };
   const liveAlerts = useMemo(() =>
     siteFilteredSessions
-      .filter(s => (s.totalFindings || 0) > 0)
+      .filter(s => (s.totalFindings || 0) > 0 && !dismissedAlerts.has(s.trackingId || s.tracking_id || ''))
       .sort((a, b) => {
         const ra = riskOrder[a.overallRisk] ?? 4;
         const rb = riskOrder[b.overallRisk] ?? 4;
@@ -332,7 +350,7 @@ export default function DashboardPage() {
         action:      'View analysis',
         session:     s,
       })),
-  [siteFilteredSessions]);
+  [siteFilteredSessions, dismissedAlerts]);
 
   // ---- Navigation helpers ---------------------------------------------------
 
@@ -479,7 +497,15 @@ export default function DashboardPage() {
                     <button type="button" className="dash-alert-action" onClick={() => startReview(a.session ? { documentId: a.documentId || a.doc, title: a.doc, trackingId: a.session.trackingId } : null)}>
                       {a.action}
                     </button>
-                    <button type="button" className="dash-alert-action dash-alert-delete" onClick={() => removeSessionFromLog(a.id)} title="Remove from Attention Required">
+                    <button type="button" className="dash-alert-action dash-alert-delete" onClick={() => {
+                      removeSessionFromLog(a.id);
+                      setDismissedAlerts(prev => {
+                        const next = new Set(prev);
+                        next.add(a.id);
+                        saveDismissedAlerts(next);
+                        return next;
+                      });
+                    }} title="Remove from Attention Required">
                       Delete
                     </button>
                   </div>

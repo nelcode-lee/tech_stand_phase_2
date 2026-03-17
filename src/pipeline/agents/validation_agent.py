@@ -40,7 +40,7 @@ ABSOLUTE RULES
 - No invented regulatory requirements.
 
 CITATIONS — ALWAYS INCLUDE WHEN POSSIBLE
-When a gap relates to BRCGS, Cranswick standards, customer spec, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y", "Cranswick Std §X.Y", "parent policy [title]". If such sources are in the context and apply, include at least one citation. Leave [] only when no such source could apply.
+When a gap relates to BRCGS, Cranswick standards, customer spec, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y.Z", "Cranswick Std §X.Y.Z", "parent policy [title]". Use only exact structured citations shown in the provided parent policy context. Never cite broad section headers such as "BRCGS Clause 5.8" or "Cranswick Std §2.1". If no exact clause is shown, leave structured policy citations empty.
 
 OUTPUT
 Return only a JSON array. Each item has:
@@ -51,7 +51,7 @@ Return only a JSON array. Each item has:
 - recommendation: correction needed to meet requirement (factual only)
 - citations: array of BRCGS/Cranswick/parent policy refs — include when applicable
 
-Example: [{"location": "Section 4", "excerpt": "4. CCP verification: temperature recorded weekly.", "issue": "CCP verification records not referenced", "requirement_reference": "BRCGS Clause 5.8", "recommendation": "Add CCP verification record form reference", "citations": ["BRCGS Clause 5.8", "parent policy [Food Safety Policy]"]}]
+Example: [{"location": "Section 4", "excerpt": "4. CCP verification: temperature recorded weekly.", "issue": "CCP verification records not referenced", "requirement_reference": "parent policy [Food Safety Policy]", "recommendation": "Add CCP verification record form reference", "citations": ["parent policy [Food Safety Policy]"]}]
 If no issues, return [].""" + DOCUMENT_REFERENCE_RULE + JOB_TITLE_RULE + TOLERANCE_VS_REFERENCE_RULE + PURPOSE_OBJECTIVE_RULE
 
 
@@ -66,8 +66,9 @@ class ValidationAgent(BaseAgent):
         if content:
             try:
                 prompt_parts = ["Analyse the following document for regulatory and compliance alignment:\n\n", content[:12000]]
-                if ctx.parent_policy and ctx.parent_policy.content:
-                    prompt_parts.append(f"\n\nPARENT POLICY (use for citations when applicable):\n{ctx.parent_policy.content[:6000]}")
+                policy_block = self._policy_context_block(ctx, max_chars_per_doc=3000)
+                if policy_block:
+                    prompt_parts.append(f"\n\nPARENT POLICY (use for citations when applicable):\n{policy_block[:6000]}")
                 prompt = "".join(prompt_parts)
                 system = VALIDATION_COMPLIANCE_PROMPT
                 if getattr(ctx, "glossary_block", None) and (ctx.glossary_block or "").strip():

@@ -39,7 +39,7 @@ ABSOLUTE RULES
 - Only flag issues that are demonstrably wrong based on the text.
 
 CITATIONS — ALWAYS INCLUDE WHEN POSSIBLE
-When a sequencing issue relates to BRCGS, Cranswick standards, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y", "Cranswick Std §X.Y". If such sources are in the context and apply, include at least one citation. Leave [] only when no such source could apply.
+When a sequencing issue relates to BRCGS, Cranswick standards, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y.Z" or "Cranswick Std §X.Y.Z". Use only exact structured citations shown in the provided parent policy context. Never cite broad section headers such as "BRCGS Clause 5.8" or "Cranswick Std §2.1". If no exact clause is shown, leave structured policy citations empty.
 
 OUTPUT
 Return only a JSON array. Each item has:
@@ -50,7 +50,7 @@ Return only a JSON array. Each item has:
 - recommendation: required change while staying within document content
 - citations: array of BRCGS/Cranswick/policy refs — include when applicable
 
-Example: [{"location": "Step 5", "excerpt": "5. Pack product into boxes. 6. Record temperature.", "issue": "Temperature check occurs after product has been packed", "impact": "CCP verification too late", "recommendation": "Move temperature verification before packing step", "citations": ["BRCGS Clause 5.8"]}]
+Example: [{"location": "Step 5", "excerpt": "5. Pack product into boxes. 6. Record temperature.", "issue": "Temperature check occurs after product has been packed", "impact": "CCP verification too late", "recommendation": "Move temperature verification before packing step", "citations": []}]
 If no issues, return [].""" + DOCUMENT_REFERENCE_RULE
 
 
@@ -68,8 +68,9 @@ class SequencingAgent(BaseAgent):
 
         try:
             prompt_parts = ["Analyse the following procedure for sequencing and logical flow issues:\n\n", content[:12000]]
-            if ctx.parent_policy and ctx.parent_policy.content:
-                prompt_parts.append(f"\n\nPARENT POLICY (use for citations when applicable):\n{ctx.parent_policy.content[:6000]}")
+            policy_block = self._policy_context_block(ctx, max_chars_per_doc=3000)
+            if policy_block:
+                prompt_parts.append(f"\n\nPARENT POLICY (use for citations when applicable):\n{policy_block[:6000]}")
             prompt = "".join(prompt_parts)
             system = SEQUENCING_SYSTEM_PROMPT
             if getattr(ctx, "glossary_block", None) and (ctx.glossary_block or "").strip():
