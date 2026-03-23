@@ -9,6 +9,7 @@ from src.pipeline.agent_rules import (
     CORRECTIVE_ACTIONS_RULE,
 )
 from src.pipeline.base_agent import BaseAgent
+from src.pipeline.context_limits import max_policy_context_per_doc_chars, slice_document_for_agent
 from src.pipeline.llm import completion, parse_json_array
 from src.pipeline.models import PipelineContext, RiskGap, RiskLevel
 
@@ -89,12 +90,57 @@ _CROSS_DOC_CATEGORIES = [
     "Document control for vehicle seal tags not clarified",
 ]
 
-_SYSTEM_PROMPT_TEMPLATE = """You are the Risk and Assumption Gap Analyst for Cranswick PLC, a UK food manufacturing group operating across multiple site types including meat processing, bakery, prepared foods, and distribution.
+# Hard-coded FMEA scales for consistent LLM scoring (RPN = S × Scope × Detectability, range 1–125).
+_FMEA_SCORING_BLOCK = """FMEA SCORING — score each gap on three dimensions (1–5). The platform computes Risk Priority Number (RPN) = Severity × Scope × Detectability (integer 1–125). Apply the definitions below consistently; do not output RPN in JSON — only the three integers.
+
+SEVERITY (consequence if the gap causes a failure)
+1 — No plausible harm: cosmetic or administrative only
+2 — Minor operational impact: rework, delay, minor non-conformance
+3 — Significant quality or compliance gap: audit finding likely, product quality affected
+4 — Food safety or legal risk: regulatory breach, allergen exposure possible, potential illness
+5 — Critical / immediate harm: CCP failure, serious injury, product recall, fatality risk
+
+SCOPE (how many people, batches, or sites are affected)
+1 — Single step or single operator
+2 — One shift or one production run
+3 — One product line or one site department
+4 — Whole site / multi-shift
+5 — Multi-site, Group-wide, or customer-facing
+
+DETECTABILITY (how likely the gap is to be caught before harm occurs)
+1 — Certain to be caught: existing controls or checks will intercept
+2 — Likely to be caught: supervisory review or downstream check probable
+3 — Uncertain: depends on operator experience or vigilance
+4 — Unlikely to be caught: no documented check exists
+5 — Undetectable by design: gap is in the final or only control step
+"""
+
+_SYSTEM_PROMPT_TEMPLATE = """You are a systematic document gap analyst. Your role is to review controlled procedures, policies, and operational documents and identify — without inference or invention — gaps, unstated assumptions, and missing information that could cause a document to fail in practice, fail an audit, or be misexecuted by someone unfamiliar with the process. You are an analytical reviewer, not a subject matter expert. You report only what is observable in the text and what is absent relative to applicable standards and grounding documents. You do not speculate about intent or supply content that is not grounded in the document under review. You have access to grounding documents and organisational standards through the sources listed under "GROUNDING DOCUMENT ACCESS" below. You use these to surface requirements that should be present but are not — including gaps the document gives no indication of. Finding information in a grounding document does not resolve a gap; it confirms what is missing from the document under review. You analyse documents as they exist at the time of review. You do not assume information exists elsewhere unless it is explicitly present in the provided document context. You do not assume an operator would locate missing information through another route. Your findings will be reviewed by {primary_audience} who hold accountability for compliance and operational correctness. Your role is to surface what requires their judgement — not to exercise it yourself.
 
 DOCUMENT CONTEXT
+{organisation_context}
+- Sector: {sector}
+- Document types in scope: {document_types}
+- Applicable standards: {governing_standards}
+- Site types covered: {site_types}
+
+5. GROUNDING DOCUMENT ACCESS
+You have access to the following grounding sources:
+{grounding_sources}
+Use these sources to:
+- Identify requirements that SHOULD be reflected in this document but are absent — including requirements the document gives no indication of (unknown unknowns)
+- Verify whether a cited form, procedure, or reference actually exists
+- Identify where this document's content contradicts a parent policy or governing standard
+- Identify scope gaps: activities, roles, or scenarios covered in grounding documents but unaddressed here
+Do NOT use grounding documents to:
+- Conclude that a gap is resolved because the information exists elsewhere — if it is required in this document and absent, flag it regardless
+- Infer that an operator would find the missing information via another route — the document must stand independently unless it explicitly cross-references the other source
+- Supply content for recommendations — grounding documents inform what is missing, not what the answer should be
+
+ADDITIONAL REVIEW CONTEXT (this request)
 - Document layer: {doc_layer}
 - Sites in scope: {sites}
-- Parent policy: {parent_policy_summary}
+- Parent policy (summary): {parent_policy_summary}
 - Sibling documents (same layer, other sites): {sibling_summary}
 - Conflicts already identified by the Conflict agent: {conflict_summary}
 {agent_instructions_block}
@@ -104,10 +150,7 @@ DOCUMENT CONTEXT
 DOMAIN SEVERITY RULES (apply these when scoring)
 {severity_rules}
 
-FMEA SCORING — score each gap on three dimensions (1–5 each):
-- Severity: {severity_scale}
-- Scope: {scope_scale}
-- Detectability: {detectability_scale}
+{fmea_scoring_block}
 
 ESCALATION CONTACTS (reference in recommendations where relevant)
 {escalation_contacts}
@@ -136,19 +179,48 @@ YOU MUST IDENTIFY (inclusive of, but not limited to):
 RULES
 - Do not fill gaps. Report only what is observable.
 - Each gap must be a separate JSON object. Never merge two gaps into one object.
-- Score every gap using the FMEA dimensions above.
-
-CITATIONS — INCLUDE FOR EVERY FINDING WHERE APPLICABLE
-You MUST include a "citations" array for each gap when it relates to BRCGS, Cranswick standards, parent policy, or regulatory requirements. When the PARENT POLICY section is provided below, use it: if the gap relates to a requirement that appears in that policy, cite it as "parent policy [<exact title from context>]". Also use "BRCGS Clause X.Y.Z", "Cranswick Std §X.Y.Z", or "Reg (EC) 852/2004 Art X" when applicable. Use only exact structured citations shown in the provided parent policy context. Never cite broad section headers such as "BRCGS Clause 5.8" or "Cranswick Std §2.1". If no exact clause is shown, leave structured policy citations empty.
+- Score every gap using the FMEA dimensions above (severity, scope, detectability each 1–5). RPN is computed server-side as their product — do not add an "rpn" field.
 
 OUTPUT FORMAT
 Return ONLY a JSON array. Each object:
-{{"location": "<section, step, or heading>", "excerpt": "<exact quote from document — the text that relates to this gap; copy-paste from source>", "issue": "<the specific missing information or unsafe assumption>", "risk": "<factual consequence if left unaddressed>", "recommendation": "<exactly what information must be added>", "severity": <1-5>, "scope": <1-5>, "detectability": <1-5>, "citations": ["<BRCGS/Cranswick/policy ref>"]}}
+{{"location": "<section, step, or heading>", "excerpt": "<exact quote from document — the text that relates to this gap; copy-paste from source>", "issue": "<the specific missing information or unsafe assumption>", "risk": "<factual consequence if left unaddressed>", "recommendation": "<exactly what information must be added>", "severity": <1-5>, "scope": <1-5>, "detectability": <1-5>}}
 
 CRITICAL: "excerpt" must be the exact text from the document that relates to the gap — this is used to highlight the relevant passage in the original. If the gap concerns missing content, quote the nearest surrounding text (e.g. the step or paragraph where the gap applies).
 
 If no issues found, return [].
 """ + DOCUMENT_REFERENCE_RULE + JOB_TITLE_RULE + TOLERANCE_VS_REFERENCE_RULE + CORRECTIVE_ACTIONS_RULE
+
+
+def _build_grounding_sources(ctx: PipelineContext) -> str:
+    """Bullet list of what grounding material is available for this run (section 5 of system prompt)."""
+    lines: list[str] = []
+    if ctx.parent_policy:
+        lines.append(
+            f'- Direct parent policy: "{ctx.parent_policy.title}" '
+            "(full excerpt in USER message under DIRECT PARENT POLICY)"
+        )
+    for i, doc in enumerate((ctx.higher_order_policies or [])[:4]):
+        lines.append(
+            f'- Higher-order policy {i + 1}: "{doc.title}" (excerpt in USER message)'
+        )
+    if ctx.sibling_docs:
+        lines.append(
+            f"- Sibling / parallel site documents: {len(ctx.sibling_docs)} "
+            "(excerpts in USER message)"
+        )
+    lines.append(
+        "- Standard glossary: present in this system prompt when the STANDARD GLOSSARY block is included"
+    )
+    lines.append(
+        "- Domain severity rules, FMEA scales, and escalation contacts: defined later in this system prompt"
+    )
+    if not ctx.parent_policy and not (ctx.higher_order_policies or []) and not ctx.sibling_docs:
+        lines.insert(
+            0,
+            "(No parent or sibling policy documents in this request — rely on PRIMARY DOCUMENT in the USER "
+            "message plus applicable standards under DOCUMENT CONTEXT.)",
+        )
+    return "\n".join(lines)
 
 
 def _build_system_prompt(ctx: PipelineContext) -> str:
@@ -223,18 +295,10 @@ def _build_system_prompt(ctx: PipelineContext) -> str:
     cross_doc_note = "\n   - " + "\n   - ".join(_CROSS_DOC_CATEGORIES)
 
     # --- domain context fields (from domain_context.json) ---
-    fmea = _DOMAIN_CTX.get("fmea_scoring", {})
     severity_rules_lines = []
     for cat, meta in _DOMAIN_CTX.get("severity_rules", {}).get("categories", {}).items():
         severity_rules_lines.append(f"  - {cat}: {meta.get('note', '')}")
     severity_rules = "\n".join(severity_rules_lines) if severity_rules_lines else "  (not configured)"
-
-    def _scale_lines(scale: dict) -> str:
-        return " | ".join(f"{k}={v}" for k, v in scale.items()) if scale else "(not configured)"
-
-    severity_scale = _scale_lines(fmea.get("severity_scale", {}))
-    scope_scale = _scale_lines(fmea.get("scope_scale", {}))
-    detectability_scale = _scale_lines(fmea.get("detectability_scale", {}))
 
     escalation = _DOMAIN_CTX.get("escalation_contacts", {})
     escalation_lines = [
@@ -246,9 +310,40 @@ def _build_system_prompt(ctx: PipelineContext) -> str:
 
     glossary_block = ""
     if getattr(ctx, "glossary_block", None) and (ctx.glossary_block or "").strip():
-        glossary_block = "\nSTANDARD GLOSSARY (use for consistent terminology; cite 'glossary' when a finding relates to a defined term):\n" + (ctx.glossary_block or "").strip()
+        glossary_block = "\nSTANDARD GLOSSARY (use for consistent terminology when a finding relates to a defined term):\n" + (ctx.glossary_block or "").strip()
+
+    # Optional overrides via domain_context.json (top-level keys)
+    organisation_context = _DOMAIN_CTX.get("organisation_context") or (
+        "Cranswick PLC — UK food manufacturing group operating across meat processing, bakery, "
+        "prepared foods, and distribution."
+    )
+    sector = _DOMAIN_CTX.get("sector") or "Food manufacturing and distribution (United Kingdom)"
+    document_types = _DOMAIN_CTX.get("document_types") or (
+        "Controlled procedures, policies, principles, SOPs, work instructions, and operational documents "
+        f"as applicable; current request document layer: {doc_layer}"
+    )
+    frameworks = (_DOMAIN_CTX.get("regulatory_references") or {}).get("frameworks") or []
+    governing_standards = _DOMAIN_CTX.get("governing_standards") or (
+        "; ".join(frameworks)
+        if frameworks
+        else (
+            "BRCGS Food Safety Standard, applicable UK/EU food hygiene law, and Cranswick technical "
+            "standards (use only what appears in provided context)"
+        )
+    )
+    primary_audience = _DOMAIN_CTX.get("primary_audience") or (
+        "process owners, quality assurance, and technical standards reviewers"
+    )
+    grounding_sources = _build_grounding_sources(ctx)
 
     return _SYSTEM_PROMPT_TEMPLATE.format(
+        organisation_context=organisation_context,
+        sector=sector,
+        document_types=document_types,
+        governing_standards=governing_standards,
+        site_types=sites,
+        primary_audience=primary_audience,
+        grounding_sources=grounding_sources,
         doc_layer=doc_layer,
         sites=sites,
         parent_policy_summary=parent_policy_summary,
@@ -258,9 +353,7 @@ def _build_system_prompt(ctx: PipelineContext) -> str:
         prior_feedback_block=prior_feedback_block,
         glossary_block=glossary_block,
         severity_rules=severity_rules,
-        severity_scale=severity_scale,
-        scope_scale=scope_scale,
-        detectability_scale=detectability_scale,
+        fmea_scoring_block=_FMEA_SCORING_BLOCK,
         escalation_contacts=escalation_contacts,
         site_type_categories=site_type_note,
         cross_doc_categories=cross_doc_note,
@@ -291,24 +384,37 @@ def _build_prompt(ctx: PipelineContext) -> str:
 
     # Primary document (cleansed)
     if ctx.cleansed_content:
-        sections.append(f"PRIMARY DOCUMENT (cleansed):\n{ctx.cleansed_content[:12000]}")
+        sections.append(
+            "PRIMARY DOCUMENT (cleansed) — the SOP/procedure under review:\n"
+            "Ground every risk gap in this text (quote excerpt/location from here). "
+            "Policy sections below are for requirement comparison only; do not report gaps that appear only in policy wording unless the PRIMARY DOCUMENT fails to meet that requirement.\n\n"
+            f"{slice_document_for_agent(ctx.cleansed_content)}"
+        )
 
-    # Parent policy (if available) — enough content for citations
+    # Parent policy (if available)
+    policy_cap = max_policy_context_per_doc_chars()
     policy_docs = []
     if ctx.parent_policy:
         policy_docs.append(ctx.parent_policy)
     policy_docs.extend(ctx.higher_order_policies or [])
     for i, doc in enumerate(policy_docs[:2]):
         label = "DIRECT PARENT POLICY" if i == 0 else f"HIGHER-ORDER POLICY {i}"
+        pbody = (doc.content or "").strip()
+        if len(pbody) > policy_cap:
+            pbody = pbody[:policy_cap]
         sections.append(
-            f"{label} - {doc.title} (cite as 'parent policy [{doc.title}]' when the finding relates to this):\n{doc.content[:3000]}"
+            f"{label} - {doc.title}:\n{pbody}"
         )
 
     # Sibling docs (other sites — capped to avoid token overrun)
+    sib_cap = min(8000, max(policy_cap // 2, 4000))
     for i, sib in enumerate(ctx.sibling_docs[:2]):
+        sbody = (sib.content or "").strip()
+        if len(sbody) > sib_cap:
+            sbody = sbody[:sib_cap]
         sections.append(
             f"SIBLING DOCUMENT {i+1} — {sib.title} (sites: {', '.join(sib.sites) or 'unknown'}):\n"
-            f"{sib.content[:1500]}"
+            f"{sbody}"
         )
 
     return "\n\n---\n\n".join(sections) if sections else "No document content available."
@@ -316,16 +422,14 @@ def _build_prompt(ctx: PipelineContext) -> str:
 
 def _fmea_score(severity: int, scope: int, detectability: int) -> int:
     """
-    FMEA-style risk score.
-    Score = severity × scope × (6 - detectability)
-    Using (6 - detectability) so that a higher detectability number (harder to detect)
-    raises the score, matching standard FMEA conventions where 5 = least detectable.
-    Result range: 1×1×1=1 to 5×5×5=125 (normalised here to 1–25 band).
+    Risk Priority Number (RPN) = Severity × Scope × Detectability.
+    Each dimension is clamped to 1–5 per the hard-coded FMEA block in the system prompt.
+    Range: 1–125. Higher detectability score = harder to detect = higher RPN.
     """
     s = max(1, min(5, severity))
     sc = max(1, min(5, scope))
     d = max(1, min(5, detectability))
-    return s * sc * (6 - d)
+    return s * sc * d
 
 
 def _fmea_band(score: int) -> str:
@@ -338,12 +442,12 @@ def _fmea_band(score: int) -> str:
             mx = b.get("max_score", 9999)
             if mn <= score <= mx:
                 return band_name
-    # fallback thresholds
-    if score >= 20:
+    # fallback thresholds for RPN = S×Scope×D (1–125)
+    if score >= 100:
         return "critical"
-    if score >= 12:
+    if score >= 60:
         return "high"
-    if score >= 6:
+    if score >= 28:
         return "medium"
     return "low"
 
@@ -389,8 +493,6 @@ class RiskAgent(BaseAgent):
                     score = 0
                     band = ""
 
-                raw_citations = item.get("citations") or []
-                citations = [str(x).strip() for x in (raw_citations if isinstance(raw_citations, list) else [raw_citations]) if x]
                 excerpt = (item.get("excerpt") or "").strip() or None
                 gaps.append(
                     RiskGap(
@@ -404,7 +506,6 @@ class RiskAgent(BaseAgent):
                         detectability=det,
                         fmea_score=score,
                         fmea_band=band,
-                        citations=citations,
                     )
                 )
 

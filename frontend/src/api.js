@@ -72,6 +72,64 @@ export async function analyse(body) {
 }
 
 /**
+ * Run analysis with NDJSON streaming: progress events then final result.
+ * @param {object} body - Same payload as analyse()
+ * @param {(msg: object) => void} [onEvent] - Called for each line: start, progress, complete (complete also returns from promise)
+ * @returns {Promise<object>} Final analysis result (same shape as analyse())
+ */
+export async function analyseWithProgress(body, onEvent) {
+  const url = `${BASE}/analyse?stream=true`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Accept: 'application/x-ndjson',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(errorMessage(err, res.statusText || `HTTP ${res.status}`));
+  }
+  const reader = res.body?.getReader();
+  if (!reader) {
+    throw new Error('Streaming response not supported');
+  }
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let finalResult = null;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    for (;;) {
+      const nl = buffer.indexOf('\n');
+      if (nl < 0) break;
+      const line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (!line) continue;
+      let msg;
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (onEvent) onEvent(msg);
+      if (msg.type === 'complete') finalResult = msg.result;
+      if (msg.type === 'http_error') {
+        const d = msg.detail;
+        throw new Error(typeof d === 'string' ? d : JSON.stringify(d));
+      }
+      if (msg.type === 'error') throw new Error(msg.message || 'Analysis failed');
+    }
+  }
+  if (!finalResult) {
+    throw new Error('Analysis ended without a result');
+  }
+  return finalResult;
+}
+
+/**
  * Re-validate a proposed solution against the original excerpt. Returns { feedback }.
  */
 export async function validateSolution(excerpt, proposedSolution) {
@@ -141,6 +199,16 @@ export async function resetMetricsAndPruneLibrary() {
 }
 
 /**
+ * Clear all ingested SOPs / work instructions, finding notes, user-note vectors,
+ * and all analysis sessions. Keeps policy & principle documents (BRCGS, Cranswick MS, etc.).
+ */
+export async function clearSopsAndResetMetrics() {
+  return request('/ingest/admin/clear-sops-and-reset-metrics', {
+    method: 'POST',
+  });
+}
+
+/**
  * Fetch full document content for cross-reference with findings (split view).
  * Returns { document_id, content, sections }.
  */
@@ -192,6 +260,23 @@ export async function listFindingNotes(limit = 100) {
  */
 export async function addFindingNote(body) {
   return request('/analysis/finding-notes', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+/**
+ * Fetch recent interaction logs for governance review.
+ */
+export async function listInteractionLogs(limit = 200) {
+  return request(`/analysis/interaction-logs?limit=${limit}`);
+}
+
+/**
+ * Add one governance interaction log entry.
+ */
+export async function addInteractionLog(body) {
+  return request('/analysis/interaction-logs', {
     method: 'POST',
     body: JSON.stringify(body),
   });

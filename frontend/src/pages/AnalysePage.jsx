@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
-import { analyse, saveAnalysisSession, getAnalysisSession, getDocumentContent, getDocumentFile, addFindingNote, validateSolution, docLayerForApi } from '../api';
+import { analyseWithProgress, saveAnalysisSession, getAnalysisSession, getDocumentContent, getDocumentFile, addFindingNote, addInteractionLog, validateSolution, docLayerForApi } from '../api';
 import mammoth from 'mammoth';
 import { useAnalysis } from '../context/AnalysisContext';
 import { resolveSitesForApi } from '../constants/sites';
-import { Save } from 'lucide-react';
+import { Save, ChevronDown, ChevronUp } from 'lucide-react';
 import './AnalysePage.css';
 
 // ---------------------------------------------------------------------------
@@ -41,6 +41,278 @@ function groupBy(arr, key) {
     acc[k].push(item);
     return acc;
   }, {});
+}
+
+function normaliseDocId(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function resultMatchesDocument(result, documentId) {
+  const expected = normaliseDocId(documentId);
+  if (!expected) return true;
+  return normaliseDocId(result?.document_id) === expected;
+}
+
+function normaliseSessionSites(sites) {
+  if (Array.isArray(sites)) return sites.map((site) => String(site).trim()).filter(Boolean);
+  return String(sites || '').split(',').map((site) => site.trim()).filter(Boolean);
+}
+
+/** Strip legacy fields from stored findings so finding IDs stay stable across runs. */
+function itemForFindingIdHash(item) {
+  if (!item || typeof item !== 'object') return item;
+  const { policy_evidence: _pe, policyEvidence: _pE, citations: _c, requirement_reference: _rr, clause_mapping: _cm, ...rest } = item;
+  return rest;
+}
+
+function buildSessionMetadata(session, fallbackResult = null) {
+  if (!session && !fallbackResult) return null;
+  const documentId = fallbackResult?.document_id || session?.documentId || session?.document_id || '';
+  const title = fallbackResult?.title || session?.title || documentId || '';
+  const docLayer = fallbackResult?.doc_layer || session?.docLayer || session?.doc_layer || 'sop';
+  const requester = fallbackResult?.requester || session?.requester || '';
+  const trackingId = fallbackResult?.tracking_id || session?.trackingId || session?.tracking_id || '';
+  return {
+    trackingId,
+    documentId,
+    title,
+    docLayer,
+    requester,
+    sites: normaliseSessionSites(session?.sites),
+  };
+}
+
+/** Eight named agents — strip order: Cleansor → Risk-Assessor → Conflictor → Specifier → Sequencer → Terminator → Formatter → Validator */
+const ANALYSIS_LOADING_STEPS = [
+  {
+    key: 'cleansor',
+    label: 'Cleansor',
+    flowSlot: 'source',
+    title: 'Cleansor: normalising the document',
+    message: 'Cleaning structure, headings, and noise so downstream agents see a consistent SOP.',
+    detail: 'Text hygiene and layout passes are running on the working document',
+  },
+  {
+    key: 'risk-assessor',
+    label: 'Risk-Assessor',
+    flowSlot: 'output',
+    title: 'Risk-Assessor: operational risk',
+    message: 'Scoring severity, scope, and detectability to rank the most important issues.',
+    detail: 'FMEA-style scoring is building the risk picture for each finding',
+  },
+  {
+    key: 'conflictor',
+    label: 'Conflictor',
+    flowSlot: 'reasoning',
+    title: 'Conflictor: contradictions',
+    message: 'Looking for conflicting instructions, duplicated rules, and incompatible requirements.',
+    detail: 'Conflictor is cross-referencing sections for logical clashes',
+  },
+  {
+    key: 'specifier',
+    label: 'Specifier',
+    flowSlot: 'policy',
+    title: 'Specifier: requirements and clarity',
+    message: 'Checking that instructions are specific, testable, and free of vague language.',
+    detail: 'Specifier is comparing clauses against good-practice specifying patterns',
+  },
+  {
+    key: 'sequencer',
+    label: 'Sequencer',
+    flowSlot: 'policy',
+    title: 'Sequencer: flow and order',
+    message: 'Reviewing step order, dependencies, and whether the sequence can be followed safely.',
+    detail: 'Sequencer is tracing procedural logic across the document',
+  },
+  {
+    key: 'terminator',
+    label: 'Terminator',
+    flowSlot: 'reasoning',
+    title: 'Terminator: terminology',
+    message: 'Aligning terms with the glossary and flagging inconsistent or undefined vocabulary.',
+    detail: 'Terminator is normalising language against controlled terms',
+  },
+  {
+    key: 'formatter',
+    label: 'Formatter',
+    flowSlot: 'reasoning',
+    title: 'Formatter: presentation and structure',
+    message: 'Checking tables, lists, numbering, and visual structure for readability.',
+    detail: 'Formatter is validating how the content is laid out on the page',
+  },
+  {
+    key: 'finding-verifier',
+    label: 'Finding verifier',
+    flowSlot: 'output',
+    title: 'Finding verifier: document cross-check',
+    message: 'Checking whether flagged gaps are already covered later in the procedure (or in following sub-steps).',
+    detail: 'Removing false positives when the full document already states the requirement',
+  },
+  {
+    key: 'validator',
+    label: 'Validator',
+    flowSlot: 'output',
+    title: 'Validator: consolidation',
+    message: 'Cross-checking outputs and packaging results for the review screen.',
+    detail: 'Final validation before results are returned to the dashboard',
+  },
+];
+
+function AnalysisLoadingPanel({ activeIndex, progressPercent }) {
+  const currentStep = ANALYSIS_LOADING_STEPS[activeIndex] || ANALYSIS_LOADING_STEPS[0];
+  const barPct =
+    progressPercent != null && !Number.isNaN(progressPercent)
+      ? Math.min(100, Math.max(0, progressPercent))
+      : ((activeIndex + 1) / ANALYSIS_LOADING_STEPS.length) * 100;
+
+  return (
+    <div className="analyse-loading-overlay analyse-loading-panel" role="status" aria-live="polite">
+      <div className="analyse-loading-copy">
+        <h3 className="analyse-loading-title">Running analysis</h3>
+        <p className="analyse-loading-subtitle">
+          The workflow below mirrors how the platform retrieves context, calls the LLM, coordinates agents, and builds the final review.
+        </p>
+      </div>
+
+      <div className="analyse-loading-progress" aria-hidden="true">
+        <div
+          className="analyse-loading-progress-bar"
+          style={{ width: `${barPct}%` }}
+        />
+      </div>
+
+      <div className="analyse-loading-phase-strip">
+        {ANALYSIS_LOADING_STEPS.map((step, index) => {
+          const state = index < activeIndex ? 'done' : index === activeIndex ? 'active' : 'pending';
+          return (
+            <div key={step.key} className={`analyse-loading-phase analyse-loading-phase-${state}`}>
+              <span className="analyse-loading-phase-dot" />
+              <span className="analyse-loading-phase-label">{step.label}</span>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="analyse-loading-scene">
+        <div className="analyse-loading-robot-card">
+          <div className="analyse-loading-robot-wrap" aria-hidden="true">
+            <svg
+              viewBox="0 0 140 168"
+              className="analyse-loading-robot-svg analyse-loading-robot-v2"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <defs>
+                <linearGradient id="robot-visor-grad" x1="0%" y1="0%" x2="0%" y2="100%">
+                  <stop offset="0%" stopColor="#3d5570" />
+                  <stop offset="100%" stopColor="#1a2636" />
+                </linearGradient>
+              </defs>
+              {/* Neck */}
+              <path
+                className="robot-neck"
+                d="M 54 132 Q 70 142 86 132 L 86 136 Q 70 148 54 136 Z"
+              />
+              {/* Side tabs */}
+              <rect x="6" y="70" width="12" height="32" rx="4" className="robot-ear robot-ear-left" />
+              <rect x="122" y="70" width="12" height="32" rx="4" className="robot-ear robot-ear-right" />
+              {/* Main head shell */}
+              <rect x="16" y="40" width="108" height="100" rx="28" className="robot-chassis" />
+              {/* Top cap */}
+              <rect x="50" y="32" width="40" height="12" rx="5" className="robot-top-cap" />
+              {/* Dual antennae */}
+              <path
+                className="robot-antenna-stalk robot-antenna-stalk-l"
+                d="M 44 40 L 42 20"
+                fill="none"
+                strokeWidth="5"
+                strokeLinecap="round"
+              />
+              <circle cx="40" cy="16" r="7" className="robot-antenna-bulb robot-antenna-bulb-l" />
+              <path
+                className="robot-antenna-stalk robot-antenna-stalk-r"
+                d="M 96 40 L 98 20"
+                fill="none"
+                strokeWidth="5"
+                strokeLinecap="round"
+              />
+              <circle cx="100" cy="16" r="7" className="robot-antenna-bulb robot-antenna-bulb-r" />
+              {/* Visor */}
+              <rect
+                x="26"
+                y="54"
+                width="88"
+                height="78"
+                rx="18"
+                className="robot-visor"
+                fill="url(#robot-visor-grad)"
+              />
+              <rect
+                x="29"
+                y="57"
+                width="82"
+                height="72"
+                rx="15"
+                className="robot-visor-inner"
+                fill="none"
+              />
+              {/* Face: eyes + smile */}
+              <g className="robot-face-eyes" aria-hidden="true">
+                <circle cx="52" cy="82" r="8" className="robot-eye-halo robot-eye-halo-l" />
+                <circle cx="88" cy="82" r="8" className="robot-eye-halo robot-eye-halo-r" />
+                <g className="robot-eye-cores">
+                  <circle cx="52" cy="82" r="5.5" className="robot-eye-core" />
+                  <circle cx="88" cy="82" r="5.5" className="robot-eye-core" />
+                </g>
+              </g>
+              <path
+                className="robot-smile"
+                d="M 56 104 Q 70 114 84 104"
+                fill="none"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+              />
+            </svg>
+            <span className="analyse-loading-robot-glow" />
+          </div>
+          <div className="analyse-loading-robot-copy">
+            <span className="analyse-loading-active-label">AI workflow assistant</span>
+            <strong>{currentStep.title}</strong>
+            <span>{currentStep.message}</span>
+          </div>
+        </div>
+
+        <div className="analyse-loading-flow">
+          <div className={`analyse-loading-node ${currentStep.flowSlot === 'source' ? 'is-active' : ''}`}>
+            <span className="analyse-loading-node-kicker">Source</span>
+            <strong>Document + RAG</strong>
+            <span>Relevant SOP content is gathered and scoped.</span>
+          </div>
+          <div className={`analyse-loading-node ${currentStep.flowSlot === 'policy' ? 'is-active' : ''}`}>
+            <span className="analyse-loading-node-kicker">Policy</span>
+            <strong>Standards Context</strong>
+            <span>Parent policies and structured clauses inform the review.</span>
+          </div>
+          <div className={`analyse-loading-node ${currentStep.flowSlot === 'reasoning' ? 'is-active' : ''}`}>
+            <span className="analyse-loading-node-kicker">Reasoning</span>
+            <strong>LLM Workspace</strong>
+            <span>Specialist agents run in the shared analysis context.</span>
+          </div>
+          <div className={`analyse-loading-node ${currentStep.flowSlot === 'output' ? 'is-active' : ''}`}>
+            <span className="analyse-loading-node-kicker">Output</span>
+            <strong>Findings + Draft</strong>
+            <span>Risk scoring and validation before results return to the page.</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="analyse-loading-active">
+        <span className="analyse-loading-active-label">Current stage</span>
+        <strong>{currentStep.title}</strong>
+        <span>{currentStep.detail}</span>
+      </div>
+
+    </div>
+  );
 }
 
 // Flag count key -> section id for scroll target (metric tiles)
@@ -457,9 +729,30 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
   const [selectedMetricFilter, setSelectedMetricFilter] = useState(null); // null = show placeholder, else e.g. 'risk gaps'
   const [validateSolutionResult, setValidateSolutionResult] = useState(null); // { findingId, feedback } or null
   const [validatingFindingId, setValidatingFindingId] = useState(null); // id while request in flight
+  const [loadedSessionMeta, setLoadedSessionMeta] = useState(() => (
+    trackingIdFromUrl ? buildSessionMetadata(sessionFromState, storedResultFromState) : null
+  ));
+  const latestTrackingRequestRef = useRef(null);
+  const [loadingStepIndex, setLoadingStepIndex] = useState(0);
+  /** Backend stream: done/total progress events (drives progress bar when total > 0). */
+  const [streamProgress, setStreamProgress] = useState({ done: 0, total: 0 });
+
+  function logInteraction(actionType, metadata = {}) {
+    addInteractionLog({
+      user_name: effectiveRequester,
+      action_type: actionType,
+      route: `${base}/analyse/${step}`,
+      workflow_mode: workflowMode || mode,
+      document_id: effectiveDocId || config?.documentId || '',
+      tracking_id: result?.tracking_id || metadata.tracking_id || '',
+      finding_id: metadata.finding_id || '',
+      doc_layer: effectiveDocLayer || '',
+      metadata,
+    }).catch(() => {});
+  }
 
   function findingId(agentKey, item) {
-    const str = JSON.stringify(item);
+    const str = JSON.stringify(itemForFindingIdHash(item));
     let h = 0;
     for (let i = 0; i < str.length; i++) h = ((h << 5) - h) + str.charCodeAt(i) | 0;
     return `${agentKey}:${h}`;
@@ -468,8 +761,10 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
   function handleApplyFinding(id) {
     setAppliedFindings(s => {
       const next = new Set(s);
+      const nowApplied = !next.has(id);
       if (next.has(id)) next.delete(id);
       else next.add(id);
+      logInteraction('apply_update_toggle', { finding_id: id, applied: nowApplied });
       return next;
     });
   }
@@ -498,6 +793,10 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
     if (currentDraft !== (draftContent || result?.draft_content || '')) {
       setDraftContent(currentDraft);
       setLastAppliedRange(lastRange);
+      logInteraction('process_changes_to_draft', {
+        applied_count: collected.length,
+        last_applied_start: lastRange?.start ?? null,
+      });
       navigate(`${base}/analyse/draft`);
     }
   }
@@ -509,9 +808,11 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
     try {
       const data = await validateSolution(excerpt, solutionValue || item.recommendation || '');
       setValidateSolutionResult({ findingId: id, feedback: data.feedback || '' });
+      logInteraction('validate_solution', { finding_id: id, agent_key: agentKey, feedback: data.feedback || '' });
     } catch (e) {
       console.error('Validate solution failed:', e);
       setValidateSolutionResult({ findingId: id, feedback: `Error: ${e.message}` });
+      logInteraction('validate_solution_failed', { finding_id: id, agent_key: agentKey, error: e.message || 'Validate failed' });
     } finally {
       setValidatingFindingId(null);
     }
@@ -519,7 +820,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
 
   async function handleAddNote(findingIdArg, agentKey, item, note, attachments = []) {
     await addFindingNote({
-      user_name: config.requester || 'Unknown',
+      user_name: effectiveRequester || 'Unknown',
       document_id: effectiveDocId || '',
       tracking_id: result?.tracking_id || '',
       finding_id: findingIdArg,
@@ -528,6 +829,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
       note,
       attachments: attachments.length > 0 ? attachments : undefined,
     });
+    logInteraction('agent_feedback_added', { finding_id: findingIdArg, agent_key: agentKey, attachment_count: attachments.length });
     const baseKey = (agentKey || '').split(':')[0];
     const flagKey = AGENT_KEY_TO_FLAG[baseKey] || AGENT_KEY_TO_FLAG[agentKey];
     if (flagKey) {
@@ -547,15 +849,26 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
   }, [result?.tracking_id]);
 
   const fromIngestState = location.state?.fromIngest && location.state?.documentId;
-  // Effective document: URL / state / config first; fall back to result so split view and click-to-highlight work after analysis
-  const effectiveDocId = documentIdFromUrl || (location.state?.fromIngest && location.state?.documentId) || config.documentId || (result?.document_id || '');
-  const effectiveTitle = titleFromUrl || (location.state?.fromIngest && location.state?.title) || config.title || config.documentId || (result?.title || result?.document_id || '');
+  const trackingSessionMeta = trackingIdFromUrl ? loadedSessionMeta : null;
+  // Effective document: tracking session metadata first when reviewing a stored session; otherwise URL / state / config, then result fallback.
+  const effectiveDocId = trackingSessionMeta?.documentId || documentIdFromUrl || (location.state?.fromIngest && location.state?.documentId) || config.documentId || (result?.document_id || '');
+  const effectiveTitle = trackingSessionMeta?.title || titleFromUrl || (location.state?.fromIngest && location.state?.title) || config.title || config.documentId || (result?.title || result?.document_id || '');
   const effectiveDocLayer = (
+    trackingSessionMeta?.docLayer ||
     location.state?.docLayer ||
     result?.doc_layer ||
     config.docLayer ||
     'sop'
   ).toLowerCase();
+  const effectiveRequester = trackingSessionMeta?.requester || config.requester || '';
+  const effectiveSites = trackingSessionMeta?.sites?.length
+    ? trackingSessionMeta.sites
+    : (Array.isArray(config.sites) ? config.sites : (config.sites ? String(config.sites).split(/[,\s]+/).filter(Boolean) : []));
+  const effectiveSitesDisplay = effectiveSites.includes('all') ? 'All Sites' : effectiveSites.join(',');
+  const effectiveResultJson = result ? {
+    ...result,
+    draft_content: draftContent || result.draft_content || '',
+  } : {};
 
   // If the user navigates to Analyse for a different document, clear any prior result
   // so findings from the previous document cannot be shown for the new one.
@@ -595,7 +908,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
     });
   }, [result?.document_id, result?.title, result?.doc_layer, setConfig]);
 
-  // Auto-select first finding category when result loads so citations and findings are visible without clicking a metric
+  // Auto-select first finding category when result loads so findings are visible without clicking a metric
   const metricOrder = ['risk gaps', 'cleanser', 'specifying', 'structure', 'content integrity', 'sequencing', 'formatting', 'compliance', 'terminology', 'conflicts'];
   useEffect(() => {
     if (!result || selectedMetricFilter) return;
@@ -616,54 +929,82 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
     if (first) setSelectedMetricFilter(first);
   }, [result, selectedMetricFilter]);
 
-  // When trackingId in URL, use passed result or fetch stored session
-  // Do NOT overwrite documentId when documentIdFromUrl is set (fresh ingest takes precedence)
+  // When trackingId in URL, use the stored session metadata as the review source of truth.
+  // Still keep explicit documentId validation if one was provided in the URL.
   useEffect(() => {
-    if (!trackingIdFromUrl) return;
-    // Use result passed from Dashboard (sessionLog) if available — avoids 404 when not in DB
-    if (storedResultFromState) {
-      setResult(storedResultFromState);
-      setDraftContent(storedResultFromState.draft_content || '');
-      if (sessionFromState && !documentIdFromUrl) {
-        const sitesArr = sessionFromState.sites
-          ? (Array.isArray(sessionFromState.sites) ? sessionFromState.sites : String(sessionFromState.sites).split(',').map(s => s.trim()).filter(Boolean))
-          : [];
-        setConfig(c => ({
-          ...c,
-          documentId: sessionFromState.documentId || '',
-          title: sessionFromState.title || '',
-          requester: sessionFromState.requester || '',
-          docLayer: sessionFromState.docLayer || 'sop',
-          sites: sitesArr,
-        }));
-      }
-      setLoadingStored(false);
+    if (!trackingIdFromUrl) {
+      setLoadedSessionMeta(null);
       return;
     }
+    latestTrackingRequestRef.current = trackingIdFromUrl;
+    const stateSessionMeta = buildSessionMetadata(sessionFromState, storedResultFromState);
+    setLoadedSessionMeta(stateSessionMeta);
+    setError(null);
+    setSessionNotPersisted(false);
+    setResult(null);
+    setDraftContent('');
+    setHighlightSearch('');
     setLoadingStored(true);
     getAnalysisSession(trackingIdFromUrl)
       .then(session => {
+        if (latestTrackingRequestRef.current !== trackingIdFromUrl) return;
+        const sessionMeta = buildSessionMetadata(session, session?.result || null);
+        setLoadedSessionMeta(sessionMeta);
         const res = session?.result;
         if (res) {
+          if (!resultMatchesDocument(res, sessionMeta?.documentId || documentIdFromUrl)) {
+            setError('Loaded analysis results do not match the selected document. Run a fresh analysis for this SOP.');
+            setLoadedSessionMeta(null);
+            setResult(null);
+            setDraftContent('');
+            return;
+          }
           setResult(res);
           setDraftContent(res.draft_content || '');
         } else if (session) {
           setError('Results not stored for this session. Run a new analysis to see findings.');
         }
-        if (session && !documentIdFromUrl) {
-          const sitesArr = session.sites ? String(session.sites).split(',').map(s => s.trim()).filter(Boolean) : [];
+        if (sessionMeta && !documentIdFromUrl) {
           setConfig(c => ({
             ...c,
-            documentId: session.documentId || '',
-            title: session.title || '',
-            requester: session.requester || '',
-            docLayer: session.docLayer || 'sop',
-            sites: sitesArr,
+            documentId: sessionMeta.documentId || '',
+            title: sessionMeta.title || '',
+            requester: sessionMeta.requester || '',
+            docLayer: sessionMeta.docLayer || 'sop',
+            sites: sessionMeta.sites,
           }));
         }
       })
-      .catch(() => setError('Could not load analysis results. The session may not be in the database — run a new analysis to see results.'))
-      .finally(() => setLoadingStored(false));
+      .catch(() => {
+        if (latestTrackingRequestRef.current !== trackingIdFromUrl) return;
+        if (storedResultFromState) {
+          if (!resultMatchesDocument(storedResultFromState, stateSessionMeta?.documentId || documentIdFromUrl)) {
+            setError('Stored analysis results do not match the selected document. Open the latest analysis for this SOP or run a new analysis.');
+            setLoadedSessionMeta(null);
+            return;
+          }
+          setLoadedSessionMeta(stateSessionMeta);
+          setResult(storedResultFromState);
+          setDraftContent(storedResultFromState.draft_content || '');
+          if (stateSessionMeta && !documentIdFromUrl) {
+            setConfig(c => ({
+              ...c,
+              documentId: stateSessionMeta.documentId || '',
+              title: stateSessionMeta.title || '',
+              requester: stateSessionMeta.requester || '',
+              docLayer: stateSessionMeta.docLayer || 'sop',
+              sites: stateSessionMeta.sites,
+            }));
+          }
+          return;
+        }
+        setError('Could not load analysis results. The session may not be in the database — run a new analysis to see results.');
+        setLoadedSessionMeta(null);
+      })
+      .finally(() => {
+        if (latestTrackingRequestRef.current !== trackingIdFromUrl) return;
+        setLoadingStored(false);
+      });
   }, [trackingIdFromUrl, documentIdFromUrl, storedResultFromState, sessionFromState, setResult, setConfig]);
 
   // Fetch original document for split view — DOCX→HTML for procedures, else plain text
@@ -781,6 +1122,8 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
     setError(null);
     setResult(null);
     setSessionNotPersisted(false);
+    setLoadingStepIndex(0);
+    setStreamProgress({ done: 0, total: 0 });
     try {
       const sitesArr = Array.isArray(config.sites) ? config.sites : (config.sites ? String(config.sites).split(/[,\s]+/).filter(Boolean) : []);
       const body = {
@@ -788,7 +1131,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         request_type: config.requestType || 'single_document_review',
         doc_layer: docLayerForApi(config.docLayer),
         sites: resolveSitesForApi(sitesArr),
-        policy_ref: config.policyRef || null,
+        policy_ref: mode === 'review' ? null : (config.policyRef || null),
         document_id: effectiveDocId || null,
         title: effectiveTitle || effectiveDocId || null,
         requester: config.requester || null,
@@ -797,10 +1140,40 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         additional_doc_ids: (config.additionalDocIds || []).length > 0 ? config.additionalDocIds : undefined,
         agent_instructions: (config.agentInstructions || '').trim() || undefined,
       };
-      const res = await analyse(body);
+      logInteraction('analysis_run_started', {
+        tracking_id: body.tracking_id,
+        request_type: body.request_type,
+        agent_count: Array.isArray(body.agents) ? body.agents.length : 'full',
+      });
+      const res = await analyseWithProgress(body, (msg) => {
+        if (msg.type === 'start') {
+          setStreamProgress({
+            done: 0,
+            total: Math.max(1, msg.total || ANALYSIS_LOADING_STEPS.length),
+          });
+        }
+        if (msg.type === 'progress') {
+          setStreamProgress((prev) => {
+            const total = prev.total || ANALYSIS_LOADING_STEPS.length;
+            return { total, done: Math.min(total, prev.done + 1) };
+          });
+          const idx = ANALYSIS_LOADING_STEPS.findIndex((s) => s.key === msg.step_key);
+          if (idx >= 0) setLoadingStepIndex(idx);
+        }
+      });
+      setStreamProgress((prev) =>
+        prev.total > 0 ? { ...prev, done: prev.total } : prev,
+      );
       setResult(res);
       setDraftContent(res.draft_content || '');
       recordSession(res, { ...config, documentId: effectiveDocId, title: effectiveTitle }, workflowMode);
+      logInteraction('analysis_run_completed', {
+        tracking_id: res.tracking_id,
+        total_findings:
+          (res.risk_gaps?.length || 0) + (res.cleanser_flags?.length || 0) + (res.specifying_flags?.length || 0) +
+          (res.structure_flags?.length || 0) + (res.content_integrity_flags?.length || 0) + (res.sequencing_flags?.length || 0) +
+          (res.formatting_flags?.length || 0) + (res.compliance_flags?.length || 0) + (res.terminology_flags?.length || 0) + (res.conflicts?.length || 0),
+      });
       if (res.session_saved === false) {
         setSessionNotPersisted(true);
       }
@@ -831,10 +1204,18 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
           total_findings: totalFindings,
           agents_run: res.agents_run || [],
           agent_findings: agentFindings,
+          result_json: {
+            ...res,
+            document_id: effectiveDocId || res.document_id || '',
+            title: effectiveTitle || res.title || res.document_id || '',
+            doc_layer: effectiveDocLayer || res.doc_layer || 'sop',
+            draft_content: draftContent || res.draft_content || '',
+          },
         });
       } catch (_) { /* non-blocking */ }
     } catch (err) {
       setError(err.message);
+      logInteraction('analysis_run_failed', { error: err.message || 'Analysis failed' });
     } finally {
       setLoading(false);
     }
@@ -878,9 +1259,6 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
     setSaving(true);
     setSaveStatus(null);
     try {
-      const sitesDisplay = Array.isArray(config.sites)
-        ? (config.sites.includes('all') ? 'All Sites' : config.sites.join(','))
-        : (config.sites || '');
       const agentFindings = {};
       if (result.risk_gaps?.length) agentFindings.risk = result.risk_gaps.length;
       if (result.cleanser_flags?.length) agentFindings.cleansing = (agentFindings.cleansing || 0) + result.cleanser_flags.length;
@@ -895,21 +1273,30 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
 
       const res = await saveAnalysisSession({
         tracking_id: result.tracking_id,
-        document_id: config.documentId || '',
-        title: config.title || config.documentId || 'Unnamed',
-        requester: config.requester || '',
-        doc_layer: docLayerForApi(config.docLayer),
-        sites: sitesDisplay,
+        document_id: effectiveDocId || '',
+        title: effectiveTitle || effectiveDocId || 'Unnamed',
+        requester: effectiveRequester,
+        doc_layer: docLayerForApi(effectiveDocLayer),
+        sites: effectiveSitesDisplay,
         overall_risk: result.overall_risk || null,
         total_findings: totalFindings,
         agents_run: result.agents_run || [],
         agent_findings: agentFindings,
         corrections_implemented: totalApplied,
+        result_json: effectiveResultJson,
       });
       setSaveStatus(res?.ok !== false ? 'saved' : 'error');
+      logInteraction(res?.ok !== false ? 'analysis_save' : 'analysis_save_failed', {
+        tracking_id: result.tracking_id,
+        corrections_implemented: totalApplied,
+      });
       if (res?.ok !== false) setTimeout(() => setSaveStatus(null), 2500);
     } catch (err) {
       setSaveStatus('error');
+      logInteraction('analysis_save_failed', {
+        tracking_id: result.tracking_id,
+        error: err.message || 'Save failed',
+      });
       setTimeout(() => setSaveStatus(null), 2500);
     } finally {
       setSaving(false);
@@ -920,9 +1307,6 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
     if (!result) return;
     setHitlSubmitStatus(null);
     try {
-      const sitesDisplay = Array.isArray(config.sites)
-        ? (config.sites.includes('all') ? 'All Sites' : config.sites.join(','))
-        : (config.sites || '');
       const agentFindings = {};
       if (result.risk_gaps?.length) agentFindings.risk = result.risk_gaps.length;
       if (result.cleanser_flags?.length) agentFindings.cleansing = (agentFindings.cleansing || 0) + result.cleanser_flags.length;
@@ -937,21 +1321,29 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
 
       await saveAnalysisSession({
         tracking_id: result.tracking_id,
-        document_id: config.documentId || '',
-        title: config.title || config.documentId || 'Unnamed',
-        requester: config.requester || '',
-        doc_layer: docLayerForApi(config.docLayer),
-        sites: sitesDisplay,
+        document_id: effectiveDocId || '',
+        title: effectiveTitle || effectiveDocId || 'Unnamed',
+        requester: effectiveRequester,
+        doc_layer: docLayerForApi(effectiveDocLayer),
+        sites: effectiveSitesDisplay,
         overall_risk: result.overall_risk || null,
         total_findings: totalFindings,
         agents_run: result.agents_run || [],
         agent_findings: agentFindings,
         corrections_implemented: totalApplied,
+        result_json: effectiveResultJson,
       });
       setHitlSubmitStatus('submitted');
+      logInteraction('submit_for_hitl', {
+        tracking_id: result.tracking_id,
+        corrections_implemented: totalApplied,
+      });
       setTimeout(() => setHitlSubmitStatus(null), 3000);
     } catch {
       setHitlSubmitStatus('error');
+      logInteraction('submit_for_hitl_failed', {
+        tracking_id: result?.tracking_id || '',
+      });
       setTimeout(() => setHitlSubmitStatus(null), 3000);
     }
   }
@@ -966,9 +1358,9 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
           <h2>{stepTitle}</h2>
           <p className="doc-subtitle">
             {(effectiveDocId || effectiveTitle) ? `${[effectiveDocId, effectiveTitle].filter(Boolean).join(' — ')} · ` : ''}
-            Agent pipeline · {config.docLayer || 'sop'}
-            {config.sites?.length ? ` · ${Array.isArray(config.sites) && config.sites.includes('all') ? 'All Sites' : (Array.isArray(config.sites) ? config.sites.join(', ') : config.sites)}` : ''}
-            {config.requester ? ` · Requester: ${config.requester}` : ''}
+            Agent pipeline · {effectiveDocLayer || 'sop'}
+            {effectiveSites.length ? ` · ${effectiveSites.includes('all') ? 'All Sites' : effectiveSites.join(', ')}` : ''}
+            {effectiveRequester ? ` · Requester: ${effectiveRequester}` : ''}
           </p>
         </div>
         <div className="doc-actions">
@@ -1026,10 +1418,14 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
       )}
 
       {loading && (
-        <div className="analyse-loading-overlay">
-          <div className="analyse-loading-spinner" />
-          <p>Running analysis — this may take 1–2 minutes…</p>
-        </div>
+        <AnalysisLoadingPanel
+          activeIndex={loadingStepIndex}
+          progressPercent={
+            streamProgress.total > 0
+              ? (streamProgress.done / streamProgress.total) * 100
+              : null
+          }
+        />
       )}
 
       {error && <div className="analyse-error">{error}</div>}
@@ -1191,7 +1587,14 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
 
           <div className="agent-cards">
             {!selectedMetricFilter && (
-              <p className="agent-cards-placeholder">Click a metric above to view findings for that category.</p>
+              <div className="agent-cards-placeholder-wrap">
+                <p className="agent-cards-placeholder">Click a metric above to view findings for that category.</p>
+                {result.compliance_flags?.length > 0 && (
+                  <p className="agent-cards-hint">
+                    <strong>Policy clause mapping</strong> is shown on each <strong>Compliance</strong> finding — click the <strong>Compliance</strong> metric tile above to open that list.
+                  </p>
+                )}
+              </div>
             )}
             {result.risk_gaps?.length > 0 && selectedMetricFilter === 'risk gaps' && (
               <div id="agent-card-risk"><RiskGapCard items={result.risk_gaps} agentKey="risk"
@@ -1203,7 +1606,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
             )}
             {result.cleanser_flags?.length > 0 && selectedMetricFilter === 'cleanser' && (
               <div id="agent-card-cleanser"><AgentCard title="Cleanser" items={result.cleanser_flags} agentKey="cleanser"
-                keys={['location', 'current_text', 'issue', 'citations', 'recommendation']} searchTextKeys={['current_text', 'location']}
+                keys={['location', 'current_text', 'issue', 'recommendation']} searchTextKeys={['current_text', 'location']}
                 onFindingClick={effectiveDocId ? setHighlightSearch : undefined}
                 onApplyChange={handleApplyFinding} onAddNote={handleAddNote}
                 appliedFindings={appliedFindings} findingId={findingId}
@@ -1228,7 +1631,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
             )}
             {result.specifying_flags?.length > 0 && selectedMetricFilter === 'specifying' && (
               <div id="agent-card-specifying"><AgentCard title="Specifying" items={result.specifying_flags} agentKey="specifying"
-                keys={['location', 'current_text', 'issue', 'citations', 'recommendation']} searchTextKeys={['current_text', 'location']}
+                keys={['location', 'current_text', 'issue', 'recommendation']} searchTextKeys={['current_text', 'location']}
                 onFindingClick={effectiveDocId ? setHighlightSearch : undefined}
                 onApplyChange={handleApplyFinding} onAddNote={handleAddNote}
                 appliedFindings={appliedFindings} findingId={findingId}
@@ -1237,7 +1640,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
             )}
             {result.sequencing_flags?.length > 0 && selectedMetricFilter === 'sequencing' && (
               <div id="agent-card-sequencing"><AgentCard title="Sequencing" items={result.sequencing_flags} agentKey="sequencing"
-                keys={['location', 'excerpt', 'issue', 'impact', 'citations', 'recommendation']} searchTextKeys={['excerpt', 'location']}
+                keys={['location', 'excerpt', 'issue', 'impact', 'recommendation']} searchTextKeys={['excerpt', 'location']}
                 onFindingClick={effectiveDocId ? setHighlightSearch : undefined}
                 onApplyChange={handleApplyFinding} onAddNote={handleAddNote}
                 appliedFindings={appliedFindings} findingId={findingId}
@@ -1246,7 +1649,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
             )}
             {result.formatting_flags?.length > 0 && selectedMetricFilter === 'formatting' && (
               <div id="agent-card-formatting"><AgentCard title="Formatting" items={result.formatting_flags} agentKey="formatting"
-                keys={['location', 'excerpt', 'issue', 'citations', 'recommendation']} searchTextKeys={['excerpt', 'location']}
+                keys={['location', 'excerpt', 'issue', 'recommendation']} searchTextKeys={['excerpt', 'location']}
                 onFindingClick={effectiveDocId ? setHighlightSearch : undefined}
                 onApplyChange={handleApplyFinding} onAddNote={handleAddNote}
                 appliedFindings={appliedFindings} findingId={findingId}
@@ -1255,7 +1658,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
             )}
             {result.compliance_flags?.length > 0 && selectedMetricFilter === 'compliance' && (
               <div id="agent-card-compliance"><AgentCard title="Compliance" items={result.compliance_flags} agentKey="compliance"
-                keys={['location', 'excerpt', 'issue', 'requirement_reference', 'citations', 'recommendation']} searchTextKeys={['excerpt', 'location']}
+                keys={['location', 'excerpt', 'issue', 'recommendation']} searchTextKeys={['excerpt', 'location']}
                 onFindingClick={effectiveDocId ? setHighlightSearch : undefined}
                 onApplyChange={handleApplyFinding} onAddNote={handleAddNote}
                 appliedFindings={appliedFindings} findingId={findingId}
@@ -1264,7 +1667,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
             )}
             {result.terminology_flags?.length > 0 && selectedMetricFilter === 'terminology' && (
               <div id="agent-card-terminology"><AgentCard title="Terminology" items={result.terminology_flags} agentKey="terminology"
-                keys={['term', 'location', 'issue', 'citations', 'recommendation']} searchTextKeys={['location', 'term']}
+                keys={['term', 'location', 'issue', 'recommendation']} searchTextKeys={['location', 'term']}
                 onFindingClick={effectiveDocId ? setHighlightSearch : undefined}
                 onApplyChange={handleApplyFinding} onAddNote={handleAddNote}
                 appliedFindings={appliedFindings} findingId={findingId}
@@ -1273,7 +1676,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
             )}
             {result.conflicts?.length > 0 && selectedMetricFilter === 'conflicts' && (
               <div id="agent-card-conflict"><AgentCard title="Conflicts" items={result.conflicts} agentKey="conflict"
-                keys={['conflict_type', 'severity', 'description', 'citations', 'recommendation']} searchTextKeys={['description']}
+                keys={['conflict_type', 'severity', 'description', 'recommendation']} searchTextKeys={['description']}
                 onFindingClick={effectiveDocId ? setHighlightSearch : undefined}
                 onApplyChange={handleApplyFinding} onAddNote={handleAddNote}
                 appliedFindings={appliedFindings} findingId={findingId}
@@ -1749,12 +2152,6 @@ function RiskGapCard({ items, agentKey, onFindingClick, onApplyChange, onAddNote
               <span className="agent-field-label">risk:</span>{' '}
               <span className="agent-field-value">{gap.risk}</span>
             </div>
-            {gap.citations?.length > 0 && (
-              <div className="agent-field">
-                <span className="agent-field-label">citations:</span>{' '}
-                <span className="agent-field-value">{gap.citations.join(', ')}</span>
-              </div>
-            )}
             <div className="agent-field">
               <span className="agent-field-label">recommendation:</span>{' '}
               <span className="agent-field-value">{gap.recommendation}</span>
@@ -2004,8 +2401,56 @@ function AgentCard({ title, items, keys, agentKey, searchTextKey = 'location', s
                 {(item.excerpt || item.current_text).slice(0, 400)}{(item.excerpt || item.current_text).length > 400 ? '…' : ''}
               </div>
             )}
+            {agentKey === 'compliance' && (() => {
+              const cm = item.clause_mapping || { status: 'unmapped', unmapped_reason: 'not_run' };
+              return (
+              <div className={`clause-mapping ${cm.status === 'linked' ? 'clause-mapping-linked' : 'clause-mapping-hitl'}`}>
+                {cm.status === 'linked' ? (
+                  <>
+                    <div className="clause-mapping-label">Policy clause (verified)</div>
+                    <div className="clause-mapping-citation">{cm.canonical_citation || [cm.standard_name, cm.clause_id].filter(Boolean).join(' ')}</div>
+                    {cm.supporting_quote && (
+                      <div className="clause-mapping-quote" title={cm.supporting_quote}>
+                        “{cm.supporting_quote.slice(0, 220)}{cm.supporting_quote.length > 220 ? '…' : ''}”
+                      </div>
+                    )}
+                    {cm.site_scope && cm.site_scope.length > 0 && (
+                      <div className="clause-mapping-site-scope">
+                        <span className="clause-mapping-site-scope-label">Sites in scope:</span>
+                        {cm.site_scope.map(s => (
+                          <span key={s} className="clause-mapping-site-badge">{s}</span>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <div className="clause-mapping-label">Policy clause — review needed (HITL)</div>
+                    <div className="clause-mapping-reason">
+                      {cm.unmapped_reason === 'no_candidates' && 'No lexical match in scoped standards — map manually (ingest BRCGS / Cranswick standard with clause structure).'}
+                      {cm.unmapped_reason === 'no_policy_scope' && 'No policy documents in scope — check Supabase / policy ingest.'}
+                      {cm.unmapped_reason === 'model_none' && 'No candidate clause selected — map manually.'}
+                      {cm.unmapped_reason === 'verify_failed' && 'Could not verify quote against requirement text — map manually.'}
+                      {cm.unmapped_reason === 'error' && 'Mapping failed — map manually.'}
+                      {cm.unmapped_reason === 'not_run' && 'No clause mapping on this record — run a new analysis to attach policy clauses (saved sessions before this feature show this).'}
+                      {cm.unmapped_reason === 'disabled' && 'Clause mapping is turned off (CLAUSE_MAPPING_ENABLED).'}
+                      {!cm.unmapped_reason && 'Map manually to the correct standard clause.'}
+                    </div>
+                    {(cm.canonical_citation || cm.clause_id) && (
+                      <div className="clause-mapping-citation clause-mapping-tentative">
+                        Tentative: {cm.canonical_citation || cm.clause_id}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+              );
+            })()}
             {keys.filter(k => {
               if (k === 'excerpt') return false;
+              if (k === 'policy_evidence') return false;
+              if (k === 'citations') return false;
+              if (k === 'requirement_reference') return false;
               if (k === 'current_text' && (item.excerpt || item.current_text)) return false;
               return true;
             }).map((k) => {
@@ -2013,10 +2458,9 @@ function AgentCard({ title, items, keys, agentKey, searchTextKey = 'location', s
               const show = val && (!Array.isArray(val) || val.length > 0);
               if (!show) return null;
               const displayVal = Array.isArray(val) ? val.join(', ') : String(val);
-              const isCitations = k === 'citations';
               return (
-                <div key={k} className={`agent-field${isCitations ? ' agent-field-citations' : ''}`}>
-                  <span className="agent-field-label">{isCitations ? 'citations:' : `${k}:`}</span>{' '}
+                <div key={k} className="agent-field">
+                  <span className="agent-field-label">{`${k}:`}</span>{' '}
                   <span className="agent-field-value">
                     {displayVal.slice(0, 400)}{displayVal.length > 400 ? '…' : ''}
                   </span>

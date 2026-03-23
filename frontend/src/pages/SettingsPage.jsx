@@ -11,7 +11,7 @@ import {
 } from 'lucide-react';
 import { useAnalysis } from '../context/AnalysisContext';
 import { SITES_OPTIONS } from '../constants/sites';
-import { resetMetricsAndPruneLibrary } from '../api';
+import { addInteractionLog, clearSopsAndResetMetrics, resetMetricsAndPruneLibrary } from '../api';
 import './SettingsPage.css';
 
 const SESSION_LOG_KEY = 'tech-standards-session-log';
@@ -23,12 +23,24 @@ export default function SettingsPage() {
   const [resetInProgress, setResetInProgress] = useState(false);
   const [resetResult, setResetResult] = useState(null);
   const [resetError, setResetError] = useState(null);
+  const [sopClearInProgress, setSopClearInProgress] = useState(false);
+  const [sopClearResult, setSopClearResult] = useState(null);
+  const [sopClearError, setSopClearError] = useState(null);
 
   function clearSessionHistory() {
     try {
       localStorage.removeItem(SESSION_LOG_KEY);
       if (reloadSessionLog) reloadSessionLog();
       setSessionCleared(true);
+      addInteractionLog({
+        user_name: '',
+        action_type: 'delete_session_history_local',
+        route: '/settings',
+        workflow_mode: '',
+        metadata: {
+          target: 'local_session_log',
+        },
+      }).catch(() => {});
       setTimeout(() => setSessionCleared(false), 3000);
     } catch {
       setSessionCleared(false);
@@ -44,12 +56,50 @@ export default function SettingsPage() {
       localStorage.removeItem(SESSION_LOG_KEY);
       if (reloadSessionLog) reloadSessionLog();
       setResetResult(data);
+      addInteractionLog({
+        user_name: '',
+        action_type: 'delete_metrics_and_prune_library',
+        route: '/settings',
+        workflow_mode: '',
+        metadata: {
+          sessions_deleted: data?.sessions_deleted ?? null,
+          documents_removed: data?.documents_removed ?? null,
+          documents_kept: data?.documents_kept || [],
+        },
+      }).catch(() => {});
       setSessionCleared(true);
       setTimeout(() => setSessionCleared(false), 2000);
     } catch (err) {
       setResetError(err.message || 'Reset failed');
     } finally {
       setResetInProgress(false);
+    }
+  }
+
+  async function handleClearSopsAndResetMetrics() {
+    setSopClearError(null);
+    setSopClearResult(null);
+    setSopClearInProgress(true);
+    try {
+      const data = await clearSopsAndResetMetrics();
+      localStorage.removeItem(SESSION_LOG_KEY);
+      if (reloadSessionLog) reloadSessionLog();
+      setSopClearResult(data);
+      addInteractionLog({
+        user_name: '',
+        action_type: 'clear_sops_and_reset_metrics',
+        route: '/settings',
+        workflow_mode: '',
+        metadata: {
+          sessions_deleted: data?.sessions_deleted ?? null,
+          procedure_documents_removed: data?.procedure_documents_removed ?? null,
+          finding_notes_deleted: data?.finding_notes_deleted ?? null,
+        },
+      }).catch(() => {});
+    } catch (err) {
+      setSopClearError(err.message || 'Clear failed');
+    } finally {
+      setSopClearInProgress(false);
     }
   }
 
@@ -214,13 +264,39 @@ export default function SettingsPage() {
             </h2>
           </div>
           <p className="settings-section-desc">
-            Reset dashboard metrics and library in one go: all analysis sessions are deleted (Attention Required cleared) and all documents are removed except &quot;local-Cranswick Manufacturing Standard v2&quot; and &quot;BRCGS - Food Safety Standard - V9&quot;. Your browser session log is cleared so the UI shows the new state immediately.
+            <strong>Clear SOPs &amp; metrics:</strong> removes every ingested document with layer{' '}
+            <em>sop</em> or <em>work_instruction</em> (vectors, registry, stored content/DOCX), deletes all
+            analysis sessions (dashboard / Attention Required), all finding notes, and user-note embeddings.
+            <strong> Policy and principle documents</strong> (e.g. BRCGS, Cranswick MS) are kept.
+          </p>
+          <button
+            type="button"
+            className="settings-clear-btn settings-reset-btn"
+            onClick={handleClearSopsAndResetMetrics}
+            disabled={sopClearInProgress || resetInProgress}
+          >
+            {sopClearInProgress ? 'Clearing…' : 'Clear all SOP data & reset metrics'}
+          </button>
+          {sopClearError && <p className="settings-error-msg">{sopClearError}</p>}
+          {sopClearResult && (
+            <p className="settings-cleared-msg">
+              Done. {sopClearResult.sessions_deleted} session(s), {sopClearResult.procedure_documents_removed}{' '}
+              procedure doc(s), {sopClearResult.finding_notes_deleted} finding note(s) cleared.
+              {sopClearResult.user_note_vector_chunks_deleted != null &&
+                ` ${sopClearResult.user_note_vector_chunks_deleted} user-note vector chunk(s) removed.`}
+            </p>
+          )}
+          <p className="settings-section-desc" style={{ marginTop: '1.25rem' }}>
+            <strong>Reset metrics &amp; prune library:</strong> deletes all analysis sessions and removes{' '}
+            <em>every</em> library document except &quot;local-Cranswick Manufacturing Standard v2&quot; and
+            &quot;BRCGS - Food Safety Standard - V9&quot; (by exact title). Use for a full library wipe
+            while keeping the two named standards.
           </p>
           <button
             type="button"
             className="settings-clear-btn settings-reset-btn"
             onClick={handleResetMetricsAndLibrary}
-            disabled={resetInProgress}
+            disabled={resetInProgress || sopClearInProgress}
           >
             {resetInProgress ? 'Resetting…' : 'Reset metrics and prune library'}
           </button>

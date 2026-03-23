@@ -6,7 +6,6 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock,
-  XCircle,
   TrendingUp,
   FileText,
   Activity,
@@ -14,7 +13,8 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { useAnalysis } from '../context/AnalysisContext';
-import { listDocuments, listAnalysisSessions } from '../api';
+import { addInteractionLog, listDocuments, listAnalysisSessions } from '../api';
+import { computeRiskMetrics } from '../utils/riskMetrics';
 import './DashboardPage.css';
 
 const SEVERITY_CLASS = { critical: 'alert-critical', high: 'alert-high', medium: 'alert-medium', low: 'alert-low' };
@@ -48,18 +48,13 @@ const AGENT_DISPLAY = {
   sequencing:  'Sequencer',
 };
 
-// Map API result keys → agent names
-const FINDING_KEYS = {
-  risk_gaps:              'risk',
-  content_integrity_flags:'cleansing',
-  structure_flags:        'cleansing',
-  conflicts:              'conflict',
-  specifying_flags:       'specifying',
-  terminology_flags:      'terminology',
-  compliance_flags:       'validation',
-  formatting_flags:       'formatting',
-  sequencing_flags:       'sequencing',
-};
+function sessionRiskMetrics(session) {
+  if (!session) return null;
+  const rm = session.riskMetrics ?? session.risk_metrics;
+  if (rm && typeof rm === 'object') return rm;
+  if (session.result) return computeRiskMetrics(session.result);
+  return null;
+}
 
 function timeAgo(isoString) {
   if (!isoString) return '';
@@ -73,10 +68,51 @@ function timeAgo(isoString) {
   return `${days} day${days > 1 ? 's' : ''} ago`;
 }
 
+function sessionTimestamp(session) {
+  const value = session?.completedAt || session?.completed_at || session?.analysis_date || 0;
+  const time = new Date(value).getTime();
+  return Number.isFinite(time) ? time : 0;
+}
+
+function sessionDocumentKey(session) {
+  const key = String(
+    session?.documentId ||
+    session?.document_id ||
+    session?.title ||
+    ''
+  ).trim().toLowerCase();
+  return key || String(session?.trackingId || session?.tracking_id || '').trim().toLowerCase();
+}
+
+/** True if session document_id matches a row in Library (exact or same base id, e.g. FSP003 vs FSP003-VEHICLE-…). */
+function sessionDocMatchesLibrary(sessionDocId, libraryDocs) {
+  if (!sessionDocId || !libraryDocs?.length) return false;
+  const req = String(sessionDocId).trim();
+  if (!req) return false;
+  const upperReq = req.toUpperCase();
+  for (const d of libraryDocs) {
+    const lid = String(d.document_id || '').trim();
+    if (!lid) continue;
+    const chunk = lid.toUpperCase();
+    if (upperReq === chunk) return true;
+    if (chunk.startsWith(upperReq) && (chunk.length === upperReq.length || '-_: '.includes(chunk[upperReq.length]))) {
+      return true;
+    }
+    const base = upperReq.split(/\s+/)[0];
+    if (base && chunk === base) return true;
+    if (base && chunk.startsWith(base) && (chunk.length === base.length || '-_: '.includes(chunk[base.length]))) {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Line chart: sessions per day (last 7 days)
 function SessionsLineChart({ data }) {
-  const padding = { top: 8, right: 8, bottom: 28, left: 28 };
-  const width = 280;
+  const [hoverIdx, setHoverIdx] = useState(null);
+  // Wide viewBox so preserveAspectRatio="meet" uses full card width (narrow VB + meet = side letterboxing)
+  const padding = { top: 8, right: 20, bottom: 28, left: 36 };
+  const width = 640;
   const height = 100;
   const innerW = width - padding.left - padding.right;
   const innerH = height - padding.top - padding.bottom;
@@ -88,9 +124,24 @@ function SessionsLineChart({ data }) {
     return { x, y, ...d };
   });
   const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+  const tip = hoverIdx != null && data[hoverIdx] ? data[hoverIdx] : null;
   return (
     <div className="sessions-line-chart-wrap">
-      <svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`} preserveAspectRatio="xMidYMid meet" className="sessions-line-chart">
+      {tip && (
+        <div className="sessions-chart-tooltip" role="status">
+          <strong>{tip.label}</strong>
+          {' — '}
+          {tip.sessions} session{tip.sessions !== 1 ? 's' : ''}, {tip.findings} findings
+        </div>
+      )}
+      <svg
+        width="100%"
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="xMidYMid meet"
+        className="sessions-line-chart"
+        onMouseLeave={() => setHoverIdx(null)}
+      >
         <defs>
           <linearGradient id="sessions-line-gradient" x1="0%" y1="0%" x2="0%" y2="100%">
             <stop offset="0%" stopColor="var(--yb-blue)" stopOpacity="0.25" />
@@ -103,7 +154,24 @@ function SessionsLineChart({ data }) {
         />
         <path d={pathD} fill="none" stroke="var(--yb-blue)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
         {points.map((p, i) => (
-          <circle key={i} cx={p.x} cy={p.y} r="4" fill="var(--yb-blue)" className="chart-dot" />
+          <g key={i}>
+            <circle
+              cx={p.x}
+              cy={p.y}
+              r={hoverIdx === i ? 6 : 4}
+              fill="var(--yb-blue)"
+              className="chart-dot"
+              style={{ transition: 'r 0.15s ease' }}
+            />
+            <circle
+              cx={p.x}
+              cy={p.y}
+              r="14"
+              fill="transparent"
+              className="chart-dot-hit"
+              onMouseEnter={() => setHoverIdx(i)}
+            />
+          </g>
         ))}
         {data.map((d, i) => (
           <text
@@ -130,6 +198,7 @@ export default function DashboardPage() {
 
   const [backendDocs, setBackendDocs] = useState([]);
   const [backendSessions, setBackendSessions] = useState([]);
+  const [docsError, setDocsError] = useState(null);
   const [loadingDocs, setLoadingDocs] = useState(false);
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [sessionsError, setSessionsError] = useState(null);
@@ -140,8 +209,10 @@ export default function DashboardPage() {
     try {
       const data = await listDocuments();
       setBackendDocs(data || []);
-    } catch {
-      // Silently ignore; dashboard should still render with session data
+      setDocsError(null);
+    } catch (err) {
+      setDocsError(err?.message || 'Could not load document library');
+      // Keep prior backendDocs so KPI "Docs in Store" isn’t wiped on transient errors
     } finally {
       setLoadingDocs(false);
     }
@@ -228,20 +299,74 @@ export default function DashboardPage() {
     });
   }, [allSessions, siteFilteredDocIds]);
 
+  // Metrics, charts, and Attention Required only count sessions whose document still exists in Library.
+  // Otherwise cleared / deleted docs leave orphan rows in analysis_sessions and inflate totals.
+  const sessionsForMetrics = useMemo(() => {
+    if (loadingDocs) return siteFilteredSessions;
+    // Library unknown — don’t treat as “empty” and zero all metrics
+    if (docsError) return siteFilteredSessions;
+    if (!backendDocs.length) return [];
+    return siteFilteredSessions.filter((s) => {
+      const docId = s.documentId || s.document_id;
+      if (!docId || !String(docId).trim()) return false;
+      return sessionDocMatchesLibrary(docId, backendDocs);
+    });
+  }, [siteFilteredSessions, backendDocs, loadingDocs, docsError]);
+
+  const hiddenSessionCount = useMemo(() => {
+    if (loadingDocs || docsError || !backendDocs.length) return 0;
+    return Math.max(0, siteFilteredSessions.length - sessionsForMetrics.length);
+  }, [loadingDocs, docsError, backendDocs.length, siteFilteredSessions, sessionsForMetrics]);
+
+  // Gap-level FMEA bands (aggregated from risk_metrics / local result)
+  const fmeaGapTotals = useMemo(() => {
+    const counts = { low: 0, medium: 0, high: 0, critical: 0 };
+    let unknown = 0;
+    let hasData = false;
+    for (const s of sessionsForMetrics) {
+      const rm = sessionRiskMetrics(s);
+      if (!rm?.gaps_by_band) continue;
+      hasData = true;
+      const gb = rm.gaps_by_band;
+      counts.low += Number(gb.low) || 0;
+      counts.medium += Number(gb.medium) || 0;
+      counts.high += Number(gb.high) || 0;
+      counts.critical += Number(gb.critical) || 0;
+      unknown += Number(rm.gaps_unknown_band) || 0;
+    }
+    const sumBands = Object.values(counts).reduce((a, b) => a + b, 0);
+    const total = sumBands + unknown;
+    return { counts, unknown, total: total > 0 ? total : 1, hasData, sumBands };
+  }, [sessionsForMetrics]);
+
+  const repeatDocAnalyses = useMemo(() => {
+    const m = new Map();
+    for (const s of sessionsForMetrics) {
+      const docId = s.documentId || s.document_id;
+      if (!docId) continue;
+      const cur = m.get(docId) || { documentId: docId, title: s.title || docId, count: 0 };
+      cur.count += 1;
+      if (s.title) cur.title = s.title;
+      m.set(docId, cur);
+    }
+    return [...m.values()]
+      .filter((x) => x.count > 1)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 8);
+  }, [sessionsForMetrics]);
+
   // ---- Derived KPIs ---------------------------------------------------
 
   const kpi = useMemo(() => {
     const totalDocs    = siteFilteredDocIds ? siteFilteredDocIds.size : backendDocs.length;
-    const totalSessions= siteFilteredSessions.length;
-    const openFindings = siteFilteredSessions.reduce((sum, s) => sum + (s.totalFindings || 0), 0);
-    const correctionsImplemented = siteFilteredSessions.reduce((sum, s) => sum + (s.correctionsImplemented ?? 0), 0);
-
+    const totalSessions= sessionsForMetrics.length;
+    const openFindings = sessionsForMetrics.reduce((sum, s) => sum + (s.totalFindings || 0), 0);
     // Per-agent finding totals across site-filtered sessions
     const agentTotals = {};
 
     // Risk severity breakdown from session log (use latest per tracking_id)
     const riskCounts = { low: 0, medium: 0, high: 0, critical: 0 };
-    for (const s of siteFilteredSessions) {
+    for (const s of sessionsForMetrics) {
       if (s.overallRisk && riskCounts[s.overallRisk] !== undefined) {
         riskCounts[s.overallRisk] += 1;
       }
@@ -251,34 +376,47 @@ export default function DashboardPage() {
       totalDocs,
       totalSessions,
       openFindings,
-      correctionsImplemented,
       agentTotals,
       riskCounts,
       overdueReviews: 0,   // Without a review DB, leave at 0
       reviewsDue:     0,
+      criticalFmeaGaps: fmeaGapTotals.counts.critical,
     };
-  }, [backendDocs.length, siteFilteredDocIds, siteFilteredSessions]);
+  }, [backendDocs.length, siteFilteredDocIds, sessionsForMetrics, fmeaGapTotals]);
 
-  // Agent breakdown: per-agent finding totals from site-filtered sessions
+  // Agent breakdown: findings (flags) vs pipeline runs per agent
   const agentStats = useMemo(() => {
-    const totals = {};
-    for (const s of siteFilteredSessions) {
-      const findings = s.agentFindings || {};
+    const findingTotals = {};
+    const runTotals = {};
+    for (const s of sessionsForMetrics) {
+      const findings = s.agentFindings || s.agent_findings || {};
       for (const [agent, count] of Object.entries(findings)) {
         const key = AGENT_DISPLAY[agent] || agent;
-        totals[key] = (totals[key] || 0) + (typeof count === 'number' ? count : 0);
+        findingTotals[key] = (findingTotals[key] || 0) + (typeof count === 'number' ? count : 0);
+      }
+      const runs = s.agentsRun || s.agents_run || [];
+      if (Array.isArray(runs)) {
+        for (const name of runs) {
+          const key = AGENT_DISPLAY[name] || name;
+          runTotals[key] = (runTotals[key] || 0) + 1;
+        }
       }
     }
-    if (Object.keys(totals).length === 0) return [];
-    return Object.entries(totals)
-      .map(([agent, findings]) => ({ agent, findings }))
-      .filter(a => a.findings > 0)
-      .sort((a, b) => b.findings - a.findings);
-  }, [siteFilteredSessions]);
+    const names = new Set([...Object.keys(findingTotals), ...Object.keys(runTotals)]);
+    if (names.size === 0) return [];
+    return [...names]
+      .map((agent) => ({
+        agent,
+        findings: findingTotals[agent] || 0,
+        runs: runTotals[agent] || 0,
+      }))
+      .filter((a) => a.findings > 0 || a.runs > 0)
+      .sort((a, b) => b.findings - a.findings || b.runs - a.runs);
+  }, [sessionsForMetrics]);
 
-  // Activity feed from session log (most recent first, max 8)
+  // Activity feed — same library filter as KPIs (most recent first, max 8)
   const activity = useMemo(() =>
-    allSessions.slice(0, 8).map((s, i) => ({
+    sessionsForMetrics.slice(0, 8).map((s, i) => ({
       id:           s.trackingId || i,
       type:         s.workflowType || 'review',
       doc:          s.title || s.documentId || 'Unnamed',
@@ -287,7 +425,7 @@ export default function DashboardPage() {
       risk:         s.overallRisk || null,
       totalFindings: s.totalFindings || 0,
     })),
-  [allSessions]);
+  [sessionsForMetrics]);
 
   // Line chart: sessions per day for last 7 days (oldest to newest)
   const sessionsChartData = useMemo(() => {
@@ -304,7 +442,7 @@ export default function DashboardPage() {
         findings: 0,
       });
     }
-    for (const s of siteFilteredSessions) {
+    for (const s of sessionsForMetrics) {
       const at = s.completedAt ? new Date(s.completedAt) : null;
       if (!at) continue;
       const key = at.toISOString().slice(0, 10);
@@ -315,29 +453,42 @@ export default function DashboardPage() {
       }
     }
     return days;
-  }, [siteFilteredSessions]);
+  }, [sessionsForMetrics]);
 
   // Health bar: count analysed docs by risk band
   const healthCounts = useMemo(() => {
     const counts = { low: 0, medium: 0, high: 0, critical: 0, unknown: 0 };
-    for (const s of siteFilteredSessions) {
+    for (const s of sessionsForMetrics) {
       if (s.overallRisk && counts[s.overallRisk] !== undefined) counts[s.overallRisk]++;
       else counts.unknown++;
     }
     return counts;
-  }, [siteFilteredSessions]);
+  }, [sessionsForMetrics]);
 
   const totalHealth = Object.values(healthCounts).reduce((a, b) => a + b, 0) || 1;
 
   // Alerts: site-filtered sessions with findings, excluding user-dismissed (when a site is selected, only that site's docs; "All Sites" = all)
   const riskOrder = { critical: 0, high: 1, medium: 2, low: 3 };
-  const liveAlerts = useMemo(() =>
-    siteFilteredSessions
-      .filter(s => (s.totalFindings || 0) > 0 && !dismissedAlerts.has(s.trackingId || s.tracking_id || ''))
+  const liveAlerts = useMemo(() => {
+    const latestByDocument = new Map();
+    for (const session of sessionsForMetrics) {
+      if ((session.totalFindings || 0) <= 0) continue;
+      const trackingId = session.trackingId || session.tracking_id || '';
+      if (dismissedAlerts.has(trackingId)) continue;
+      const docKey = sessionDocumentKey(session);
+      const existing = latestByDocument.get(docKey);
+      if (!existing || sessionTimestamp(session) > sessionTimestamp(existing)) {
+        latestByDocument.set(docKey, session);
+      }
+    }
+
+    return [...latestByDocument.values()]
       .sort((a, b) => {
         const ra = riskOrder[a.overallRisk] ?? 4;
         const rb = riskOrder[b.overallRisk] ?? 4;
         if (ra !== rb) return ra - rb;
+        const timeDiff = sessionTimestamp(b) - sessionTimestamp(a);
+        if (timeDiff !== 0) return timeDiff;
         return (b.totalFindings || 0) - (a.totalFindings || 0);
       })
       .slice(0, 10)
@@ -349,8 +500,8 @@ export default function DashboardPage() {
         msg:         `${s.totalFindings} findings${s.overallRisk ? ` — risk: ${s.overallRisk}` : ''}`,
         action:      'View analysis',
         session:     s,
-      })),
-  [siteFilteredSessions, dismissedAlerts]);
+      }));
+  }, [sessionsForMetrics, dismissedAlerts]);
 
   // ---- Navigation helpers ---------------------------------------------------
 
@@ -386,6 +537,20 @@ export default function DashboardPage() {
       {sessionsError && (
         <div className="dash-error-banner">
           {sessionsError} — showing in-session data only. Check backend is running and API proxy is correct.
+        </div>
+      )}
+
+      {docsError && (
+        <div className="dash-error-banner" role="alert">
+          {docsError} — could not refresh the Library. Session metrics are shown without library filtering until the list loads successfully.
+        </div>
+      )}
+
+      {hiddenSessionCount > 0 && (
+        <div className="dash-info-banner" role="status">
+          <strong>{hiddenSessionCount}</strong> saved analysis session(s) refer to documents that are no longer in the Library
+          (or have no document ID). Totals and Attention Required below only include sessions for documents currently in the Library.
+          To remove old metrics from the database, use <strong>Settings → Clear all SOP data &amp; reset metrics</strong> (or the full library reset).
         </div>
       )}
 
@@ -434,10 +599,10 @@ export default function DashboardPage() {
           </div>
         </div>
         <div className="kpi-card">
-          <span className="kpi-icon kpi-icon-red"><XCircle size={18} /></span>
+          <span className="kpi-icon kpi-icon-red"><AlertTriangle size={18} /></span>
           <div>
-            <span className="kpi-value">{kpi.overdueReviews}</span>
-            <span className="kpi-label">Overdue Reviews</span>
+            <span className="kpi-value">{kpi.criticalFmeaGaps}</span>
+            <span className="kpi-label">Critical FMEA gaps</span>
           </div>
         </div>
         <div className="kpi-card">
@@ -458,7 +623,7 @@ export default function DashboardPage() {
           <span className="kpi-icon kpi-icon-green"><CheckCircle2 size={18} /></span>
           <div>
             <span className="kpi-value">
-              {siteFilteredSessions.filter(s => !s.overallRisk || s.overallRisk === 'low').length}
+              {sessionsForMetrics.filter(s => !s.overallRisk || s.overallRisk === 'low').length}
             </span>
             <span className="kpi-label">Low-Risk Sessions</span>
           </div>
@@ -494,7 +659,7 @@ export default function DashboardPage() {
                     <span className="dash-alert-msg">{a.msg}</span>
                   </div>
                   <div className="dash-alert-actions">
-                    <button type="button" className="dash-alert-action" onClick={() => startReview(a.session ? { documentId: a.documentId || a.doc, title: a.doc, trackingId: a.session.trackingId } : null)}>
+                    <button type="button" className="dash-alert-action" onClick={() => startReview(a.session || null)}>
                       {a.action}
                     </button>
                     <button type="button" className="dash-alert-action dash-alert-delete" onClick={() => {
@@ -505,6 +670,19 @@ export default function DashboardPage() {
                         saveDismissedAlerts(next);
                         return next;
                       });
+                      addInteractionLog({
+                        user_name: '',
+                        action_type: 'delete_alert',
+                        route: '/dashboard',
+                        workflow_mode: '',
+                        document_id: a.documentId || '',
+                        tracking_id: a.id || '',
+                        doc_layer: a.session?.docLayer || '',
+                        metadata: {
+                          title: a.doc || '',
+                          severity: a.severity || '',
+                        },
+                      }).catch(() => {});
                     }} title="Remove from Attention Required">
                       Delete
                     </button>
@@ -540,26 +718,42 @@ export default function DashboardPage() {
           )}
         </section>
 
-        {/* Agent sessions breakdown */}
+        {/* Agent findings vs pipeline runs */}
         <section className="dash-card dash-agents">
           <h2 className="dash-card-title">
             <TrendingUp size={15} />
-            Agents — Sessions Run
+            Agents — findings &amp; runs
           </h2>
+          <p className="dash-chart-hint">Findings = flags raised per agent. Runs = times that agent executed in a session.</p>
           {agentStats.length === 0 ? (
-            <p className="dash-empty">Run an analysis to see per-agent findings.</p>
+            <p className="dash-empty">Run an analysis to see per-agent activity.</p>
           ) : (
             <div className="agent-stat-list">
-              {agentStats.map(a => {
-                const maxCount = Math.max(...agentStats.map(x => x.findings), 1);
-                const pct = Math.round((a.findings / maxCount) * 100);
+              <div className="agent-stat-row agent-stat-header">
+                <span className="agent-stat-name">Agent</span>
+                <span className="agent-stat-col-label">Findings</span>
+                <span className="agent-stat-col-label agent-stat-col-runs">Runs</span>
+              </div>
+              {agentStats.map((a) => {
+                const maxF = Math.max(1, ...agentStats.map((x) => x.findings));
+                const maxR = Math.max(1, ...agentStats.map((x) => x.runs));
+                const pctF = Math.round((a.findings / maxF) * 100);
+                const pctR = Math.round((a.runs / maxR) * 100);
                 return (
-                  <div key={a.agent} className="agent-stat-row">
-                    <span className="agent-stat-name">{a.agent}</span>
-                    <div className="agent-stat-bar-wrap">
-                      <div className="agent-stat-bar" style={{ width: `${pct}%` }} />
+                  <div key={a.agent} className="agent-stat-row agent-stat-row-dual">
+                    <span className="agent-stat-name" title={a.agent}>{a.agent}</span>
+                    <div className="agent-stat-bar-cell">
+                      <div className="agent-stat-bar-wrap" title={`${a.findings} findings`}>
+                        <div className="agent-stat-bar agent-stat-bar-findings" style={{ width: `${pctF}%` }} />
+                      </div>
+                      <span className="agent-stat-count">{a.findings}</span>
                     </div>
-                    <span className="agent-stat-count">{a.findings}</span>
+                    <div className="agent-stat-bar-cell agent-stat-runs-cell">
+                      <div className="agent-stat-bar-wrap agent-stat-bar-wrap-runs" title={`${a.runs} runs`}>
+                        <div className="agent-stat-bar agent-stat-bar-runs" style={{ width: `${pctR}%` }} />
+                      </div>
+                      <span className="agent-stat-count">{a.runs}</span>
+                    </div>
                   </div>
                 );
               })}
@@ -567,26 +761,22 @@ export default function DashboardPage() {
           )}
         </section>
 
-        {/* Corrections Implemented — separate metric below Agents */}
-        <section className="dash-card dash-corrections">
-          <h2 className="dash-card-title">
-            <CheckCircle2 size={15} />
-            Corrections Implemented
-          </h2>
-          <div className="dash-corrections-value">{kpi.correctionsImplemented}</div>
-          <p className="dash-corrections-desc">Findings accepted and applied to the draft across all sessions.</p>
-        </section>
-
-        {/* Document health */}
+        {/* Document health + gap-level FMEA */}
         <section className="dash-card dash-health">
           <h2 className="dash-card-title">
             <FileText size={15} />
-            Analysed Document Risk Profile
+            Risk profile &amp; FMEA gaps
           </h2>
-          {allSessions.length === 0 ? (
-            <p className="dash-empty">No sessions yet. Run an analysis to populate this chart.</p>
+          {sessionsForMetrics.length === 0 ? (
+            <p className="dash-empty">
+              {backendDocs.length === 0 && !loadingDocs
+                ? 'No documents in the Library and no matching sessions. Ingest a document and run an analysis.'
+                : 'No analysis sessions for documents currently in the Library. Run an analysis from Review a Document.'}
+            </p>
           ) : (
             <>
+              <h3 className="dash-health-subtitle">Sessions by overall document risk</h3>
+              <p className="dash-chart-hint">One count per analysis session (document-level worst band).</p>
               <div className="health-legend">
                 <span className="legend-dot legend-current" /> Low ({healthCounts.low})
                 <span className="legend-dot legend-due" /> Medium ({healthCounts.medium})
@@ -595,16 +785,16 @@ export default function DashboardPage() {
               </div>
               <div className="health-bar-wrap">
                 {healthCounts.low > 0 && (
-                  <div className="health-bar health-current" style={{ width: `${(healthCounts.low / totalHealth) * 100}%` }} title={`${healthCounts.low} low`} />
+                  <div className="health-bar health-current" style={{ width: `${(healthCounts.low / totalHealth) * 100}%` }} title={`${healthCounts.low} low-risk sessions`} />
                 )}
                 {healthCounts.medium > 0 && (
-                  <div className="health-bar health-due" style={{ width: `${(healthCounts.medium / totalHealth) * 100}%` }} title={`${healthCounts.medium} medium`} />
+                  <div className="health-bar health-due" style={{ width: `${(healthCounts.medium / totalHealth) * 100}%` }} title={`${healthCounts.medium} medium-risk sessions`} />
                 )}
                 {healthCounts.high > 0 && (
-                  <div className="health-bar health-overdue" style={{ width: `${(healthCounts.high / totalHealth) * 100}%` }} title={`${healthCounts.high} high`} />
+                  <div className="health-bar health-overdue" style={{ width: `${(healthCounts.high / totalHealth) * 100}%` }} title={`${healthCounts.high} high-risk sessions`} />
                 )}
                 {healthCounts.critical > 0 && (
-                  <div className="health-bar" style={{ width: `${(healthCounts.critical / totalHealth) * 100}%`, background: '#7f0000' }} title={`${healthCounts.critical} critical`} />
+                  <div className="health-bar" style={{ width: `${(healthCounts.critical / totalHealth) * 100}%`, background: '#7f0000' }} title={`${healthCounts.critical} critical-risk sessions`} />
                 )}
               </div>
               <div className="health-counts">
@@ -613,7 +803,82 @@ export default function DashboardPage() {
                 <span>{healthCounts.high} high</span>
                 <span>{healthCounts.critical} critical</span>
               </div>
+
+              <h3 className="dash-health-subtitle dash-health-subtitle-spaced">Risk gaps by FMEA band</h3>
+              {!fmeaGapTotals.hasData ? (
+                <p className="dash-chart-hint dash-fmea-missing">
+                  Gap-level FMEA counts appear after analyses that store risk metrics (new runs and re-saved sessions). Local browser sessions from this device include them immediately.
+                </p>
+              ) : (
+                <>
+                  <p className="dash-chart-hint">Each risk gap is counted once (aggregated across filtered sessions).</p>
+                  <div className="health-legend">
+                    <span className="legend-dot legend-current" /> Low ({fmeaGapTotals.counts.low})
+                    <span className="legend-dot legend-due" /> Medium ({fmeaGapTotals.counts.medium})
+                    <span className="legend-dot legend-overdue" /> High ({fmeaGapTotals.counts.high})
+                    <span className="legend-dot" style={{ background: '#7f0000' }} /> Critical ({fmeaGapTotals.counts.critical})
+                    {fmeaGapTotals.unknown > 0 && (
+                      <>
+                        <span className="legend-dot legend-draft" /> Unbanded ({fmeaGapTotals.unknown})
+                      </>
+                    )}
+                  </div>
+                  <div className="health-bar-wrap">
+                    {fmeaGapTotals.counts.low > 0 && (
+                      <div className="health-bar health-current" style={{ width: `${(fmeaGapTotals.counts.low / fmeaGapTotals.total) * 100}%` }} title={`${fmeaGapTotals.counts.low} low-band gaps`} />
+                    )}
+                    {fmeaGapTotals.counts.medium > 0 && (
+                      <div className="health-bar health-due" style={{ width: `${(fmeaGapTotals.counts.medium / fmeaGapTotals.total) * 100}%` }} title={`${fmeaGapTotals.counts.medium} medium-band gaps`} />
+                    )}
+                    {fmeaGapTotals.counts.high > 0 && (
+                      <div className="health-bar health-overdue" style={{ width: `${(fmeaGapTotals.counts.high / fmeaGapTotals.total) * 100}%` }} title={`${fmeaGapTotals.counts.high} high-band gaps`} />
+                    )}
+                    {fmeaGapTotals.counts.critical > 0 && (
+                      <div className="health-bar" style={{ width: `${(fmeaGapTotals.counts.critical / fmeaGapTotals.total) * 100}%`, background: '#7f0000' }} title={`${fmeaGapTotals.counts.critical} critical-band gaps`} />
+                    )}
+                    {fmeaGapTotals.unknown > 0 && (
+                      <div className="health-bar health-unknown-band" style={{ width: `${(fmeaGapTotals.unknown / fmeaGapTotals.total) * 100}%` }} title={`${fmeaGapTotals.unknown} gaps without band`} />
+                    )}
+                  </div>
+                </>
+              )}
             </>
+          )}
+        </section>
+
+        {/* Documents analysed more than once */}
+        <section className="dash-card dash-repeat-docs">
+          <h2 className="dash-card-title">
+            <Activity size={15} />
+            Repeat analyses
+          </h2>
+          {repeatDocAnalyses.length === 0 ? (
+            <p className="dash-empty">No document has more than one analysis in the current filter. Re-run reviews to track iteration here.</p>
+          ) : (
+            <ul className="repeat-doc-list">
+              {repeatDocAnalyses.map((row) => (
+                <li key={row.documentId} className="repeat-doc-item">
+                  <span className="repeat-doc-title" title={row.title}>{row.title}</span>
+                  <span className="repeat-doc-count">{row.count}×</span>
+                  <button
+                    type="button"
+                    className="repeat-doc-action"
+                    onClick={() => {
+                      setWorkflowMode('review');
+                      setConfig((c) => ({
+                        ...c,
+                        requestType: 'single_document_review',
+                        documentId: row.documentId,
+                        title: row.title,
+                      }));
+                      navigate('/review/configure');
+                    }}
+                  >
+                    Review
+                  </button>
+                </li>
+              ))}
+            </ul>
           )}
         </section>
 

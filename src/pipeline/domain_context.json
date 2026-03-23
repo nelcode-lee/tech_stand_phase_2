@@ -1,5 +1,5 @@
 {
-  "_comment": "Cranswick domain context — injected into Risk agent prompt. Edit here; no code change needed.",
+  "_comment": "Cranswick domain context — injected into Risk agent prompt. Edit here; no code change needed. Optional top-level keys for Risk system prompt: organisation_context, sector, document_types, governing_standards, primary_audience (strings). If omitted, sensible defaults are used.",
 
   "severity_rules": {
     "description": "FMEA severity calibration by topic. Values 1–5. Used to set a floor or cap when the LLM scores a gap.",
@@ -40,33 +40,21 @@
   },
 
   "fmea_scoring": {
-    "description": "FMEA model: Risk Score = Severity × Scope × (1 / Detectability). All scales 1–5.",
+    "description": "RPN = Severity × Scope × Detectability (each 1–5). Range 1–125. Severity/Scope/Detectability definitions are hard-coded in risk_agent.py (_FMEA_SCORING_BLOCK); this file holds routing bands only.",
     "severity_scale": {
-      "5": "Regulatory breach or safety incident — consumer harm, enforcement action",
-      "4": "Serious non-conformance — food safety risk, audit failure likely",
-      "3": "Significant non-conformance — operational disruption, rework required",
-      "2": "Minor non-conformance — process inefficiency, limited impact",
-      "1": "Administrative inconvenience — no operational or safety impact"
+      "_note": "Superseded by hard-coded prompt in src/pipeline/agents/risk_agent.py — kept for reference only."
     },
     "scope_scale": {
-      "5": "All sites affected",
-      "4": "Multiple sites affected",
-      "3": "Single site, multiple departments",
-      "2": "Single site, single department",
-      "1": "Single site, single team or shift"
+      "_note": "Superseded by hard-coded prompt in risk_agent.py — kept for reference only."
     },
     "detectability_scale": {
-      "5": "Very unlikely to be caught before causing harm — no monitoring in place",
-      "4": "Unlikely to be caught — monitoring is informal or infrequent",
-      "3": "May be caught — monitoring exists but not robust",
-      "2": "Likely to be caught — monitoring is regular and documented",
-      "1": "Almost certain to be caught immediately — automated or verified control"
+      "_note": "Superseded by hard-coded prompt in risk_agent.py — kept for reference only."
     },
     "risk_bands": {
-      "critical": { "min_score": 20, "max_score": 25, "action": "Auto-escalate to Standards Manager, block draft" },
-      "high":     { "min_score": 12, "max_score": 19, "action": "Flag prominently in review, require SME sign-off" },
-      "medium":   { "min_score": 6,  "max_score": 11, "action": "Surface as amber warning in review" },
-      "low":      { "min_score": 1,  "max_score": 5,  "action": "Log in report, note in draft" }
+      "critical": { "min_score": 100, "max_score": 125, "action": "HITL / escalation: RPN ≥ 100 — Standards escalation, block or hold draft until reviewed" },
+      "high":     { "min_score": 60,  "max_score": 99,  "action": "Prominent review, SME sign-off recommended" },
+      "medium":   { "min_score": 28,  "max_score": 59,  "action": "Amber warning in review; author to confirm" },
+      "low":      { "min_score": 1,   "max_score": 27,  "action": "Log in report; routine correction" }
     }
   },
 

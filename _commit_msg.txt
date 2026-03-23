@@ -1,0 +1,13 @@
+Add policy clause mapping, site governance graph, and context window improvements.
+
+- policy_clause_records as source of truth: constrained LLM pick from numbered candidates, verbatim quote verification (status=linked only when both pass)
+- clause_mapping.py: candidate retrieval, LLM pick, quote verify, HITL fallback with explicit unmapped_reason
+- finding_verification.py: post-pipeline pass to suppress false-positive findings via LLM and quote check
+- context_limits.py: configurable agent context windows (default 120k chars), replacing hardcoded truncation in all agents
+- site_standard_links table: governance graph edges (site to standard to clauses), 3-hop site_scope on findings
+- Yorkshire Baker seeded with BRCGS Food Safety (455 clauses) and Cranswick Manufacturing Standard (508 clauses)
+- PolicyClauseMapping model: site_scope field, canonical_citation, supporting_quote, requirement_preview
+- /ingest/site-standard-links REST API (GET/POST/DELETE)
+- AnalysePage: clause mapping block with verified citation, supporting quote, and site scope badges
+- docs/site_standard_links.md and scripts/seed_site_standard_links.py for governance data management
+- interaction_logs, logs page, settings page, dashboard and library UX improvements

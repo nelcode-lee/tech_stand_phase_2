@@ -5,10 +5,15 @@ from pydantic import BaseModel
 
 from src.rag.document_registry import (
     delete_document,
+    delete_site_standard_link,
+    delete_vector_chunks_document_id_like,
     get_document_content,
     get_source_file,
+    list_site_standard_links,
+    purge_documents_by_doc_layers,
     update_document_metadata,
     update_vector_store_chunk_metadata,
+    upsert_site_standard_link,
     upsert_source_file,
 )
 from src.rag.vector_store import delete_by_document_id
@@ -327,3 +332,95 @@ def post_reset_metrics_and_library():
         "documents_removed": documents_removed,
         "documents_kept": [d.get("title") or d.get("document_id") for d in to_keep],
     }
+
+
+# ---------------------------------------------------------------------------
+# POST /ingest/admin/clear-sops-and-reset-metrics — SOP/WI only + all metrics
+# ---------------------------------------------------------------------------
+
+
+@router.post("/admin/clear-sops-and-reset-metrics")
+def post_clear_sops_and_reset_metrics():
+    """
+    Delete all analysis sessions, all finding notes, user-note vectors, and every ingested
+    document with doc_layer sop or work_instruction. Policy / principle documents are kept.
+    """
+    from src.rag.analysis_sessions import delete_all_sessions
+    from src.rag.finding_notes import USER_NOTES_DOC_PREFIX, delete_all_finding_notes
+
+    sessions_deleted = delete_all_sessions()
+    finding_notes_deleted = delete_all_finding_notes()
+    user_note_chunks_deleted = delete_vector_chunks_document_id_like(f"{USER_NOTES_DOC_PREFIX}%")
+    purge = purge_documents_by_doc_layers()
+
+    return {
+        "ok": True,
+        "sessions_deleted": sessions_deleted,
+        "finding_notes_deleted": finding_notes_deleted,
+        "user_note_vector_chunks_deleted": user_note_chunks_deleted,
+        "procedure_documents_removed": purge["removed_count"],
+        "procedure_document_ids_removed": purge["removed_ids"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Site ↔ Standard links  (governance graph edges)
+# ---------------------------------------------------------------------------
+
+class SiteStandardLinkBody(BaseModel):
+    site_id: str
+    standard_name: str
+    standard_document_id: str | None = None
+    standard_type: str = "universal"   # universal | cranswick | customer
+    notes: str | None = None
+
+
+@router.get("/site-standard-links", tags=["governance"])
+def get_site_standard_links(site_id: str | None = None):
+    """
+    List all site ↔ standard links, optionally filtered to one site.
+    These edges answer: "which standards apply to site X?" and (inverted)
+    "which sites must comply with standard Y?" — used for site_scope on findings.
+    """
+    try:
+        rows = list_site_standard_links(site_id=site_id)
+        for r in rows:
+            if hasattr(r.get("created_at"), "isoformat"):
+                r["created_at"] = r["created_at"].isoformat()
+        return {"links": rows}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/site-standard-links", tags=["governance"], status_code=201)
+def post_site_standard_link(body: SiteStandardLinkBody):
+    """
+    Add or update a site ↔ standard link (upsert on site_id + standard_name).
+    """
+    try:
+        upsert_site_standard_link(
+            site_id=body.site_id,
+            standard_name=body.standard_name,
+            standard_document_id=body.standard_document_id,
+            standard_type=body.standard_type,
+            notes=body.notes,
+        )
+        return {"ok": True, "site_id": body.site_id, "standard_name": body.standard_name}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/site-standard-links", tags=["governance"])
+def delete_site_standard_link_route(site_id: str, standard_name: str):
+    """
+    Remove a specific site ↔ standard link.
+    """
+    try:
+        deleted = delete_site_standard_link(site_id=site_id, standard_name=standard_name)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Link not found")
+        return {"ok": True, "site_id": site_id, "standard_name": standard_name}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

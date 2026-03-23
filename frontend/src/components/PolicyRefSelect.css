@@ -1,0 +1,23 @@
+.policy-ref-select-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.policy-ref-field-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted, #64748b);
+}
+
+.policy-ref-select,
+.policy-ref-custom-input {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.policy-ref-hint {
+  display: block;
+  margin-top: 0.25rem;
+}

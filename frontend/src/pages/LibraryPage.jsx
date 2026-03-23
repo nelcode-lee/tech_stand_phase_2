@@ -2,8 +2,10 @@ import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { FileSearch, FilePlus2, Clock, CheckCircle2, AlertTriangle, XCircle, RefreshCw, Upload, Pencil, Trash2 } from 'lucide-react';
 import { useAnalysis } from '../context/AnalysisContext';
-import { listDocuments, updateDocumentMetadata, deleteDocument } from '../api';
+import { addInteractionLog, listDocuments, updateDocumentMetadata, deleteDocument } from '../api';
+import PolicyRefSelect from '../components/PolicyRefSelect';
 import SitesSelect from '../components/SitesSelect';
+import { filterPolicyDocumentsForRef } from '../utils/policyDocuments';
 import { ALL_SITES_VALUES, resolveSitesForApi, formatSitesForDisplay } from '../constants/sites';
 import './LibraryPage.css';
 
@@ -86,6 +88,8 @@ export default function LibraryPage() {
 
   // Build a merged view: one row per document.
   // If a document has been analysed this session, overlay its risk/findings.
+  const policyDocsForRef = useMemo(() => filterPolicyDocumentsForRef(docs), [docs]);
+
   const sessionByDocId = useMemo(() => {
     const map = {};
     for (const s of sessionLog) {
@@ -245,6 +249,18 @@ export default function LibraryPage() {
     setDeletingId(doc.document_id);
     try {
       await deleteDocument(doc.document_id);
+      addInteractionLog({
+        user_name: '',
+        action_type: 'delete_document',
+        route: '/library',
+        workflow_mode: '',
+        document_id: doc.document_id || '',
+        doc_layer: doc.doc_layer || '',
+        metadata: {
+          title: doc.title || '',
+          from_backend: true,
+        },
+      }).catch(() => {});
       fetchDocs();
     } catch (err) {
       setError(err.message || 'Failed to delete document');
@@ -479,11 +495,13 @@ export default function LibraryPage() {
               </div>
               <div className="library-modal-row">
                 <label htmlFor="edit-policy">Policy Reference</label>
-                <input
+                <PolicyRefSelect
                   id="edit-policy"
-                  type="text"
                   value={editForm.policy_ref}
-                  onChange={e => setEditForm(f => ({ ...f, policy_ref: e.target.value }))}
+                  onChange={(v) => setEditForm(f => ({ ...f, policy_ref: v }))}
+                  policyDocs={policyDocsForRef}
+                  disabled={editSaving}
+                  hint="BRCGS and Cranswick standards appear here together with any other policy-layer documents."
                 />
               </div>
               {editError && <div className="library-modal-error">{editError}</div>}

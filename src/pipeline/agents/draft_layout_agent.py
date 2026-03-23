@@ -1,5 +1,6 @@
 """Agent: Draft layout — restructure cleansed content into FSP003-style draft (sections, numbered steps, History of Change)."""
 from src.pipeline.base_agent import BaseAgent
+from src.pipeline.context_limits import slice_document_for_agent
 from src.pipeline.domain import load_domain_context
 from src.pipeline.llm import completion
 from src.pipeline.models import PipelineContext
@@ -58,7 +59,7 @@ class DraftLayoutAgent(BaseAgent):
         section_names = _get_section_names_for_prompt()
         system = DRAFT_LAYOUT_SYSTEM + "\n\nStandard section names (use where content fits): " + section_names
 
-        content = (ctx.cleansed_content or "")[:14000]
+        content = slice_document_for_agent(ctx.cleansed_content)
         prompt = (
             "Restructure the following procedure content into the FSP003-style draft layout. "
             "Output plain text only: section headings on their own line, numbered steps (1. 2. 2a. 2b. etc.), "

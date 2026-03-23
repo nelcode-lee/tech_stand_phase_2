@@ -3,6 +3,7 @@ import re
 
 from src.pipeline.agent_rules import DOCUMENT_REFERENCE_RULE, JOB_TITLE_RULE, TOLERANCE_VS_REFERENCE_RULE, PURPOSE_OBJECTIVE_RULE
 from src.pipeline.base_agent import BaseAgent
+from src.pipeline.context_limits import slice_document_for_agent, slice_policy_appendix_for_agent
 from src.pipeline.llm import completion, parse_json_array
 from src.pipeline.models import (
     PipelineContext,
@@ -39,19 +40,14 @@ ABSOLUTE RULES
 - No legal interpretation or extrapolation.
 - No invented regulatory requirements.
 
-CITATIONS — ALWAYS INCLUDE WHEN POSSIBLE
-When a gap relates to BRCGS, Cranswick standards, customer spec, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y.Z", "Cranswick Std §X.Y.Z", "parent policy [title]". Use only exact structured citations shown in the provided parent policy context. Never cite broad section headers such as "BRCGS Clause 5.8" or "Cranswick Std §2.1". If no exact clause is shown, leave structured policy citations empty.
-
 OUTPUT
 Return only a JSON array. Each item has:
 - location: section reference
 - excerpt: exact quote from document — the text that relates to this gap (copy-paste from source). Used to highlight the relevant passage.
 - issue: explicit compliance or regulatory gap
-- requirement_reference: BRC/customer/Cranswick reference if provided
 - recommendation: correction needed to meet requirement (factual only)
-- citations: array of BRCGS/Cranswick/parent policy refs — include when applicable
 
-Example: [{"location": "Section 4", "excerpt": "4. CCP verification: temperature recorded weekly.", "issue": "CCP verification records not referenced", "requirement_reference": "parent policy [Food Safety Policy]", "recommendation": "Add CCP verification record form reference", "citations": ["parent policy [Food Safety Policy]"]}]
+Example: [{"location": "Section 4", "excerpt": "4. CCP verification: temperature recorded weekly.", "issue": "CCP verification records not referenced", "recommendation": "Add CCP verification record form reference"}]
 If no issues, return [].""" + DOCUMENT_REFERENCE_RULE + JOB_TITLE_RULE + TOLERANCE_VS_REFERENCE_RULE + PURPOSE_OBJECTIVE_RULE
 
 
@@ -65,10 +61,11 @@ class ValidationAgent(BaseAgent):
         content = ctx.draft_content or ctx.cleansed_content or ""
         if content:
             try:
-                prompt_parts = ["Analyse the following document for regulatory and compliance alignment:\n\n", content[:12000]]
-                policy_block = self._policy_context_block(ctx, max_chars_per_doc=3000)
+                doc_slice = slice_document_for_agent(content)
+                prompt_parts = ["Analyse the following document for regulatory and compliance alignment:\n\n", doc_slice]
+                policy_block = self._policy_context_block(ctx)
                 if policy_block:
-                    prompt_parts.append(f"\n\nPARENT POLICY (use for citations when applicable):\n{policy_block[:6000]}")
+                    prompt_parts.append(f"\n\nPARENT POLICY (context):\n{slice_policy_appendix_for_agent(policy_block)}")
                 prompt = "".join(prompt_parts)
                 system = VALIDATION_COMPLIANCE_PROMPT
                 if getattr(ctx, "glossary_block", None) and (ctx.glossary_block or "").strip():
@@ -78,16 +75,12 @@ class ValidationAgent(BaseAgent):
                 for item in items:
                     if isinstance(item, dict) and item.get("location") and item.get("issue") and item.get("recommendation"):
                         excerpt = (item.get("excerpt") or "").strip() or None
-                        raw_citations = item.get("citations") or []
-                        citations = [str(x).strip() for x in (raw_citations if isinstance(raw_citations, list) else [raw_citations]) if x]
                         ctx.compliance_flags.append(
                             ComplianceFlag(
                                 location=str(item["location"]),
                                 excerpt=excerpt,
                                 issue=str(item["issue"]),
-                                requirement_reference=str(item["requirement_reference"]) if item.get("requirement_reference") else None,
                                 recommendation=str(item["recommendation"]),
-                                citations=citations,
                             )
                         )
             except Exception as e:

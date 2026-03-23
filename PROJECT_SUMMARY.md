@@ -55,7 +55,7 @@ Sample documents have been ingested (FSP74, FSP048, FSP09, Cranswick Manufacturi
 | **specifying_flags** | Vague or unmeasurable language (e.g. “as per required frequency”, “adequate controls”). |
 | **sequencing_flags** | Logical flow or step-order issues. |
 | **formatting_flags** | Template/structure and presentation issues. |
-| **compliance_flags** | Regulatory/compliance gaps (e.g. BRCGS, customer specs). |
+| **compliance_flags** | Regulatory/compliance gaps (e.g. BRCGS, customer specs). Each item may include **clause_mapping**: grounded link to `policy_clause_records` (lexical candidates → constrained LLM pick → verified quote) or **unmapped** for HITL. Env: `CLAUSE_MAPPING_ENABLED` (default true), `CLAUSE_MAPPING_CANDIDATE_LIMIT` (default 22). |
 | **terminology_flags** | Terms used but undefined or inconsistent (with evidence: location quote). |
 | **conflicts** | Cross-document contradictions (e.g. different check frequencies). |
 | **risk_gaps** | Missing controls, accountability, or corrective actions. |
@@ -66,6 +66,10 @@ Sample documents have been ingested (FSP74, FSP048, FSP09, Cranswick Manufacturi
 **8 agents (Cranswick-focused prompts):** Cleansing, Terminology, Conflict, Risk, Specifying, Sequencing, Formatting, Validation. Router runs the right set by request type and doc layer (e.g. sequencing skipped for policy/principle).
 
 **Guardrails:** Terminology agent only flags terms that **appear in the document**; each flag includes a **location** (exact quote). Invented terms are filtered out.
+
+**Agent context limits (procedure text):** Agents no longer hard-cap SOP text at ~12k characters. By default they receive up to **120,000 characters** of cleansed/draft content per call, and larger parent-policy excerpts (**16k chars per policy document**, **48k** for combined policy appendix), so findings can use material from later in the document. Tunable via env: `AGENT_DOCUMENT_MAX_CHARS`, `AGENT_POLICY_APPENDIX_MAX_CHARS`, `AGENT_POLICY_CONTEXT_PER_DOC_MAX_CHARS` (see `src/pipeline/context_limits.py`). Set `AGENT_DOCUMENT_MAX_CHARS=0` for effectively no limit (capped at 2M chars as a safety ceiling).
+
+**Finding verification (post-pipeline):** After deduplication, an extra pass (`finding_verification`) sends the **full procedure text** (same slice as agents) plus batched findings to the LLM. It **removes** items that are false positives because the document **already** states the missing limit/reference in the same flow (e.g. sub-steps 3a/3b immediately after step 3). Each removal requires a **verbatim quote** that is verified as a substring of the document. Env: `FINDING_VERIFICATION_ENABLED` (default true), `FINDING_VERIFICATION_BATCH_SIZE` (default 18). `overall_risk` is recomputed after risk gaps are removed.
 
 ---
 

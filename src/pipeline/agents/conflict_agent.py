@@ -1,6 +1,7 @@
 """Agent 3: Conflict detection — identifies contradictions between documents."""
 from src.pipeline.agent_rules import DOCUMENT_REFERENCE_RULE
 from src.pipeline.base_agent import BaseAgent
+from src.pipeline.context_limits import slice_document_for_agent, slice_policy_appendix_for_agent
 from src.pipeline.llm import completion, parse_json_array
 from src.pipeline.models import PipelineContext, Conflict
 
@@ -26,11 +27,8 @@ RULES
 - If variance_type = sanctioned_variance, classify as SANCTIONED_VARIANCE, not a conflict.
 - blocks_draft: true only for critical UNSANCTIONED_CONFLICT.
 
-CITATIONS — ALWAYS INCLUDE WHEN POSSIBLE
-When a conflict relates to BRCGS, Cranswick standards, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y.Z", "Cranswick Std §X.Y.Z", "parent policy [title]". Use only exact structured citations shown in the provided parent policy context. Never cite broad section headers such as "BRCGS Clause 5.8" or "Cranswick Std §2.1". If no exact clause is shown, leave structured policy citations empty.
-
 OUTPUT FORMAT
-Return ONLY a JSON array. Each object: {"conflict_type": "UNSANCTIONED_CONFLICT|SANCTIONED_VARIANCE|PENDING_REVIEW|PARENT_BREACH", "severity": "info|low|medium|high|critical", "layer": "<doc layer>", "sites": [], "document_refs": [], "description": "<explicit contradiction>", "recommendation": "<required alignment>", "blocks_draft": false, "citations": ["<BRCGS/Cranswick/policy ref>"]}
+Return ONLY a JSON array. Each object: {"conflict_type": "UNSANCTIONED_CONFLICT|SANCTIONED_VARIANCE|PENDING_REVIEW|PARENT_BREACH", "severity": "info|low|medium|high|critical", "layer": "<doc layer>", "sites": [], "document_refs": [], "description": "<explicit contradiction>", "recommendation": "<required alignment>", "blocks_draft": false}
 
 If none found, return [].""" + DOCUMENT_REFERENCE_RULE
 
@@ -42,8 +40,10 @@ class ConflictAgent(BaseAgent):
         if not ctx.cleansed_content:
             return ctx
 
-        parent_text = self._policy_context_block(ctx, max_chars_per_doc=2000) or "(No parent policy provided)"
-        prompt = f"DOCUMENTS:\n{ctx.cleansed_content[:12000]}\n\nPARENT POLICY:\n{parent_text[:4000]}"
+        parent_text = self._policy_context_block(ctx) or "(No parent policy provided)"
+        doc_body = slice_document_for_agent(ctx.cleansed_content)
+        policy_app = slice_policy_appendix_for_agent(parent_text)
+        prompt = f"DOCUMENTS:\n{doc_body}\n\nPARENT POLICY:\n{policy_app}"
         system = CONFLICT_SYSTEM_PROMPT
         if getattr(ctx, "glossary_block", None) and (ctx.glossary_block or "").strip():
             system += "\n\n" + (ctx.glossary_block or "").strip()
@@ -95,8 +95,6 @@ class ConflictAgent(BaseAgent):
                 # Filter known loading-specific conflicts when document is not about loading/despatch
                 if is_loading_specific_conflict(desc) and not doc_is_loading:
                     continue
-                raw_citations = item.get("citations") or []
-                citations = [str(x).strip() for x in (raw_citations if isinstance(raw_citations, list) else [raw_citations]) if x]
                 conflicts.append(
                     Conflict(
                         conflict_type=item.get("conflict_type", "PENDING_REVIEW"),
@@ -107,7 +105,6 @@ class ConflictAgent(BaseAgent):
                         description=desc,
                         recommendation=item.get("recommendation", ""),
                         blocks_draft=bool(item.get("blocks_draft")),
-                        citations=citations,
                     )
                 )
             ctx.conflicts = conflicts

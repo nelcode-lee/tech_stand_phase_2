@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Upload, X } from 'lucide-react';
-import { ingestFile, listDocuments } from '../api';
+import { addInteractionLog, ingestFile, listDocuments } from '../api';
+import PolicyRefSelect from '../components/PolicyRefSelect';
 import { useAnalysis } from '../context/AnalysisContext';
 import { resolveSitesForApi, SITES_OPTIONS } from '../constants/sites';
+import { filterPolicyDocumentsForRef } from '../utils/policyDocuments';
 import './ConfigurePage.css';
 import './IngestPage.css';
 
@@ -57,9 +59,9 @@ export default function ConfigurePage({ mode = 'review' }) {
   const [loadingDocs, setLoadingDocs] = useState(false);
   const fileInputRef = useRef(null);
 
-  // Fetch document list for review mode (dropdown)
+  // Fetch document list for review (document picker) and policy-ref dropdown (review + create)
   useEffect(() => {
-    if (mode !== 'review') return;
+    if (mode !== 'review' && mode !== 'create') return;
     setLoadingDocs(true);
     listDocuments()
       .then(data => setAllDocs(data || []))
@@ -78,6 +80,8 @@ export default function ConfigurePage({ mode = 'review' }) {
     });
   }, [mode, allDocs, selectedSite]);
 
+  const policyDocsForRef = useMemo(() => filterPolicyDocumentsForRef(allDocs), [allDocs]);
+
   const isCreate = mode === 'create';
   const isSupportingDocs = mode === 'review';
 
@@ -94,6 +98,7 @@ export default function ConfigurePage({ mode = 'review' }) {
           // Do not let saved config overwrite a document just selected from Library/Dashboard.
           documentId: c.documentId || parsed.documentId || '',
           title: c.title || parsed.title || '',
+          policyRef: mode === 'review' ? '' : (c.policyRef || parsed.policyRef || ''),
           additionalDocIds:
             Array.isArray(c.additionalDocIds) && c.additionalDocIds.length > 0
               ? c.additionalDocIds
@@ -167,6 +172,18 @@ export default function ConfigurePage({ mode = 'review' }) {
     setPendingFiles(prev => prev.filter((_, i) => i !== index));
   }
 
+  function logInteraction(actionType, metadata = {}) {
+    addInteractionLog({
+      user_name: config?.requester || '',
+      action_type: actionType,
+      route: `${base}/configure`,
+      workflow_mode: mode,
+      document_id: config?.documentId || '',
+      doc_layer: config?.docLayer || '',
+      metadata,
+    }).catch(() => {});
+  }
+
   async function handleIngest(e) {
     e.preventDefault();
     setStatus(null);
@@ -176,7 +193,7 @@ export default function ConfigurePage({ mode = 'review' }) {
         documentId: config.documentId,
         docLayer: config.docLayer,
         sites: config.sites,
-        policyRef: config.policyRef,
+        policyRef: mode === 'review' ? '' : config.policyRef,
         requester: config.requester,
         mode: config.mode,
         agents: config.agents,
@@ -214,7 +231,7 @@ export default function ConfigurePage({ mode = 'review' }) {
             document_id: docIdForIngest,
             doc_layer: config?.docLayer || 'sop',
             sites: sitesForApi,
-            policy_ref: config?.policyRef || undefined,
+            policy_ref: mode === 'create' ? (config?.policyRef || undefined) : undefined,
             title: f.name.replace(/\.[^.]+$/, '') || docIdForIngest,
           });
           ingestedIds.push(res.document_id || docIdForIngest);
@@ -239,8 +256,18 @@ export default function ConfigurePage({ mode = 'review' }) {
         }
 
         setStatus({ ok: true, message: `Ingested ${ingestedIds.length} document(s).` });
+        logInteraction('ingest_success', {
+          file_count: pendingFiles.length,
+          files: pendingFiles.map(f => f.name),
+          ingested_ids: ingestedIds,
+        });
       } catch (err) {
         setStatus({ ok: false, message: err.message || 'Ingest failed' });
+        logInteraction('ingest_failed', {
+          file_count: pendingFiles.length,
+          files: pendingFiles.map(f => f.name),
+          error: err.message || 'Ingest failed',
+        });
         setLoading(false);
         return;
       } finally {
@@ -405,15 +432,27 @@ export default function ConfigurePage({ mode = 'review' }) {
                 <span className="form-hint">Site this document belongs to. Used for ingest and dashboard filtering.</span>
               </div>
             )}
-            <div className="form-row">
-              <label>Policy Reference</label>
-              <input
-                type="text"
-                placeholder="e.g. P-001"
-                value={config.policyRef || ''}
-                onChange={e => setField('policyRef', e.target.value)}
-              />
-            </div>
+            {mode === 'review' ? (
+              <div className="form-row">
+                <label>Policies applied</label>
+                <p className="form-hint policy-auto-hint">
+                  Reviews always use <strong>all applicable ingested standards</strong>:{' '}
+                  <strong>Cranswick Manufacturing Standard</strong> and <strong>BRCGS Food Safety</strong>{' '}
+                  (relevant clauses from your library). No policy selection needed.
+                </p>
+              </div>
+            ) : (
+              <div className="form-row">
+                <label htmlFor="config-policy-ref">Policy Reference</label>
+                <PolicyRefSelect
+                  id="config-policy-ref"
+                  value={config.policyRef || ''}
+                  onChange={(v) => setField('policyRef', v)}
+                  policyDocs={policyDocsForRef}
+                  hint="Same picker for BRCGS and Cranswick MS: choose a policy from the library or type its document ID."
+                />
+              </div>
+            )}
             <div className="form-row">
               <label>Requester</label>
               <input

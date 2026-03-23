@@ -38,7 +38,6 @@ class TerminologyFlag(BaseModel):
     recommendation: str
     location: str | None = None  # Exact quote from document where term appears (evidence)
     glossary_candidate: bool = False  # True when term is vague/undefined — route to HITL, add to glossary
-    citations: list[str] = Field(default_factory=list)  # BRCGS / Cranswick / regulatory refs when applicable
 
 
 class Conflict(BaseModel):
@@ -50,7 +49,6 @@ class Conflict(BaseModel):
     description: str
     recommendation: str
     blocks_draft: bool = False
-    citations: list[str] = Field(default_factory=list)  # BRCGS / Cranswick / regulatory refs when applicable
 
 
 class RiskScore(BaseModel):
@@ -74,9 +72,8 @@ class RiskGap(BaseModel):
     severity: int = 0          # FMEA severity 1–5 (0 = not scored)
     scope: int = 0             # FMEA scope 1–5
     detectability: int = 0     # FMEA detectability 1–5
-    fmea_score: int = 0        # severity × scope × (1 / detectability) normalised
+    fmea_score: int = 0        # RPN = severity × scope × detectability (1–125)
     fmea_band: str = ""        # low | medium | high | critical
-    citations: list[str] = Field(default_factory=list)  # BRCGS / Cranswick / regulatory refs when applicable
 
 
 class SpecifyingFlag(BaseModel):
@@ -85,7 +82,6 @@ class SpecifyingFlag(BaseModel):
     current_text: str
     issue: str
     recommendation: str
-    citations: list[str] = Field(default_factory=list)  # BRCGS / Cranswick / regulatory refs when applicable
 
 
 class CleanserFlag(BaseModel):
@@ -94,7 +90,6 @@ class CleanserFlag(BaseModel):
     current_text: str
     issue: str
     recommendation: str
-    citations: list[str] = Field(default_factory=list)  # BRCGS / Cranswick / regulatory refs when applicable
 
 
 class StructureFlag(BaseModel):
@@ -136,7 +131,6 @@ class SequencingFlag(BaseModel):
     issue: str
     impact: str
     recommendation: str
-    citations: list[str] = Field(default_factory=list)  # BRCGS / Cranswick / regulatory refs when applicable
 
 
 class FormattingFlag(BaseModel):
@@ -145,7 +139,22 @@ class FormattingFlag(BaseModel):
     excerpt: str | None = None  # Exact text from document to highlight (copy-paste from source)
     issue: str
     recommendation: str
-    citations: list[str] = Field(default_factory=list)  # BRCGS / Cranswick / regulatory refs when applicable
+
+
+class PolicyClauseMapping(BaseModel):
+    """
+    Grounded link from a compliance finding to policy_clause_records.
+    status=linked only after ID + verbatim quote verification.
+    """
+    status: str = "unmapped"  # linked | unmapped
+    policy_document_id: str | None = None
+    clause_id: str | None = None
+    canonical_citation: str | None = None
+    standard_name: str | None = None
+    supporting_quote: str | None = None  # Verified substring of requirement_text
+    requirement_preview: str | None = None  # Short UI preview of the clause body
+    unmapped_reason: str | None = None  # no_policy_scope | no_candidates | model_none | verify_failed | error | not_run | disabled
+    site_scope: list[str] = Field(default_factory=list)  # Sites where this standard applies (from site_standard_links)
 
 
 class ComplianceFlag(BaseModel):
@@ -153,9 +162,8 @@ class ComplianceFlag(BaseModel):
     location: str
     excerpt: str | None = None  # Exact text from document to highlight (copy-paste from source)
     issue: str
-    requirement_reference: str | None = None
     recommendation: str
-    citations: list[str] = Field(default_factory=list)  # BRCGS / Cranswick / parent policy refs when applicable
+    clause_mapping: PolicyClauseMapping | None = None
 
 
 class ValidationResult(BaseModel):
@@ -199,7 +207,7 @@ class PipelineContext(BaseModel):
     sibling_docs: list[Document] = Field(default_factory=list)
     agent_instructions: str | None = None  # User-provided knowledge for agents; never supersedes policy
     prior_feedback: list[dict] = Field(default_factory=list)  # Prior user notes for this document (from finding_notes), checked before reasoning
-    glossary_block: str | None = None  # Standard glossary (from domain_context.json) — use for all docs so agents can cite definitions
+    glossary_block: str | None = None  # Standard glossary (from domain_context.json)
 
     # Agent outputs
     cleansed_content: str | None = None
@@ -227,4 +235,3 @@ class PipelineContext(BaseModel):
     overall_risk: RiskLevel | None = None
     conflict_count: int = 0
     blocker_count: int = 0
-

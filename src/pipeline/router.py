@@ -1,5 +1,6 @@
 """Pipeline router: selects agents and runs the pipeline. Runs independent agents in parallel to reduce latency."""
 import asyncio
+from collections.abc import Awaitable, Callable
 
 from src.pipeline.models import (
     PipelineContext,
@@ -38,16 +39,66 @@ PARALLEL_GROUP = {"terminology", "conflict", "specifying", "sequencing", "format
 RISK_AFTER = "conflict"
 VALIDATION_LAST = "validation"
 
+# Stable order for progress UI when emitting parallel specialist agents (matches typical pipeline order)
+_PARALLEL_PROGRESS_ORDER = {
+    "conflict": 0,
+    "specifying": 1,
+    "sequencing": 2,
+    "terminology": 3,
+    "formatting": 4,
+}
+
+ProgressCallback = Callable[[str], Awaitable[None]]
+
+# List fields each agent in PARALLEL_GROUP may append to (same baseline ctx; merge after gather).
+_PARALLEL_MERGE_FIELDS = (
+    "terminology_flags",
+    "conflicts",
+    "specifying_flags",
+    "sequencing_flags",
+    "formatting_flags",
+)
+
+
+def _merge_parallel_agent_results(results: list[PipelineContext]) -> PipelineContext:
+    """
+    Parallel agents each run from the same pre-wave ctx and return separate copies with only
+    their own outputs filled. Without merging, keeping only results[0] drops every other
+    specialist's findings (e.g. terminology, specifying) and breaks risk/validation.
+    """
+    if not results:
+        raise ValueError("merge_parallel_agent_results: empty results")
+    if len(results) == 1:
+        return results[0]
+    merged = results[0].model_copy(deep=True)
+    for res in results[1:]:
+        for fname in _PARALLEL_MERGE_FIELDS:
+            left = list(getattr(merged, fname) or [])
+            left.extend(getattr(res, fname) or [])
+            setattr(merged, fname, left)
+        merged.errors = list(merged.errors) + list(res.errors or [])
+    return merged
+
 
 class PipelineRouter:
     def __init__(self, agents_override: list[str] | None = None):
         self.agents_override = agents_override
 
-    async def run(self, ctx: PipelineContext) -> PipelineContext:
+    async def run(
+        self,
+        ctx: PipelineContext,
+        progress_callback: ProgressCallback | None = None,
+    ) -> PipelineContext:
         agents = self._select_agents(ctx)
+
+        async def emit(agent_name: str) -> None:
+            if progress_callback:
+                await progress_callback(agent_name)
+
         i = 0
         while i < len(agents):
             agent = agents[i]
+            await emit(agent.name)
             # Run a single agent
             ctx = await agent.run(ctx)
             ctx.agents_run.append(agent.name)
@@ -61,16 +112,23 @@ class PipelineRouter:
                 wave.append(agents[i])
                 i += 1
             if wave:
+                wave_sorted = sorted(
+                    wave,
+                    key=lambda a: _PARALLEL_PROGRESS_ORDER.get(a.name, 99),
+                )
+                for a in wave_sorted:
+                    await emit(a.name)
                 results = await asyncio.gather(*[a.run(ctx) for a in wave])
                 for a in wave:
                     ctx.agents_run.append(a.name)
-                ctx = results[0]
+                ctx = _merge_parallel_agent_results(results)
                 blockers = [e for e in ctx.errors if e.severity == "critical"]
                 if blockers:
                     break
         # Continue with risk, then validation (sequential)
         while i < len(agents):
             agent = agents[i]
+            await emit(agent.name)
             ctx = await agent.run(ctx)
             ctx.agents_run.append(agent.name)
             blockers = [e for e in ctx.errors if e.severity == "critical"]

@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useState } from 'react';
+import { computeRiskMetrics } from '../utils/riskMetrics';
 
 const AnalysisContext = createContext(null);
 
@@ -108,6 +109,7 @@ export function AnalysisProvider({ children }) {
       totalFindings,
       agentsRun:     apiResult.agents_run || [],
       agentFindings,
+      riskMetrics:   computeRiskMetrics(apiResult),
       completedAt:   new Date().toISOString(),
       workflowType:  wfMode || 'review',
       draftReady:    apiResult.draft_ready || false,

@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import {
@@ -11,9 +11,11 @@ import {
   Database,
   FlaskConical,
   Info,
+  ScrollText,
 } from 'lucide-react';
 import { AnalysisProvider, useAnalysis } from '../context/AnalysisContext';
 import { SITES_OPTIONS } from '../constants/sites';
+import { addInteractionLog } from '../api';
 import ChatBotWidget from './ChatBotWidget';
 import './Layout.css';
 
@@ -74,6 +76,10 @@ function Sidebar() {
         <NavLink to="/library" className={({ isActive }) => `sidebar-link ${isActive || path.startsWith('/library') ? 'active' : ''}`}>
           <LayoutGrid size={16} />
           Document Library
+        </NavLink>
+        <NavLink to="/logs" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
+          <ScrollText size={16} />
+          Governance Logs
         </NavLink>
 
         <span className="sidebar-section-label">Workflows</span>
@@ -176,7 +182,28 @@ function SessionSteps({ mode, path }) {
 }
 
 function LayoutInner() {
-  const { config } = useAnalysis();
+  const { config, workflowMode } = useAnalysis();
+  const location = useLocation();
+  const lastRouteRef = useRef('');
+
+  useEffect(() => {
+    const routeKey = `${location.pathname}${location.search}`;
+    if (!routeKey || routeKey === lastRouteRef.current) return;
+    lastRouteRef.current = routeKey;
+    addInteractionLog({
+      user_name: config?.requester || '',
+      action_type: 'route_view',
+      route: routeKey,
+      workflow_mode: workflowMode || '',
+      document_id: config?.documentId || '',
+      tracking_id: '',
+      doc_layer: config?.docLayer || '',
+      metadata: {
+        title: config?.title || '',
+      },
+    }).catch(() => {});
+  }, [location.pathname, location.search, workflowMode, config?.requester, config?.documentId, config?.docLayer, config?.title]);
+
   return (
     <div className="app-shell">
       <Sidebar />

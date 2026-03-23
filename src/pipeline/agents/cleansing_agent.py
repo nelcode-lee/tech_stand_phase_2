@@ -5,6 +5,7 @@ from pathlib import Path
 
 from src.pipeline.agent_rules import DOCUMENT_REFERENCE_RULE, JOB_TITLE_RULE, TOLERANCE_VS_REFERENCE_RULE, PURPOSE_OBJECTIVE_RULE
 from src.pipeline.base_agent import BaseAgent
+from src.pipeline.context_limits import slice_document_for_agent
 from src.pipeline.domain import get_glossary_block
 from src.pipeline.llm import completion, parse_json_array
 from src.pipeline.models import CleanserFlag, ContentIntegrityFlag, PipelineContext, StructureFlag
@@ -91,12 +92,9 @@ ABSOLUTE RULES
 - If the real problem is a missing measurable value or operational criterion, do NOT flag it here — that belongs to the Specifier.
 - For complex terms: recommend adding to Definitions/Glossary or replacing with plain-language equivalent.
 
-CITATIONS — ALWAYS INCLUDE WHEN POSSIBLE
-When an issue relates to BRCGS, Cranswick standards, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y.Z" or "Cranswick Std §X.Y.Z". Use only exact structured citations shown in the provided parent policy context. Never cite broad section headers such as "BRCGS Clause 5.8" or "Cranswick Std §2.1". If no exact clause is shown, leave structured policy citations empty.
-
 OUTPUT
 Return a JSON array only. Each item:
-{"location": "<section or step>", "current_text": "<exact vague or complex wording>", "issue": "<why it is vague or unclear>", "recommendation": "<what specific information is needed or how to clarify>", "citations": ["<BRCGS/Cranswick ref>"]}
+{"location": "<section or step>", "current_text": "<exact vague or complex wording>", "issue": "<why it is vague or unclear>", "recommendation": "<what specific information is needed or how to clarify>"}
 If no issues found, return [].""" + DOCUMENT_REFERENCE_RULE + JOB_TITLE_RULE + TOLERANCE_VS_REFERENCE_RULE + PURPOSE_OBJECTIVE_RULE
 
 # ---------------------------------------------------------------------------
@@ -820,7 +818,7 @@ class CleansingAgent(BaseAgent):
             prompt = (
                 "Analyse the following document for vague, subjective, or unmeasurable language. "
                 "Each issue must be a separate item.\n\n"
-                f"{ctx.cleansed_content[:12000]}"
+                f"{slice_document_for_agent(ctx.cleansed_content)}"
             )
             raw = await completion(prompt, system=system_prompt)
             items = parse_json_array(raw)
@@ -832,15 +830,12 @@ class CleansingAgent(BaseAgent):
                     and item.get("issue")
                     and item.get("recommendation")
                 ):
-                    raw_citations = item.get("citations") or []
-                    citations = [str(x).strip() for x in (raw_citations if isinstance(raw_citations, list) else [raw_citations]) if x]
                     ctx.cleanser_flags.append(
                         CleanserFlag(
                             location=str(item["location"]),
                             current_text=str(item["current_text"]),
                             issue=str(item["issue"]),
                             recommendation=str(item["recommendation"]),
-                            citations=citations,
                         )
                     )
         except Exception as e:

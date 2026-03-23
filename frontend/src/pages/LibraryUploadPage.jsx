@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Upload, ArrowLeft } from 'lucide-react';
-import { ingestFile } from '../api';
+import { ingestFile, listDocuments } from '../api';
+import PolicyRefSelect from '../components/PolicyRefSelect';
 import SitesSelect from '../components/SitesSelect';
+import { filterPolicyDocumentsForRef } from '../utils/policyDocuments';
 import { resolveSitesForApi } from '../constants/sites';
 import './LibraryUploadPage.css';
 
@@ -42,6 +44,7 @@ export default function LibraryUploadPage() {
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
+  const [libraryDocs, setLibraryDocs] = useState([]);
   const [form, setForm] = useState({
     title: '',
     category: 'upload',
@@ -52,6 +55,14 @@ export default function LibraryUploadPage() {
   function setField(field, value) {
     setForm(f => ({ ...f, [field]: value }));
   }
+
+  useEffect(() => {
+    listDocuments()
+      .then((data) => setLibraryDocs(data || []))
+      .catch(() => setLibraryDocs([]));
+  }, []);
+
+  const policyDocsForRef = useMemo(() => filterPolicyDocumentsForRef(libraryDocs), [libraryDocs]);
 
   function handleDrop(e) {
     e.preventDefault();
@@ -161,12 +172,13 @@ export default function LibraryUploadPage() {
             </div>
             <div className="lib-upload-row">
               <label htmlFor="policy-ref">Policy Reference</label>
-              <input
+              <PolicyRefSelect
                 id="policy-ref"
-                type="text"
-                placeholder="e.g. P-001, Food Safety Policy"
                 value={form.policyRef}
-                onChange={e => setField('policyRef', e.target.value)}
+                onChange={(v) => setField('policyRef', v)}
+                policyDocs={policyDocsForRef}
+                disabled={loading}
+                hint="Pick BRCGS, Cranswick MS, or another policy from the library — or type a document ID."
               />
             </div>
           </div>

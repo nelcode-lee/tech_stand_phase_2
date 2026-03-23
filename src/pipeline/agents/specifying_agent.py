@@ -1,6 +1,7 @@
 """Agent 5: Specifying — flags vague, unmeasurable, or ambiguous language."""
 from src.pipeline.agent_rules import DOCUMENT_REFERENCE_RULE, JOB_TITLE_RULE, TOLERANCE_VS_REFERENCE_RULE, PURPOSE_OBJECTIVE_RULE
 from src.pipeline.base_agent import BaseAgent
+from src.pipeline.context_limits import slice_document_for_agent, slice_policy_appendix_for_agent
 from src.pipeline.llm import completion, parse_json_array
 from src.pipeline.models import PipelineContext, SpecifyingFlag
 
@@ -39,19 +40,15 @@ ABSOLUTE RULES
 - Do NOT flag wording just because it is awkward, dense, or hard to read if the underlying requirement is still specific enough — that belongs to the Cleanser.
 - Do NOT insist that a parameter be duplicated in the SOP when a linked controlled document is clearly named and operationally usable.
 
-CITATIONS — ALWAYS INCLUDE WHEN POSSIBLE
-When vague language conflicts with a measurable requirement in BRCGS, Cranswick standards, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y.Z" or "Cranswick Std §X.Y.Z". Use only exact structured citations shown in the provided parent policy context. Never cite broad section headers such as "BRCGS Clause 5.8" or "Cranswick Std §2.1". If no exact clause is shown, leave structured policy citations empty.
-
 OUTPUT
 Return a JSON array only. Each item has:
 - location: reference to where the issue appears
 - current_text: the vague or unmeasurable wording
 - issue: why it is vague or non-compliant
 - recommendation: specific value needed or instruction to provide it
-- citations: array of BRCGS/Cranswick/policy refs — include when applicable
 
-Example: [{"location": "Step 3", "current_text": "clean thoroughly", "issue": "subjective quality descriptor", "recommendation": "Provide measurable criteria e.g. visual inspection against defined standards", "citations": ["BRCGS Clause 4.2.1"]}]
-Example: [{"location": "Record keeping", "current_text": "check against the form", "issue": "linked document is not identified, so the measurable acceptance criteria are not operationally usable", "recommendation": "Name the specific controlled form, setup sheet, or work instruction that contains the required limits", "citations": ["Cranswick Std §X.Y"]}]
+Example: [{"location": "Step 3", "current_text": "clean thoroughly", "issue": "subjective quality descriptor", "recommendation": "Provide measurable criteria e.g. visual inspection against defined standards"}]
+Example: [{"location": "Record keeping", "current_text": "check against the form", "issue": "linked document is not identified, so the measurable acceptance criteria are not operationally usable", "recommendation": "Name the specific controlled form, setup sheet, or work instruction that contains the required limits"}]
 If no issues, return [].""" + DOCUMENT_REFERENCE_RULE + JOB_TITLE_RULE + TOLERANCE_VS_REFERENCE_RULE + PURPOSE_OBJECTIVE_RULE
 
 
@@ -67,10 +64,13 @@ class SpecifyingAgent(BaseAgent):
         if not content:
             return ctx
 
-        prompt_parts = ["Analyse the following procedure for missing specific or measurable criteria:\n\n", content[:12000]]
-        policy_block = self._policy_context_block(ctx, max_chars_per_doc=3000)
+        prompt_parts = [
+            "Analyse the following procedure for missing specific or measurable criteria:\n\n",
+            slice_document_for_agent(content),
+        ]
+        policy_block = self._policy_context_block(ctx)
         if policy_block:
-            prompt_parts.append(f"\n\nPARENT POLICY (use for citations when applicable):\n{policy_block[:6000]}")
+            prompt_parts.append(f"\n\nPARENT POLICY (context):\n{slice_policy_appendix_for_agent(policy_block)}")
         prompt = "".join(prompt_parts)
         system = SPECIFYING_SYSTEM_PROMPT
         if getattr(ctx, "glossary_block", None) and (ctx.glossary_block or "").strip():
@@ -86,15 +86,12 @@ class SpecifyingAgent(BaseAgent):
             items = parse_json_array(raw)
             for item in items:
                 if isinstance(item, dict) and item.get("location") and item.get("current_text") and item.get("issue") and item.get("recommendation"):
-                    raw_citations = item.get("citations") or []
-                    citations = [str(x).strip() for x in (raw_citations if isinstance(raw_citations, list) else [raw_citations]) if x]
                     ctx.specifying_flags.append(
                         SpecifyingFlag(
                             location=str(item["location"]),
                             current_text=str(item["current_text"]),
                             issue=str(item["issue"]),
                             recommendation=str(item["recommendation"]),
-                            citations=citations,
                         )
                     )
         except Exception as e:

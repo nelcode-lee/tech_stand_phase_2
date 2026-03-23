@@ -238,6 +238,13 @@
   margin-top: 0.25rem;
 }
 
+p.form-hint.policy-auto-hint {
+  margin: 0;
+  margin-top: 0.25rem;
+  max-width: 40rem;
+  line-height: 1.5;
+}
+
 .form-label-optional {
   font-weight: 400;
   color: var(--text-muted, #6b7280);

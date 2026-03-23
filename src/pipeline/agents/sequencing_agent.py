@@ -1,6 +1,7 @@
 """Agent 6: Sequencing — flags logical flow and step-order issues in procedures."""
 from src.pipeline.agent_rules import DOCUMENT_REFERENCE_RULE
 from src.pipeline.base_agent import BaseAgent
+from src.pipeline.context_limits import slice_document_for_agent, slice_policy_appendix_for_agent
 from src.pipeline.llm import completion, parse_json_array
 from src.pipeline.models import PipelineContext, DocLayer, SequencingFlag
 
@@ -38,9 +39,6 @@ ABSOLUTE RULES
 - No guessing the correct sequence.
 - Only flag issues that are demonstrably wrong based on the text.
 
-CITATIONS — ALWAYS INCLUDE WHEN POSSIBLE
-When a sequencing issue relates to BRCGS, Cranswick standards, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y.Z" or "Cranswick Std §X.Y.Z". Use only exact structured citations shown in the provided parent policy context. Never cite broad section headers such as "BRCGS Clause 5.8" or "Cranswick Std §2.1". If no exact clause is shown, leave structured policy citations empty.
-
 OUTPUT
 Return only a JSON array. Each item has:
 - location: step or section reference
@@ -48,9 +46,8 @@ Return only a JSON array. Each item has:
 - issue: specific sequencing or logic problem
 - impact: risk or operational consequence (factual only)
 - recommendation: required change while staying within document content
-- citations: array of BRCGS/Cranswick/policy refs — include when applicable
 
-Example: [{"location": "Step 5", "excerpt": "5. Pack product into boxes. 6. Record temperature.", "issue": "Temperature check occurs after product has been packed", "impact": "CCP verification too late", "recommendation": "Move temperature verification before packing step", "citations": []}]
+Example: [{"location": "Step 5", "excerpt": "5. Pack product into boxes. 6. Record temperature.", "issue": "Temperature check occurs after product has been packed", "impact": "CCP verification too late", "recommendation": "Move temperature verification before packing step"}]
 If no issues, return [].""" + DOCUMENT_REFERENCE_RULE
 
 
@@ -67,10 +64,13 @@ class SequencingAgent(BaseAgent):
             return ctx
 
         try:
-            prompt_parts = ["Analyse the following procedure for sequencing and logical flow issues:\n\n", content[:12000]]
-            policy_block = self._policy_context_block(ctx, max_chars_per_doc=3000)
+            prompt_parts = [
+                "Analyse the following procedure for sequencing and logical flow issues:\n\n",
+                slice_document_for_agent(content),
+            ]
+            policy_block = self._policy_context_block(ctx)
             if policy_block:
-                prompt_parts.append(f"\n\nPARENT POLICY (use for citations when applicable):\n{policy_block[:6000]}")
+                prompt_parts.append(f"\n\nPARENT POLICY (context):\n{slice_policy_appendix_for_agent(policy_block)}")
             prompt = "".join(prompt_parts)
             system = SEQUENCING_SYSTEM_PROMPT
             if getattr(ctx, "glossary_block", None) and (ctx.glossary_block or "").strip():
@@ -79,8 +79,6 @@ class SequencingAgent(BaseAgent):
             items = parse_json_array(raw)
             for item in items:
                 if isinstance(item, dict) and item.get("location") and item.get("issue") and item.get("impact") and item.get("recommendation"):
-                    raw_citations = item.get("citations") or []
-                    citations = [str(x).strip() for x in (raw_citations if isinstance(raw_citations, list) else [raw_citations]) if x]
                     excerpt = (item.get("excerpt") or "").strip() or None
                     ctx.sequencing_flags.append(
                         SequencingFlag(
@@ -89,7 +87,6 @@ class SequencingAgent(BaseAgent):
                             issue=str(item["issue"]),
                             impact=str(item["impact"]),
                             recommendation=str(item["recommendation"]),
-                            citations=citations,
                         )
                     )
         except Exception as e:

@@ -1,8 +1,12 @@
 """Document registry: SQL table for listing documents without vector similarity search."""
 import json
+import logging
 import os
 import re
 from contextlib import contextmanager
+from typing import Any
+
+log = logging.getLogger(__name__)
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -14,6 +18,55 @@ TABLE_NAME = "documents"
 CONTENT_TABLE_NAME = "document_content"
 SOURCE_FILE_TABLE_NAME = "document_source_files"
 POLICY_CLAUSE_TABLE_NAME = "policy_clause_records"
+SITE_STANDARD_TABLE_NAME = "site_standard_links"
+
+# When token extraction yields nothing, avoid returning arbitrary clauses (early clause_ids).
+_POLICY_CLAUSE_QUERY_FALLBACK = (
+    "temperature control chilled frozen dispatch loading vehicle transport storage "
+    "monitoring verification traceability foreign body hygiene food safety hazard"
+)
+
+# Words so common in BRCGS / MS clause text they add noise without the phrase bonus below.
+_POLICY_QUERY_STOPWORDS = frozenset({
+    "shall", "must", "with", "that", "this", "from", "there", "their", "where", "when",
+    "procedure", "document", "process", "record", "check", "checks", "using", "used",
+    "ensure", "appropriate", "relevant", "including", "within", "against", "through",
+})
+
+
+def _policy_clause_query_terms(query_text: str) -> tuple[set[str], list[str]]:
+    """
+    Return (term_set, ordered_words) for clause scoring.
+    ordered_words keeps sequence for adjacent-phrase matching.
+    """
+    raw = (query_text or "").lower()
+    words = re.findall(r"[A-Za-z][A-Za-z0-9\-]{3,}", raw)
+    ordered: list[str] = []
+    seen: set[str] = set()
+    for w in words:
+        lw = w.lower()
+        if lw in _POLICY_QUERY_STOPWORDS or lw in seen:
+            continue
+        seen.add(lw)
+        ordered.append(lw)
+    term_set = set(ordered)
+    if not term_set:
+        fb = re.findall(r"[A-Za-z][A-Za-z0-9\-]{3,}", _POLICY_CLAUSE_QUERY_FALLBACK.lower())
+        ordered = [w.lower() for w in fb if w.lower() not in _POLICY_QUERY_STOPWORDS]
+        term_set = set(ordered)
+    return term_set, ordered
+
+
+def _phrase_bonus(haystack: str, ordered_words: list[str]) -> int:
+    """Extra score when two consecutive query tokens both appear as an adjacent phrase in haystack."""
+    if len(ordered_words) < 2:
+        return 0
+    bonus = 0
+    for i in range(len(ordered_words) - 1):
+        a, b = ordered_words[i], ordered_words[i + 1]
+        if f"{a} {b}" in haystack:
+            bonus += 3
+    return bonus
 
 
 def _get_conn():
@@ -243,6 +296,50 @@ def upsert_policy_clauses(document_id: str, title: str | None, content: str, *, 
     return len(rows)
 
 
+def distinct_policy_document_ids_for_standard_names(
+    standard_names: list[str],
+    *,
+    extra_document_ids: list[str] | None = None,
+) -> list[str]:
+    """
+    All document_ids that have active rows for any of the given standard_name values,
+    plus any extra_document_ids explicitly provided (bypasses name matching for documents
+    whose standard_name in policy_clause_records is a raw filename rather than a clean label).
+    """
+    if not SUPABASE_DB_URL:
+        return []
+    out: list[str] = []
+    names = [str(n).strip() for n in (standard_names or []) if str(n).strip()]
+    if names:
+        try:
+            ensure_policy_clause_table()
+        except Exception:
+            names = []
+    if names:
+        lowered = tuple(n.lower() for n in names)
+        placeholders = ",".join(["%s"] * len(lowered))
+        with _cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT DISTINCT document_id FROM public.{POLICY_CLAUSE_TABLE_NAME}
+                WHERE COALESCE(active, TRUE) = TRUE
+                  AND LOWER(TRIM(standard_name)) IN ({placeholders})
+                ORDER BY document_id
+                """,
+                lowered,
+            )
+            for r in cur.fetchall():
+                did = str(r["document_id"]).strip()
+                if did and did not in out:
+                    out.append(did)
+    # Explicitly pinned document IDs (for docs whose standard_name is a raw filename)
+    for did in extra_document_ids or []:
+        did = str(did).strip()
+        if did and did not in out:
+            out.append(did)
+    return out
+
+
 def get_policy_clauses(
     *,
     document_id: str | None = None,
@@ -276,19 +373,120 @@ def get_policy_clauses(
             tuple(params),
         )
         rows = cur.fetchall()
-    out = []
-    for row in rows:
-        keywords = row.get("keywords")
-        if isinstance(keywords, str):
-            try:
-                keywords = json.loads(keywords) if keywords else []
-            except json.JSONDecodeError:
-                keywords = []
-        out.append({**row, "keywords": keywords or []})
+    out = [_policy_clause_row_from_db(dict(row)) for row in rows]
     out.sort(key=lambda row: _clause_sort_key(row.get("clause_id") or ""))
     if limit and limit > 0:
         return out[:limit]
     return out
+
+
+def _policy_clause_row_from_db(row: dict) -> dict:
+    """Normalise keywords JSON on a clause row from the DB."""
+    keywords = row.get("keywords")
+    if isinstance(keywords, str):
+        try:
+            keywords = json.loads(keywords) if keywords else []
+        except json.JSONDecodeError:
+            keywords = []
+    return {**row, "keywords": keywords or []}
+
+
+def _grounding_terms(grounding_text: str | None) -> set[str]:
+    """4+ letter tokens for overlap scoring (lowercased)."""
+    if not grounding_text or not str(grounding_text).strip():
+        return set()
+    g = str(grounding_text).lower()
+    return {t for t in re.findall(r"[a-z]{4,}", g)}
+
+
+def _updated_at_ts(value: Any) -> float:
+    if value is None:
+        return 0.0
+    try:
+        return float(value.timestamp())
+    except (AttributeError, TypeError, OSError, ValueError):
+        return 0.0
+
+
+def _pick_clause_row_for_grounding(rows: list[dict], grounding_text: str | None) -> dict | None:
+    """
+    When several ingests share the same canonical_citation, pick the row whose body best
+    matches the finding text. If grounding is rich but no row shares any token, return None
+    so callers can fall back to keyword retrieval (avoids showing the wrong document's body).
+    """
+    if not rows:
+        return None
+    g_terms = _grounding_terms(grounding_text)
+    if not g_terms:
+        ordered = sorted(rows, key=lambda r: _updated_at_ts(r.get("updated_at")), reverse=True)
+        return _policy_clause_row_from_db(dict(ordered[0]))
+
+    scored: list[tuple[int, float, dict]] = []
+    for raw in rows:
+        row = dict(raw)
+        hay = f"{row.get('heading') or ''} {row.get('requirement_text') or ''}".lower()
+        score = sum(1 for t in g_terms if t in hay)
+        scored.append((score, _updated_at_ts(row.get("updated_at")), row))
+    scored.sort(key=lambda x: (-x[0], -x[1]))
+    best_score, _, best_row = scored[0]
+    if best_score <= 0 and len(g_terms) >= 5:
+        return None
+    return _policy_clause_row_from_db(dict(best_row))
+
+
+def lookup_policy_clause_row(
+    *,
+    canonical_citation: str | None = None,
+    standard_name: str | None = None,
+    clause_id: str | None = None,
+    grounding_text: str | None = None,
+) -> dict | None:
+    """
+    Return one policy_clause_records row by canonical_citation (preferred) or standard_name + clause_id.
+
+    Multiple rows can exist (same clause ingested from different files). When ``grounding_text``
+    is provided, the row with the best token overlap to the finding is chosen; if none overlap
+    and grounding is substantial, returns None.
+    """
+    if not SUPABASE_DB_URL:
+        return None
+    try:
+        ensure_policy_clause_table()
+    except Exception:
+        return None
+
+    with _cursor() as cur:
+        if canonical_citation and str(canonical_citation).strip():
+            cur.execute(
+                f"""
+                SELECT document_id, standard_name, version, clause_id, heading, requirement_text,
+                       keywords, canonical_citation, source_title, active, updated_at
+                FROM public.{POLICY_CLAUSE_TABLE_NAME}
+                WHERE LOWER(TRIM(canonical_citation)) = LOWER(TRIM(%s))
+                  AND COALESCE(active, TRUE) = TRUE
+                ORDER BY updated_at DESC
+                """,
+                (str(canonical_citation).strip(),),
+            )
+        elif standard_name and clause_id and str(standard_name).strip() and str(clause_id).strip():
+            cur.execute(
+                f"""
+                SELECT document_id, standard_name, version, clause_id, heading, requirement_text,
+                       keywords, canonical_citation, source_title, active, updated_at
+                FROM public.{POLICY_CLAUSE_TABLE_NAME}
+                WHERE LOWER(TRIM(standard_name)) = LOWER(TRIM(%s))
+                  AND TRIM(clause_id) = TRIM(%s)
+                  AND COALESCE(active, TRUE) = TRUE
+                ORDER BY updated_at DESC
+                """,
+                (str(standard_name).strip(), str(clause_id).strip()),
+            )
+        else:
+            return None
+        db_rows = cur.fetchall()
+    if not db_rows:
+        return None
+    return _pick_clause_row_for_grounding(db_rows, grounding_text)
 
 
 def query_policy_clauses(
@@ -298,15 +496,11 @@ def query_policy_clauses(
     standard_name: str | None = None,
     limit: int = 25,
 ) -> list[dict]:
-    """Return the most relevant structured policy clauses using lightweight keyword overlap."""
+    """Return the most relevant structured policy clauses using keyword + adjacent-phrase overlap."""
     rows = get_policy_clauses(document_id=document_id, standard_name=standard_name)
     if not rows:
         return []
-    query_words = re.findall(r"[A-Za-z][A-Za-z0-9\-]{3,}", (query_text or "").lower())
-    query_terms = {w for w in query_words if w not in {
-        "shall", "must", "with", "that", "this", "from", "there", "their", "where", "when",
-        "procedure", "document", "process", "record", "check", "checks", "using", "used",
-    }}
+    query_terms, ordered_words = _policy_clause_query_terms(query_text or "")
     scored: list[tuple[int, dict]] = []
     for row in rows:
         haystack = " ".join(
@@ -321,10 +515,74 @@ def query_policy_clauses(
         for term in query_terms:
             if term in haystack:
                 score += 1
-        if score > 0 or not query_terms:
+        score += _phrase_bonus(haystack, ordered_words)
+        # Never include zero-hit rows: empty or degenerate queries used to add every clause
+        # and sort by clause_id (early BRCGS sections like 3.7 unrelated to the finding).
+        if score > 0:
             scored.append((score, row))
     scored.sort(key=lambda item: (-item[0], item[1].get("clause_id") or ""))
+    if not scored:
+        return []
+    best = scored[0][0]
+    # Drop weak stragglers when there is a clearly stronger match (reduces generic single-token hits).
+    if best >= 4:
+        thresh = max(2, int(best * 0.45))
+        scored = [(s, r) for s, r in scored if s >= thresh]
     return [row for _, row in scored[:limit]]
+
+
+def query_policy_clauses_for_documents(
+    document_ids: list[str],
+    query_text: str,
+    *,
+    limit: int = 25,
+) -> list[dict]:
+    """
+    Lexical clause retrieval across multiple policy documents (union + global re-rank).
+    Used for SOP compliance → policy clause mapping with scoped standards.
+    """
+    ids = [str(d).strip() for d in (document_ids or []) if str(d).strip()]
+    if not ids:
+        return []
+    seen: set[tuple[str, str]] = set()
+    merged: list[dict] = []
+    per_doc = max(8, min(20, limit * 2 // max(1, len(ids)) + 4))
+    for doc_id in ids:
+        part = query_policy_clauses(query_text, document_id=doc_id, limit=per_doc)
+        for row in part:
+            key = (str(row.get("document_id") or ""), str(row.get("clause_id") or ""))
+            if key in seen or not key[0] or not key[1]:
+                continue
+            seen.add(key)
+            merged.append(row)
+    if not merged:
+        return []
+    query_terms, ordered_words = _policy_clause_query_terms(query_text or "")
+    rescored: list[tuple[int, dict]] = []
+    for row in merged:
+        haystack = " ".join(
+            [
+                row.get("clause_id") or "",
+                row.get("heading") or "",
+                row.get("requirement_text") or "",
+                " ".join(row.get("keywords") or []),
+            ]
+        ).lower()
+        score = 0
+        for term in query_terms:
+            if term in haystack:
+                score += 1
+        score += _phrase_bonus(haystack, ordered_words)
+        if score > 0:
+            rescored.append((score, row))
+    rescored.sort(key=lambda item: (-item[0], item[1].get("clause_id") or ""))
+    if not rescored:
+        return []
+    best = rescored[0][0]
+    if best >= 4:
+        thresh = max(2, int(best * 0.45))
+        rescored = [(s, r) for s, r in rescored if s >= thresh]
+    return [row for _, row in rescored[:limit]]
 
 
 def get_policy_citation_set(*, document_id: str | None = None, standard_name: str | None = None) -> set[str]:
@@ -753,6 +1011,201 @@ def delete_document(document_id: str) -> None:
     delete_policy_clauses(document_id)
     with _cursor() as cur:
         cur.execute(f"DELETE FROM public.{TABLE_NAME} WHERE document_id = %s", (document_id,))
+
+
+# ---------------------------------------------------------------------------
+# Site ↔ Standard links  (governance graph edge)
+# ---------------------------------------------------------------------------
+
+def ensure_site_standard_table() -> None:
+    """Create site_standard_links if it does not exist."""
+    if not SUPABASE_DB_URL:
+        return
+    with _cursor() as cur:
+        cur.execute(f"""
+            CREATE TABLE IF NOT EXISTS public.{SITE_STANDARD_TABLE_NAME} (
+                id             SERIAL PRIMARY KEY,
+                site_id        TEXT NOT NULL,
+                standard_name  TEXT NOT NULL,        -- e.g. "BRCGS Food Safety"
+                standard_document_id TEXT,           -- FK to documents.document_id (nullable — standard may not be ingested yet)
+                standard_type  TEXT NOT NULL DEFAULT 'universal',
+                                                      -- universal | cranswick | customer
+                notes          TEXT,
+                created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                UNIQUE (site_id, standard_name)
+            )
+        """)
+
+
+def upsert_site_standard_link(
+    site_id: str,
+    standard_name: str,
+    *,
+    standard_document_id: str | None = None,
+    standard_type: str = "universal",
+    notes: str | None = None,
+) -> None:
+    """Add or update a site ↔ standard link row."""
+    if not SUPABASE_DB_URL or not site_id or not standard_name:
+        return
+    ensure_site_standard_table()
+    with _cursor() as cur:
+        cur.execute(
+            f"""
+            INSERT INTO public.{SITE_STANDARD_TABLE_NAME}
+                (site_id, standard_name, standard_document_id, standard_type, notes)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (site_id, standard_name) DO UPDATE SET
+                standard_document_id = EXCLUDED.standard_document_id,
+                standard_type        = EXCLUDED.standard_type,
+                notes                = EXCLUDED.notes
+            """,
+            (site_id.strip(), standard_name.strip(), standard_document_id, standard_type, notes),
+        )
+
+
+def delete_site_standard_link(site_id: str, standard_name: str) -> bool:
+    """Remove a specific link. Returns True if a row was deleted."""
+    if not SUPABASE_DB_URL or not site_id or not standard_name:
+        return False
+    ensure_site_standard_table()
+    with _cursor() as cur:
+        cur.execute(
+            f"DELETE FROM public.{SITE_STANDARD_TABLE_NAME} WHERE site_id = %s AND standard_name = %s",
+            (site_id.strip(), standard_name.strip()),
+        )
+        return cur.rowcount > 0
+
+
+def list_site_standard_links(*, site_id: str | None = None) -> list[dict]:
+    """Return all site_standard_links rows, optionally filtered to one site."""
+    if not SUPABASE_DB_URL:
+        return []
+    try:
+        ensure_site_standard_table()
+    except Exception:
+        return []
+    where = ""
+    params: list = []
+    if site_id:
+        where = "WHERE site_id = %s"
+        params.append(site_id.strip())
+    with _cursor() as cur:
+        cur.execute(
+            f"SELECT id, site_id, standard_name, standard_document_id, standard_type, notes, created_at "
+            f"FROM public.{SITE_STANDARD_TABLE_NAME} {where} ORDER BY site_id, standard_name",
+            tuple(params),
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+
+def get_site_scope_for_standard(
+    standard_document_id: str | None = None,
+    standard_name: str | None = None,
+) -> list[str]:
+    """
+    3-hop graph query: clause → standard → sites.
+
+    Given a policy document_id (from policy_clause_records) or standard_name,
+    return the list of site_ids that are linked to that standard.
+
+    Falls back to empty list (no curated links) — callers should handle gracefully.
+    """
+    if not SUPABASE_DB_URL:
+        return []
+    if not standard_document_id and not standard_name:
+        return []
+    try:
+        ensure_site_standard_table()
+    except Exception:
+        return []
+    where_parts: list[str] = []
+    params: list = []
+    if standard_document_id:
+        where_parts.append("standard_document_id = %s")
+        params.append(standard_document_id.strip())
+    if standard_name:
+        where_parts.append("LOWER(TRIM(standard_name)) = LOWER(TRIM(%s))")
+        params.append(standard_name.strip())
+    where_sql = "WHERE " + " OR ".join(where_parts)
+    with _cursor() as cur:
+        cur.execute(
+            f"SELECT DISTINCT site_id FROM public.{SITE_STANDARD_TABLE_NAME} {where_sql} ORDER BY site_id",
+            tuple(params),
+        )
+        return [str(r["site_id"]).strip() for r in cur.fetchall() if r.get("site_id")]
+
+
+# Layers treated as ingested procedures (SOPs / WIs), not policy standards.
+PROCEDURE_DOC_LAYERS = frozenset({"sop", "work_instruction"})
+
+
+def delete_vector_chunks_document_id_like(pattern: str) -> int:
+    """
+    Delete rows from the vector chunk table where metadata document_id matches SQL LIKE pattern.
+    Tries vecs.document_chunks, then public.document_chunks. Returns rows deleted (best effort).
+    """
+    if not SUPABASE_DB_URL or not pattern:
+        return 0
+    for table in ("vecs.document_chunks", "public.document_chunks", "document_chunks"):
+        try:
+            with _cursor() as cur:
+                cur.execute(
+                    f"DELETE FROM {table} WHERE metadata->>'document_id' LIKE %s",
+                    (pattern,),
+                )
+                return int(cur.rowcount or 0)
+        except Exception as e:
+            log.debug("delete_vector_chunks_document_id_like skip %s: %s", table, e)
+            continue
+    return 0
+
+
+def purge_documents_by_doc_layers(
+    layers: frozenset[str] | set[str] | None = None,
+) -> dict[str, Any]:
+    """
+    Remove all documents whose doc_layer is in `layers` (default: sop + work_instruction)
+    from the vector store and SQL registry (content, source files, policy_clause rows for that id).
+
+    Merges registry + vector-derived doc lists so orphan vector-only procedure docs are removed too.
+    Returns {"removed_ids": [...], "removed_count": int}.
+    """
+    from src.rag.vector_store import delete_by_document_id
+
+    want = frozenset(layers) if layers is not None else PROCEDURE_DOC_LAYERS
+    by_id: dict[str, dict] = {}
+    try:
+        for d in list_documents():
+            doc_id = (d.get("document_id") or "").strip()
+            if doc_id:
+                by_id[doc_id] = d
+    except Exception as e:
+        log.warning("purge_documents_by_doc_layers list_documents: %s", e)
+    try:
+        for d in fetch_all_from_vector_store():
+            doc_id = (d.get("document_id") or "").strip()
+            if doc_id and doc_id not in by_id:
+                by_id[doc_id] = d
+    except Exception as e:
+        log.warning("purge_documents_by_doc_layers fetch_all_from_vector_store: %s", e)
+
+    to_remove: list[str] = []
+    for doc_id, d in by_id.items():
+        layer = (d.get("doc_layer") or "sop").strip().lower()
+        if layer in want:
+            to_remove.append(doc_id)
+
+    removed: list[str] = []
+    for doc_id in to_remove:
+        try:
+            delete_by_document_id(doc_id)
+            delete_document(doc_id)
+            removed.append(doc_id)
+        except Exception as e:
+            log.warning("purge_documents_by_doc_layers failed for %s: %s", doc_id, e)
+
+    return {"removed_ids": removed, "removed_count": len(removed)}
 
 
 def fetch_all_from_vector_store() -> list[dict]:

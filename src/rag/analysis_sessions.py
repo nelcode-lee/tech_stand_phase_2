@@ -14,6 +14,41 @@ SUPABASE_DB_URL = os.environ.get("SUPABASE_DB_URL", "")
 TABLE_NAME = "analysis_sessions"
 
 
+def _compute_risk_metrics(result_json: dict | None) -> dict | None:
+    """Summarise gap-level FMEA from stored analysis JSON for dashboard aggregation."""
+    if not result_json:
+        return None
+    gaps = result_json.get("risk_gaps") or []
+    if not isinstance(gaps, list):
+        gaps = []
+    bands = {"low": 0, "medium": 0, "high": 0, "critical": 0}
+    unknown_band = 0
+    rpns: list[int] = []
+    gap_count = 0
+    for g in gaps:
+        if not isinstance(g, dict):
+            continue
+        gap_count += 1
+        b = (g.get("fmea_band") or "").lower().strip()
+        if b in bands:
+            bands[b] += 1
+        else:
+            unknown_band += 1
+        score = g.get("fmea_score")
+        try:
+            if score is not None and int(score) > 0:
+                rpns.append(int(score))
+        except (TypeError, ValueError):
+            pass
+    return {
+        "risk_gap_count": gap_count,
+        "gaps_by_band": bands,
+        "gaps_unknown_band": unknown_band,
+        "max_rpn": max(rpns) if rpns else 0,
+        "avg_rpn": round(sum(rpns) / len(rpns), 1) if rpns else 0.0,
+    }
+
+
 def _get_conn():
     if not SUPABASE_DB_URL:
         raise ValueError("SUPABASE_DB_URL required")
@@ -65,6 +100,10 @@ def ensure_table():
         cur.execute(f"""
             ALTER TABLE public.{TABLE_NAME}
             ADD COLUMN IF NOT EXISTS corrections_implemented INTEGER NOT NULL DEFAULT 0
+        """)
+        cur.execute(f"""
+            ALTER TABLE public.{TABLE_NAME}
+            ADD COLUMN IF NOT EXISTS risk_metrics JSONB
         """)
 
 
@@ -133,7 +172,7 @@ def get_session(tracking_id: str) -> dict | None:
         cur.execute(f"""
             SELECT tracking_id, document_id, title, requester, doc_layer, sites,
                    overall_risk, total_findings, agents_run, agent_findings,
-                   workflow_type, result_json, corrections_implemented, completed_at
+                   workflow_type, result_json, corrections_implemented, risk_metrics, completed_at
             FROM public.{TABLE_NAME}
             WHERE tracking_id = %s
         """, (tracking_id,))
@@ -162,6 +201,16 @@ def get_session(tracking_id: str) -> dict | None:
             result_json = json.loads(result_json) if result_json else None
         except json.JSONDecodeError:
             result_json = None
+    risk_metrics = r.get("risk_metrics")
+    if isinstance(risk_metrics, str):
+        try:
+            risk_metrics = json.loads(risk_metrics) if risk_metrics else None
+        except json.JSONDecodeError:
+            risk_metrics = None
+    elif risk_metrics is not None and not isinstance(risk_metrics, dict):
+        risk_metrics = None
+    if risk_metrics is None and result_json:
+        risk_metrics = _compute_risk_metrics(result_json)
     return {
         "trackingId": r["tracking_id"],
         "documentId": r["document_id"] or "",
@@ -177,6 +226,7 @@ def get_session(tracking_id: str) -> dict | None:
         "correctionsImplemented": r.get("corrections_implemented") or 0,
         "completedAt": r["completed_at"].isoformat() if r.get("completed_at") else None,
         "result": result_json,
+        "riskMetrics": risk_metrics,
     }
 
 
@@ -243,6 +293,14 @@ def list_sessions(limit: int = 50) -> list[dict]:
                 findings = {}
         elif findings is None:
             findings = {}
+        risk_metrics = r.get("risk_metrics")
+        if isinstance(risk_metrics, str):
+            try:
+                risk_metrics = json.loads(risk_metrics) if risk_metrics else None
+            except json.JSONDecodeError:
+                risk_metrics = None
+        elif risk_metrics is not None and not isinstance(risk_metrics, dict):
+            risk_metrics = None
         result.append({
             "trackingId": r["tracking_id"],
             "documentId": r["document_id"] or "",
@@ -257,5 +315,6 @@ def list_sessions(limit: int = 50) -> list[dict]:
             "workflowType": r["workflow_type"] or "review",
             "correctionsImplemented": r.get("corrections_implemented") or 0,
             "completedAt": r["completed_at"].isoformat() if r.get("completed_at") else None,
+            "riskMetrics": risk_metrics,
         })
     return result

@@ -179,6 +179,24 @@ def get_relevant_finding_notes(
     ]
 
 
+def delete_all_finding_notes() -> int:
+    """Delete every row from finding_notes (e.g. when clearing SOP analysis history). Returns rows deleted."""
+    if not SUPABASE_DB_URL:
+        return 0
+    try:
+        ensure_table()
+    except Exception as e:
+        log.warning("delete_all_finding_notes ensure_table failed: %s", e)
+        return 0
+    try:
+        with _cursor() as cur:
+            cur.execute(f"DELETE FROM public.{TABLE_NAME}")
+            return int(cur.rowcount or 0)
+    except Exception as e:
+        log.warning("delete_all_finding_notes failed: %s", e)
+        return 0
+
+
 def list_finding_notes(limit: int = 100) -> list[dict]:
     """Return recent finding notes (user, document, finding, note, datetime) for the logs view."""
     if not SUPABASE_DB_URL:

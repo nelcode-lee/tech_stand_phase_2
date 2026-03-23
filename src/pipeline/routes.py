@@ -1,7 +1,10 @@
 """FastAPI routes for agent pipeline."""
+import asyncio
 import io
+import json
 import logging
 import re
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -12,6 +15,25 @@ from pydantic import BaseModel
 from src.pipeline.models import Document, PipelineContext, RequestType, DocLayer
 from src.pipeline.router import PipelineRouter
 from src.rag.models import DocumentChunk
+
+ProgressEmit = Callable[[dict], Awaitable[None]]
+
+
+def _agent_to_frontend_step_key(agent_name: str) -> str:
+    """Map backend agent / phase name to AnalysePage loading strip `key` values."""
+    return {
+        "context": "cleansor",
+        "cleansing": "cleansor",
+        "draft_layout": "specifier",
+        "conflict": "conflictor",
+        "specifying": "specifier",
+        "sequencing": "sequencer",
+        "terminology": "terminator",
+        "formatting": "formatter",
+        "risk": "risk-assessor",
+        "validation": "validator",
+        "finding_verification": "finding-verifier",
+    }.get(agent_name, "cleansor")
 
 router = APIRouter(tags=["pipeline"])
 
@@ -42,7 +64,12 @@ class AnalyseRequest(BaseModel):
 
 
 def _to_doc_layer(s: str) -> DocLayer:
-    return DocLayer(s) if s in ("policy", "principle", "sop", "work_instruction") else DocLayer.sop
+    v = (s or "").strip().lower()
+    if v in ("policy", "policy_brcgs", "policy_cranswick"):
+        return DocLayer.policy
+    if v in ("principle", "sop", "work_instruction"):
+        return DocLayer(v)
+    return DocLayer.sop
 
 
 def _dedup_key(items: list, key_fn) -> list:
@@ -86,203 +113,6 @@ def _deduplicate_findings(ctx: PipelineContext) -> PipelineContext:
     )
     ctx.conflicts = _dedup_key(ctx.conflicts, lambda c: norm(c.description))
     return ctx
-
-
-def _filter_invalid_policy_citations(ctx: PipelineContext, policy_document_id: str | None = None) -> PipelineContext:
-    """Drop invalid structured policy citations when they are not present in the clause store."""
-    try:
-        from src.rag.document_registry import get_policy_citation_set
-        valid: set[str] = set()
-        for policy_id in _policy_document_ids(ctx, policy_document_id):
-            valid |= get_policy_citation_set(document_id=policy_id)
-        if not valid:
-            valid = get_policy_citation_set(standard_name="BRCGS Food Safety")
-        if not valid:
-            valid = get_policy_citation_set(standard_name="Cranswick Manufacturing Standard")
-    except Exception:
-        return ctx
-    grounded = _extract_grounded_policy_citations(_combined_policy_contents(ctx))
-
-    def _clean(items):
-        for item in items or []:
-            citations = getattr(item, "citations", None)
-            if citations is None:
-                continue
-            filtered = []
-            for citation in citations:
-                cit = str(citation or "").strip()
-                if not cit:
-                    continue
-                if _is_exact_structured_policy_citation(cit):
-                    if (grounded and cit in grounded) or (not grounded and cit in valid):
-                        filtered.append(cit)
-                else:
-                    filtered.append(cit)
-            item.citations = filtered
-            req_ref = getattr(item, "requirement_reference", None)
-            if isinstance(req_ref, str) and _is_exact_structured_policy_citation(req_ref.strip()):
-                req_ref = req_ref.strip()
-                if not (((grounded and req_ref in grounded) or (not grounded and req_ref in valid))):
-                    item.requirement_reference = None
-
-    _clean(ctx.risk_gaps)
-    _clean(ctx.cleanser_flags)
-    _clean(ctx.specifying_flags)
-    _clean(ctx.sequencing_flags)
-    _clean(ctx.formatting_flags)
-    _clean(ctx.compliance_flags)
-    _clean(ctx.terminology_flags)
-    _clean(ctx.conflicts)
-    return ctx
-
-
-def _extract_grounded_policy_citations(policy_content: str) -> set[str]:
-    """Extract exact structured policy citations present in the returned parent policy context block."""
-    grounded: set[str] = set()
-    for raw in re.findall(r"\[([^\]\n]+)\]", policy_content or ""):
-        citation = raw.split(" - ", 1)[0].strip()
-        if _is_exact_structured_policy_citation(citation):
-            grounded.add(citation)
-    return grounded
-
-
-def _is_exact_structured_policy_citation(citation: str) -> bool:
-    """Accept exact structured citations like BRCGS Clause 5.8.3 or Cranswick Std §2.1.1."""
-    text = (citation or "").strip()
-    brcgs_match = re.fullmatch(r"BRCGS Clause\s+(\d+(?:\.\d+){2,4}[A-Za-z]?)", text, re.I)
-    if brcgs_match:
-        return True
-    cranswick_match = re.fullmatch(r"Cranswick Std\s*§\s*(\d+(?:\.\d+){2,4}[A-Za-z]?)", text, re.I)
-    return bool(cranswick_match)
-
-
-def _assign_structured_policy_citations(ctx: PipelineContext, policy_document_id: str | None = None) -> PipelineContext:
-    """Attach grounded structured policy citations by matching findings back to the clause store."""
-    try:
-        from src.rag.document_registry import get_policy_clauses
-        clause_rows: list[dict] = []
-        for policy_id in _policy_document_ids(ctx, policy_document_id):
-            clause_rows.extend(get_policy_clauses(document_id=policy_id))
-        if not clause_rows:
-            clause_rows.extend(get_policy_clauses(standard_name="Cranswick Manufacturing Standard"))
-            clause_rows.extend(get_policy_clauses(standard_name="BRCGS Food Safety"))
-    except Exception:
-        return ctx
-    citable_rows = [
-        row for row in clause_rows
-        if _is_exact_structured_policy_citation(str(row.get("canonical_citation") or "").strip())
-    ]
-    if not citable_rows:
-        return ctx
-
-    def _assign(items):
-        for item in items or []:
-            query_text = _build_policy_query_text(item)
-            if not query_text:
-                continue
-            matches = _match_structured_policy_clauses(query_text, citable_rows, limit=1)
-            if not matches:
-                continue
-            top_citation = str(matches[0].get("canonical_citation") or "").strip()
-            if not top_citation:
-                continue
-            citations = [str(c).strip() for c in (getattr(item, "citations", None) or []) if str(c).strip()]
-            if top_citation not in citations:
-                citations.append(top_citation)
-                item.citations = citations
-            req_ref = getattr(item, "requirement_reference", None)
-            if hasattr(item, "requirement_reference") and (not req_ref or not str(req_ref).strip()):
-                item.requirement_reference = top_citation
-
-    _assign(ctx.risk_gaps)
-    _assign(ctx.cleanser_flags)
-    _assign(ctx.specifying_flags)
-    _assign(ctx.sequencing_flags)
-    _assign(ctx.formatting_flags)
-    _assign(ctx.compliance_flags)
-    _assign(ctx.terminology_flags)
-    _assign(ctx.conflicts)
-    return ctx
-
-
-_POLICY_QUERY_STOPWORDS = {
-    "shall", "must", "with", "that", "this", "from", "there", "their", "where", "when",
-    "procedure", "document", "process", "record", "records", "check", "checks", "using",
-    "used", "ensure", "site", "step", "section", "issue", "risk", "impact", "current",
-    "text", "location", "finding", "recommendation", "needs", "review", "specific",
-    "provide", "added", "missing", "wording", "instruction", "instructions", "follow",
-}
-
-
-def _build_policy_query_text(item) -> str:
-    parts = []
-    for attr in ("term", "location", "excerpt", "current_text", "issue", "description", "risk", "impact"):
-        value = getattr(item, attr, None)
-        if value:
-            parts.append(str(value).strip())
-    return " ".join(part for part in parts if part).strip()
-
-
-def _match_structured_policy_clauses(query_text: str, clause_rows: list[dict], limit: int = 1) -> list[dict]:
-    query_terms = _policy_terms(query_text)
-    if len(query_terms) < 2:
-        return []
-    scored: list[tuple[int, int, dict]] = []
-    for row in clause_rows:
-        keywords = {str(k).lower() for k in (row.get("keywords") or []) if str(k).strip()}
-        haystack = " ".join(
-            [
-                str(row.get("heading") or ""),
-                str(row.get("requirement_text") or ""),
-                " ".join(sorted(keywords)),
-            ]
-        ).lower()
-        exact_hits = 0
-        partial_hits = 0
-        for term in query_terms:
-            if term in keywords:
-                exact_hits += 1
-            elif term in haystack:
-                partial_hits += 1
-        score = exact_hits * 3 + partial_hits
-        if exact_hits >= 2 or score >= 5:
-            scored.append((score, exact_hits, row))
-    scored.sort(key=lambda item: (-item[0], -item[1], item[2].get("canonical_citation") or ""))
-    return [row for _, _, row in scored[:limit]]
-
-
-def _policy_terms(text: str) -> list[str]:
-    words = re.findall(r"[A-Za-z][A-Za-z0-9\-]{3,}", (text or "").lower())
-    deduped: list[str] = []
-    for word in words:
-        if word in _POLICY_QUERY_STOPWORDS:
-            continue
-        if word not in deduped:
-            deduped.append(word)
-    return deduped
-
-
-def _policy_documents(ctx: PipelineContext) -> list[Document]:
-    docs: list[Document] = []
-    if ctx.parent_policy:
-        docs.append(ctx.parent_policy)
-    docs.extend(ctx.higher_order_policies or [])
-    return docs
-
-
-def _policy_document_ids(ctx: PipelineContext, primary_policy_document_id: str | None = None) -> list[str]:
-    ids: list[str] = []
-    if primary_policy_document_id:
-        ids.append(primary_policy_document_id)
-    for doc in _policy_documents(ctx):
-        doc_id = (doc.id or "").strip()
-        if doc_id and doc_id not in ids:
-            ids.append(doc_id)
-    return ids
-
-
-def _combined_policy_contents(ctx: PipelineContext) -> str:
-    return "\n\n".join((doc.content or "").strip() for doc in _policy_documents(ctx) if (doc.content or "").strip())
 
 
 def _to_request_type(s: str) -> RequestType:
@@ -461,19 +291,26 @@ def _fetch_parent_policies(req: AnalyseRequest) -> tuple[Document | None, list[D
     """
     Fetch layered policies for analysis.
 
-    Hierarchy for SOP-like docs:
-    BRCGS (higher layer) -> Cranswick Manufacturing Standard (direct parent) -> SOP/work instruction.
+    For SOP / work instruction / principle documents, parent context is always loaded from
+    both ingested standards (Cranswick Manufacturing Standard + BRCGS Food Safety). No manual
+    policy picker — request policy_ref and library policy_ref on the document are ignored for that path.
+
+    Non-SOP layers still use explicit policy_ref or registry policy_ref when set.
     """
     from src.rag.document_registry import get_document_content, get_document_policy_ref
 
     is_harmonisation = _to_request_type(req.request_type) == RequestType.harmonisation_review
     is_single_review = _to_request_type(req.request_type) == RequestType.single_document_review
+    dl = (req.doc_layer or "").strip().lower()
+    use_layered_standards = dl in ("sop", "work_instruction", "principle")
+
     policy_ref = (req.policy_ref or "").strip()
-    if not policy_ref and req.document_id:
+    if use_layered_standards:
+        policy_ref = ""
+    elif not policy_ref and req.document_id:
         policy_ref = (get_document_policy_ref(req.document_id) or "").strip()
     has_policy_ref = bool(policy_ref)
     needs_policy = is_harmonisation or has_policy_ref
-    dl = (req.doc_layer or "").strip().lower()
     if not needs_policy and dl in ("sop", "work_instruction", "principle"):
         needs_policy = True
     if not needs_policy and is_single_review and req.document_id:
@@ -493,14 +330,11 @@ def _fetch_parent_policies(req: AnalyseRequest) -> tuple[Document | None, list[D
     higher_order_policies: list[Document] = []
 
     if dl in ("sop", "work_instruction", "principle"):
-        # Direct internal parent standard
+        # Always both standards (relevant clauses), when present in policy_clause_records / vectors
         parent_policy = _fetch_policy_document(
             query_text=query_text,
             standard_name="Cranswick Manufacturing Standard",
         )
-        if not parent_policy and has_policy_ref and "brcgs" not in policy_ref.lower():
-            parent_policy = _fetch_policy_document(query_text=query_text, document_id=policy_ref)
-        # Highest external parent standard
         higher = _fetch_policy_document(
             query_text=query_text,
             standard_name="BRCGS Food Safety",
@@ -571,9 +405,8 @@ def _filter_chunks_by_document(chunks: list[DocumentChunk], document_id: str | N
     return filtered
 
 
-@router.post("/analyse")
-async def post_analyse(body: AnalyseRequest):
-    """Run the agent pipeline. Accepts content or retrieved_chunks for testing."""
+async def _execute_analyse(body: AnalyseRequest, progress_emit: ProgressEmit | None = None) -> dict:
+    """Build context, run pipeline, return the same JSON dict as the non-streaming /analyse response."""
     try:
         chunks = _chunks_from_request(body)
         chunks = _filter_chunks_by_document(chunks, body.document_id)
@@ -588,8 +421,8 @@ async def post_analyse(body: AnalyseRequest):
         parent_policy, higher_order_policies = _fetch_parent_policies(body)
         sibling_docs = _fetch_additional_documents(body.additional_doc_ids)
 
-        # When document_id set: use full document content for excerpts/citations and to avoid chunk overlap duplicates
-        # If registry has no content, reconstruct from retrieved chunks so agents can still output excerpts and citations
+        # When document_id set: use full document content for excerpts and to avoid chunk overlap duplicates
+        # If registry has no content, reconstruct from retrieved chunks so agents can still quote excerpts
         full_content = None
         if doc_id:
             try:
@@ -610,7 +443,7 @@ async def post_analyse(body: AnalyseRequest):
             except Exception as e:
                 log.debug("Could not load prior feedback for pipeline: %s", e)
 
-        # Glossary for all docs (from domain_context.json) — agents use for terminology and citations
+        # Glossary for all docs (from domain_context.json) — agents use for terminology
         glossary_block: str | None = None
         try:
             from src.pipeline.domain import get_glossary_block, load_domain_context
@@ -637,12 +470,64 @@ async def post_analyse(body: AnalyseRequest):
             glossary_block=glossary_block,
         )
         router_instance = PipelineRouter(agents_override=agents_override)
-        ctx = await router_instance.run(ctx)
+
+        progress_callback = None
+        if progress_emit:
+            n_agents = len(router_instance._select_agents(ctx))
+            await progress_emit({"type": "start", "total": 1 + n_agents})
+            await progress_emit(
+                {
+                    "type": "progress",
+                    "agent": "context",
+                    "step_key": _agent_to_frontend_step_key("context"),
+                }
+            )
+
+            async def progress_callback(agent_name: str) -> None:
+                await progress_emit(
+                    {
+                        "type": "progress",
+                        "agent": agent_name,
+                        "step_key": _agent_to_frontend_step_key(agent_name),
+                    }
+                )
+
+        ctx = await router_instance.run(ctx, progress_callback=progress_callback)
 
         # Deduplicate findings — chunk overlap or table extraction can produce same finding twice
         ctx = _deduplicate_findings(ctx)
-        ctx = _filter_invalid_policy_citations(ctx, parent_policy.id if parent_policy else None)
-        ctx = _assign_structured_policy_citations(ctx, parent_policy.id if parent_policy else None)
+
+        # Cross-check findings vs full document — drop false positives when limits/refs exist nearby (verbatim-checked)
+        try:
+            from src.pipeline.finding_verification import run_finding_verification
+
+            if progress_emit:
+                await progress_emit(
+                    {
+                        "type": "progress",
+                        "agent": "finding_verification",
+                        "step_key": _agent_to_frontend_step_key("finding_verification"),
+                    }
+                )
+            await run_finding_verification(ctx)
+        except Exception as e:
+            log.warning("Finding verification skipped: %s", e)
+
+        # Compliance flags → grounded policy clause links (candidate retrieval + constrained LLM + verify)
+        if ctx.compliance_flags:
+            from src.pipeline.clause_mapping import (
+                enrich_compliance_flags_clause_mapping,
+                ensure_compliance_flags_have_clause_mapping,
+            )
+
+            try:
+                await enrich_compliance_flags_clause_mapping(ctx)
+            except Exception as e:
+                log.warning("Clause mapping enrichment skipped: %s", e)
+            try:
+                ensure_compliance_flags_have_clause_mapping(ctx)
+            except Exception:
+                pass
 
         # Persist session for dashboard metrics
         from src.rag.analysis_sessions import record_session
@@ -732,7 +617,44 @@ async def post_analyse(body: AnalyseRequest):
         raise
     except Exception as e:
         log.exception("Analysis failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/analyse")
+async def post_analyse(body: AnalyseRequest, stream: bool = Query(False, description="Stream NDJSON progress then final result")):
+    """Run the agent pipeline. Use stream=true for newline-delimited progress + final payload."""
+    if not stream:
+        return await _execute_analyse(body, progress_emit=None)
+
+    async def ndjson_generator():
+        queue: asyncio.Queue = asyncio.Queue()
+
+        async def emit(msg: dict) -> None:
+            await queue.put(msg)
+
+        async def worker() -> None:
+            try:
+                result = await _execute_analyse(body, progress_emit=emit)
+                await queue.put({"type": "complete", "result": result})
+            except HTTPException as he:
+                await queue.put({"type": "http_error", "status": he.status_code, "detail": he.detail})
+            except Exception as e:
+                log.exception("Analysis stream failed: %s", e)
+                await queue.put({"type": "error", "message": str(e)})
+            finally:
+                await queue.put(None)
+
+        task = asyncio.create_task(worker())
+        try:
+            while True:
+                msg = await queue.get()
+                if msg is None:
+                    break
+                yield json.dumps(msg, default=str) + "\n"
+        finally:
+            await task
+
+    return StreamingResponse(ndjson_generator(), media_type="application/x-ndjson")
 
 
 class DraftRequest(BaseModel):
@@ -955,6 +877,7 @@ class SaveAnalysisRequest(BaseModel):
     agents_run: list[str] = []
     agent_findings: dict = {}
     corrections_implemented: int = 0
+    result_json: dict = {}
 
 
 class FindingNoteAttachment(BaseModel):
@@ -973,6 +896,19 @@ class FindingNoteRequest(BaseModel):
     agent_key: str = ""
     note: str
     attachments: list[FindingNoteAttachment] | None = None
+
+
+class InteractionLogRequest(BaseModel):
+    """Store a user interaction event for governance and audit trails."""
+    user_name: str = ""
+    action_type: str
+    route: str = ""
+    workflow_mode: str = ""
+    document_id: str = ""
+    tracking_id: str = ""
+    finding_id: str = ""
+    doc_layer: str = ""
+    metadata: dict = {}
 
 
 @router.get("/analysis/finding-notes")
@@ -1003,6 +939,33 @@ async def add_finding_note_route(body: FindingNoteRequest):
     return {"ok": True, "note": result}
 
 
+@router.get("/analysis/interaction-logs")
+async def list_interaction_logs_route(limit: int = Query(200, ge=1, le=1000)):
+    """Return recent governance interaction logs."""
+    from src.rag.interaction_logs import list_interaction_logs
+    return list_interaction_logs(limit=limit)
+
+
+@router.post("/analysis/interaction-logs")
+async def add_interaction_log_route(body: InteractionLogRequest):
+    """Store a governance interaction log entry."""
+    from src.rag.interaction_logs import add_interaction_log
+    result = add_interaction_log(
+        user_name=body.user_name,
+        action_type=body.action_type,
+        route=body.route,
+        workflow_mode=body.workflow_mode,
+        document_id=body.document_id,
+        tracking_id=body.tracking_id,
+        finding_id=body.finding_id,
+        doc_layer=body.doc_layer,
+        metadata=body.metadata or {},
+    )
+    if not result:
+        raise HTTPException(status_code=400, detail="Could not save interaction log")
+    return {"ok": True, "log": result}
+
+
 @router.post("/analysis/save")
 async def save_analysis_session(body: SaveAnalysisRequest):
     """Persist analysis session (captures user changes / ensures state is saved)."""
@@ -1021,6 +984,7 @@ async def save_analysis_session(body: SaveAnalysisRequest):
             agent_findings=body.agent_findings,
             workflow_type="review",
             corrections_implemented=body.corrections_implemented or 0,
+            result_json=body.result_json or {},
         )
         return {"ok": True, "message": "Changes saved"}
     except Exception as e:

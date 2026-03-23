@@ -3,6 +3,7 @@ import Layout from './components/Layout'
 import DashboardPage from './pages/DashboardPage'
 import LibraryPage from './pages/LibraryPage'
 import SettingsPage from './pages/SettingsPage'
+import LogsPage from './pages/LogsPage'
 import LibraryUploadPage from './pages/LibraryUploadPage'
 import ConfigurePage from './pages/ConfigurePage'
 import AnalysePage from './pages/AnalysePage'
@@ -21,6 +22,7 @@ function App() {
         <Route path="library/upload" element={<LibraryUploadPage />} />
 
         <Route path="settings" element={<SettingsPage />} />
+        <Route path="logs" element={<LogsPage />} />
 
         {/* Review workflow: review an existing document */}
         <Route path="review">

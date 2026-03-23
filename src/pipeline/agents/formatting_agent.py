@@ -1,6 +1,7 @@
 """Agent 7: Formatting — flags layout, presentation, and visual formatting issues."""
 from src.pipeline.agent_rules import DOCUMENT_REFERENCE_RULE, PURPOSE_OBJECTIVE_RULE
 from src.pipeline.base_agent import BaseAgent
+from src.pipeline.context_limits import slice_document_for_agent, slice_policy_appendix_for_agent
 from src.pipeline.llm import completion, parse_json_array
 from src.pipeline.models import PipelineContext, FormattingFlag
 
@@ -25,18 +26,14 @@ ABSOLUTE RULES
 - Do not flag missing mandatory sections, ordering gaps, or template compliance gaps here.
 - Do not invent new information.
 
-CITATIONS — ALWAYS INCLUDE WHEN POSSIBLE
-When a formatting gap relates to BRCGS, Cranswick Golden Template, or parent policy, include a "citations" array. Format: "BRCGS Clause X.Y.Z", "Cranswick Std §X.Y.Z", or "Cranswick Template §X". Use only exact structured citations shown in the provided parent policy context. Never cite broad section headers such as "BRCGS Clause 5.8" or "Cranswick Std §2.1". If no exact clause is shown, leave structured policy citations empty.
-
 OUTPUT
 Return only a JSON array. Each item has:
 - location: section reference
 - excerpt: exact quote from document — the text that relates to this issue (copy-paste from source). Used to highlight the relevant passage.
 - issue: format or structural problem
 - recommendation: specific fix to align with template or improve structure
-- citations: array of BRCGS/Cranswick refs — include when applicable
 
-Example: [{"location": "Section 3", "excerpt": "3. Procedure steps - Check temperature - Record result", "issue": "Steps not numbered", "recommendation": "Add step numbers (1, 2, 3...) for clarity", "citations": ["Cranswick Template §3"]}]
+Example: [{"location": "Section 3", "excerpt": "3. Procedure steps - Check temperature - Record result", "issue": "Steps not numbered", "recommendation": "Add step numbers (1, 2, 3...) for clarity"}]
 If no issues, return [].""" + DOCUMENT_REFERENCE_RULE + PURPOSE_OBJECTIVE_RULE
 
 
@@ -56,10 +53,10 @@ class FormattingAgent(BaseAgent):
             if not doc_title and ctx.retrieved_chunks:
                 doc_title = next((c.title for c in ctx.retrieved_chunks if c.title), None)
             prompt_parts = ["Analyse the following document for formatting and presentation issues:"]
-            prompt_parts.append(f"\n\nContent:\n{content[:12000]}")
-            policy_block = self._policy_context_block(ctx, max_chars_per_doc=3000)
+            prompt_parts.append(f"\n\nContent:\n{slice_document_for_agent(content)}")
+            policy_block = self._policy_context_block(ctx)
             if policy_block:
-                prompt_parts.append(f"\n\nPARENT POLICY (use for citations when applicable):\n{policy_block[:6000]}")
+                prompt_parts.append(f"\n\nPARENT POLICY (context):\n{slice_policy_appendix_for_agent(policy_block)}")
             prompt = "".join(prompt_parts)
             system = FORMATTING_SYSTEM_PROMPT
             if getattr(ctx, "glossary_block", None) and (ctx.glossary_block or "").strip():
@@ -68,8 +65,6 @@ class FormattingAgent(BaseAgent):
             items = parse_json_array(raw)
             for item in items:
                 if isinstance(item, dict) and item.get("location") and item.get("issue") and item.get("recommendation"):
-                    raw_citations = item.get("citations") or []
-                    citations = [str(x).strip() for x in (raw_citations if isinstance(raw_citations, list) else [raw_citations]) if x]
                     excerpt = (item.get("excerpt") or "").strip() or None
                     ctx.formatting_flags.append(
                         FormattingFlag(
@@ -77,7 +72,6 @@ class FormattingAgent(BaseAgent):
                             excerpt=excerpt,
                             issue=str(item["issue"]),
                             recommendation=str(item["recommendation"]),
-                            citations=citations,
                         )
                     )
         except Exception as e:
