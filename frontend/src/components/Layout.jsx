@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
   LayoutGrid,
@@ -22,6 +22,7 @@ import './Layout.css';
 function Sidebar() {
   const { workflowMode, setWorkflowMode, selectedSite, setSelectedSite } = useAnalysis();
   const location = useLocation();
+  const navigate = useNavigate();
   const path = location.pathname;
   const [createInfoOpen, setCreateInfoOpen] = useState(false);
   const [createInfoPos, setCreateInfoPos] = useState({ top: 0, left: 0 });
@@ -48,7 +49,7 @@ function Sidebar() {
 
   return (
     <aside className="app-sidebar">
-      <div className="sidebar-brand">
+      <div className="sidebar-brand" onClick={() => navigate('/dashboard')} role="button" title="Go to Dashboard">
         <img src="/cranswick.png" alt="Cranswick" className="sidebar-logo" />
         <span className="sidebar-brand-sub">Technical Standards Agent</span>
       </div>

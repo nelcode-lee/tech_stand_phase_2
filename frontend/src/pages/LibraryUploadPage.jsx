@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Upload, ArrowLeft } from 'lucide-react';
 import { ingestFile, listDocuments } from '../api';
@@ -45,6 +45,7 @@ export default function LibraryUploadPage() {
   const [loading, setLoading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [libraryDocs, setLibraryDocs] = useState([]);
+  const fileInputRef = useRef(null);
   const [form, setForm] = useState({
     title: '',
     category: 'upload',
@@ -192,11 +193,14 @@ export default function LibraryUploadPage() {
             onDrop={handleDrop}
             onDragOver={e => { e.preventDefault(); setDragOver(true); }}
             onDragLeave={() => setDragOver(false)}
+            onClick={() => fileInputRef.current?.click()}
+            style={{ cursor: 'pointer' }}
           >
             <Upload className="lib-upload-icon" size={36} />
-            <p>Drag and drop, or browse</p>
+            <p>Drag and drop, or click to browse</p>
             <span className="lib-upload-formats">PDF, DOCX, DOC</span>
             <input
+              ref={fileInputRef}
               type="file"
               accept=".docx,.pdf,.doc"
               onChange={e => {
@@ -209,7 +213,6 @@ export default function LibraryUploadPage() {
               className="lib-upload-input"
               id="lib-upload-input"
             />
-            <label htmlFor="lib-upload-input" className="lib-upload-browse">Browse Files</label>
             {file && <span className="lib-upload-filename">{file.name}</span>}
           </div>
         </section>

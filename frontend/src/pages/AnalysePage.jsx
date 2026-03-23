@@ -851,8 +851,8 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
   const fromIngestState = location.state?.fromIngest && location.state?.documentId;
   const trackingSessionMeta = trackingIdFromUrl ? loadedSessionMeta : null;
   // Effective document: tracking session metadata first when reviewing a stored session; otherwise URL / state / config, then result fallback.
-  const effectiveDocId = trackingSessionMeta?.documentId || documentIdFromUrl || (location.state?.fromIngest && location.state?.documentId) || config.documentId || (result?.document_id || '');
-  const effectiveTitle = trackingSessionMeta?.title || titleFromUrl || (location.state?.fromIngest && location.state?.title) || config.title || config.documentId || (result?.title || result?.document_id || '');
+  const effectiveDocId = trackingSessionMeta?.documentId || documentIdFromUrl || (location.state?.fromIngest && location.state?.documentId) || (location.state?.generatedContent && location.state?.documentId) || config.documentId || (result?.document_id || '');
+  const effectiveTitle = trackingSessionMeta?.title || titleFromUrl || (location.state?.fromIngest && location.state?.title) || (location.state?.generatedContent && location.state?.title) || config.title || config.documentId || (result?.title || result?.document_id || '');
   const effectiveDocLayer = (
     trackingSessionMeta?.docLayer ||
     location.state?.docLayer ||
@@ -885,16 +885,26 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
 
   // When arriving from Ingest (state or URL), sync config so it matches the document we're analysing
   useEffect(() => {
-    const docId = documentIdFromUrl || (location.state?.fromIngest && location.state?.documentId) || '';
-    const docTitle = titleFromUrl || (location.state?.fromIngest && location.state?.title) || docId;
+    const docId = documentIdFromUrl || (location.state?.fromIngest && location.state?.documentId) || (location.state?.generatedContent && location.state?.documentId) || '';
+    const docTitle = titleFromUrl || (location.state?.fromIngest && location.state?.title) || (location.state?.generatedContent && location.state?.title) || docId;
     const docLayer = (location.state?.docLayer || result?.doc_layer || 'sop');
+    const sites = location.state?.sites;
     if (!docId) return;
     setConfig(c => {
       const nextDocLayer = docLayer || c.docLayer || 'sop';
+      const nextSites = Array.isArray(sites) ? sites : c.sites;
       if (c.documentId === docId && c.title === docTitle && c.docLayer === nextDocLayer) return c;
-      return { ...c, documentId: docId, title: docTitle, docLayer: nextDocLayer };
+      return { ...c, documentId: docId, title: docTitle, docLayer: nextDocLayer, requestType: location.state?.generatedContent ? 'new_document' : c.requestType, ...(nextSites != null && { sites: nextSites }) };
     });
-  }, [documentIdFromUrl, titleFromUrl, fromIngestState, location.state?.documentId, location.state?.title, location.state?.docLayer, result?.doc_layer, setConfig]);
+  }, [documentIdFromUrl, titleFromUrl, fromIngestState, location.state?.documentId, location.state?.title, location.state?.docLayer, location.state?.generatedContent, location.state?.sites, result?.doc_layer, setConfig]);
+
+  // When arriving from Create WI with generated content, set draft and use it as "original" document
+  const generatedContent = location.state?.generatedContent;
+  useEffect(() => {
+    if (generatedContent && !result) {
+      setDraftContent(generatedContent);
+    }
+  }, [generatedContent, result]);
 
   // When result has document_id but config doesn't, sync so form and split view stay in sync (e.g. after run from Library)
   useEffect(() => {
@@ -1007,8 +1017,16 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
       });
   }, [trackingIdFromUrl, documentIdFromUrl, storedResultFromState, sessionFromState, setResult, setConfig]);
 
-  // Fetch original document for split view — DOCX→HTML for procedures, else plain text
+  // Fetch original document for split view — DOCX→HTML for procedures, else plain text. For Create WI, use generated content.
   useEffect(() => {
+    if (generatedContent && !result) {
+      setDocumentContent(generatedContent);
+      setDocumentSections([]);
+      setDocumentHtml(null);
+      setDocumentSourceType('text');
+      setLoadingContent(false);
+      return;
+    }
     if (!result || !effectiveDocId) {
       setDocumentContent(null);
       setDocumentSections([]);
@@ -1051,7 +1069,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
       }
     }
     load();
-  }, [result, effectiveDocId, effectiveDocLayer]);
+  }, [result, effectiveDocId, effectiveDocLayer, generatedContent]);
 
   // Scroll to specific section or highlight when user clicks a finding
   useEffect(() => {
@@ -1128,7 +1146,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
       const sitesArr = Array.isArray(config.sites) ? config.sites : (config.sites ? String(config.sites).split(/[,\s]+/).filter(Boolean) : []);
       const body = {
         tracking_id: `ui-${Date.now()}`,
-        request_type: config.requestType || 'single_document_review',
+        request_type: mode === 'create' && generatedContent ? 'new_document' : (config.requestType || 'single_document_review'),
         doc_layer: docLayerForApi(config.docLayer),
         sites: resolveSitesForApi(sitesArr),
         policy_ref: mode === 'review' ? null : (config.policyRef || null),
@@ -1140,6 +1158,9 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         additional_doc_ids: (config.additionalDocIds || []).length > 0 ? config.additionalDocIds : undefined,
         agent_instructions: (config.agentInstructions || '').trim() || undefined,
       };
+      if (mode === 'create' && (generatedContent || (draftContent || '').trim())) {
+        body.content = (generatedContent || draftContent || '').trim();
+      }
       logInteraction('analysis_run_started', {
         tracking_id: body.tracking_id,
         request_type: body.request_type,
@@ -2406,42 +2427,57 @@ function AgentCard({ title, items, keys, agentKey, searchTextKey = 'location', s
               return (
               <div className={`clause-mapping ${cm.status === 'linked' ? 'clause-mapping-linked' : 'clause-mapping-hitl'}`}>
                 {cm.status === 'linked' ? (
-                  <>
-                    <div className="clause-mapping-label">Policy clause (verified)</div>
-                    <div className="clause-mapping-citation">{cm.canonical_citation || [cm.standard_name, cm.clause_id].filter(Boolean).join(' ')}</div>
-                    {cm.supporting_quote && (
-                      <div className="clause-mapping-quote" title={cm.supporting_quote}>
-                        “{cm.supporting_quote.slice(0, 220)}{cm.supporting_quote.length > 220 ? '…' : ''}”
-                      </div>
-                    )}
-                    {cm.site_scope && cm.site_scope.length > 0 && (
-                      <div className="clause-mapping-site-scope">
-                        <span className="clause-mapping-site-scope-label">Sites in scope:</span>
-                        {cm.site_scope.map(s => (
-                          <span key={s} className="clause-mapping-site-badge">{s}</span>
-                        ))}
-                      </div>
-                    )}
-                  </>
-                ) : (
-                  <>
-                    <div className="clause-mapping-label">Policy clause — review needed (HITL)</div>
-                    <div className="clause-mapping-reason">
-                      {cm.unmapped_reason === 'no_candidates' && 'No lexical match in scoped standards — map manually (ingest BRCGS / Cranswick standard with clause structure).'}
-                      {cm.unmapped_reason === 'no_policy_scope' && 'No policy documents in scope — check Supabase / policy ingest.'}
-                      {cm.unmapped_reason === 'model_none' && 'No candidate clause selected — map manually.'}
-                      {cm.unmapped_reason === 'verify_failed' && 'Could not verify quote against requirement text — map manually.'}
-                      {cm.unmapped_reason === 'error' && 'Mapping failed — map manually.'}
-                      {cm.unmapped_reason === 'not_run' && 'No clause mapping on this record — run a new analysis to attach policy clauses (saved sessions before this feature show this).'}
-                      {cm.unmapped_reason === 'disabled' && 'Clause mapping is turned off (CLAUSE_MAPPING_ENABLED).'}
-                      {!cm.unmapped_reason && 'Map manually to the correct standard clause.'}
+                  <details className="clause-mapping-details">
+                    <summary className="clause-mapping-summary">
+                      <span className="clause-mapping-label-inline">Policy clause (verified)</span>
+                      <span className="clause-mapping-citation-inline">{cm.canonical_citation || [cm.standard_name, cm.clause_id].filter(Boolean).join(' ')}</span>
+                    </summary>
+                    <div className="clause-mapping-body">
+                      {cm.requirement_preview && (
+                        <div className="clause-mapping-section">
+                          <div className="clause-mapping-section-label">Policy clause text</div>
+                          <div className="clause-mapping-preview">{cm.requirement_preview}</div>
+                        </div>
+                      )}
+                      {cm.supporting_quote && (
+                        <div className="clause-mapping-section">
+                          <div className="clause-mapping-section-label">Verified match</div>
+                          <div className="clause-mapping-quote">
+                            “{cm.supporting_quote.slice(0, 320)}{cm.supporting_quote.length > 320 ? '…' : ''}”
+                          </div>
+                        </div>
+                      )}
+                      {cm.site_scope && cm.site_scope.length > 0 && (
+                        <div className="clause-mapping-site-scope">
+                          <span className="clause-mapping-site-scope-label">Sites in scope:</span>
+                          {cm.site_scope.map(s => (
+                            <span key={s} className="clause-mapping-site-badge">{s}</span>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                    {(cm.canonical_citation || cm.clause_id) && (
-                      <div className="clause-mapping-citation clause-mapping-tentative">
-                        Tentative: {cm.canonical_citation || cm.clause_id}
+                  </details>
+                ) : (
+                  <details className="clause-mapping-details">
+                    <summary className="clause-mapping-summary">
+                      <span className="clause-mapping-label-inline clause-mapping-label-hitl">Policy clause — review needed</span>
+                      {(cm.canonical_citation || cm.clause_id) && (
+                        <span className="clause-mapping-citation-inline clause-mapping-tentative">{cm.canonical_citation || cm.clause_id} (tentative)</span>
+                      )}
+                    </summary>
+                    <div className="clause-mapping-body">
+                      <div className="clause-mapping-reason">
+                        {cm.unmapped_reason === 'no_candidates' && 'No lexical match in scoped standards — map manually (ingest BRCGS / Cranswick standard with clause structure).'}
+                        {cm.unmapped_reason === 'no_policy_scope' && 'No policy documents in scope — check Supabase / policy ingest.'}
+                        {cm.unmapped_reason === 'model_none' && 'No candidate clause selected — map manually.'}
+                        {cm.unmapped_reason === 'verify_failed' && 'Could not verify quote against requirement text — map manually.'}
+                        {cm.unmapped_reason === 'error' && 'Mapping failed — map manually.'}
+                        {cm.unmapped_reason === 'not_run' && 'No clause mapping on this record — run a new analysis to attach policy clauses (saved sessions before this feature show this).'}
+                        {cm.unmapped_reason === 'disabled' && 'Clause mapping is turned off (CLAUSE_MAPPING_ENABLED).'}
+                        {!cm.unmapped_reason && 'Map manually to the correct standard clause.'}
                       </div>
-                    )}
-                  </>
+                    </div>
+                  </details>
                 )}
               </div>
               );

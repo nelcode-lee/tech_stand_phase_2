@@ -40,12 +40,13 @@ _PINNED_POLICY_DOCUMENT_IDS: list[str] = [
 
 MIN_QUOTE_LEN = 16
 
-CLAUSE_PICK_SYSTEM = """You are a compliance librarian. Your only job is to map a finding to ONE policy clause from the numbered list, or NONE.
+CLAUSE_PICK_SYSTEM = """You are a compliance librarian mapping operational SOP findings to the policy standard clauses that govern them.
 
 RULES:
 - You MUST choose exactly one candidate id (e.g. C1) from the list, or the literal NONE.
-- If none of the clauses clearly addresses the same regulatory topic as the finding, answer NONE.
-- supporting_quote MUST be copied verbatim from the text of the chosen candidate only (a continuous substring of that candidate's requirement text). Minimum """ + str(MIN_QUOTE_LEN) + """ characters. If you chose NONE, use an empty string for supporting_quote.
+- Choose the clause whose topic most closely governs the finding — even if the wording is abstract or regulatory rather than operational. Policy clauses describe the "what must be done"; findings describe the "what is missing". They will rarely use identical words.
+- Only answer NONE if no candidate addresses the same subject area at all (completely different topic).
+- supporting_quote MUST be copied verbatim from the requirement text of the chosen candidate only (a continuous substring). Minimum """ + str(MIN_QUOTE_LEN) + """ characters. Pick the sentence most directly relevant to the finding. If you chose NONE, use an empty string.
 - Do not invent clause numbers or quote text that does not appear in the candidate block.
 - Return only valid JSON, no markdown.
 
@@ -188,7 +189,8 @@ CANDIDATE CLAUSES (choose one id C1, C2, … or NONE):
             standard_name=row.get("standard_name"),
         )
 
-    preview = req_text[:280] + ("…" if len(req_text) > 280 else "")
+    preview_limit = int(os.environ.get("CLAUSE_PREVIEW_CHARS", "1200"))
+    preview = req_text[:preview_limit] + ("…" if len(req_text) > preview_limit else "")
     return PolicyClauseMapping(
         status="linked",
         policy_document_id=row.get("document_id"),
@@ -224,11 +226,17 @@ async def enrich_compliance_flags_clause_mapping(ctx: PipelineContext) -> None:
             flag.clause_mapping = PolicyClauseMapping(status="unmapped", unmapped_reason="no_policy_scope")
         return
 
-    limit = int(os.environ.get("CLAUSE_MAPPING_CANDIDATE_LIMIT", "22"))
+    limit = int(os.environ.get("CLAUSE_MAPPING_CANDIDATE_LIMIT", "30"))
 
     for flag in ctx.compliance_flags:
         q = _finding_query_text(flag)
         candidates = query_policy_clauses_for_documents(doc_ids, q, limit=limit)
+        log.debug(
+            "Clause mapping: %d candidates for finding %r (doc_ids=%s)",
+            len(candidates),
+            (flag.issue or "")[:80],
+            doc_ids,
+        )
         try:
             mapping = await _pick_clause_for_flag(flag, candidates)
         except Exception as e:

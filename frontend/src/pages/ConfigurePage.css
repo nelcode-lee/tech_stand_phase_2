@@ -401,3 +401,119 @@ p.form-hint.policy-auto-hint {
   opacity: 0.92;
   box-shadow: 0 4px 12px rgba(50,65,87,0.3);
 }
+
+/* Work Instruction create-from-scratch */
+.wi-questionnaire {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+  margin-top: var(--space-md);
+}
+
+.wi-questionnaire .form-row {
+  margin-bottom: 0;
+}
+
+.wi-check-row label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.wi-check-row input[type="checkbox"] {
+  flex-shrink: 0;
+}
+
+.wi-detail-input {
+  margin-top: var(--space-xs);
+  margin-left: 1.75rem;
+  width: calc(100% - 1.75rem);
+}
+
+.wi-generate-actions {
+  margin-top: var(--space-lg);
+}
+
+.wi-draft-panel {
+  margin-top: var(--space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-lg);
+}
+
+.wi-draft-preview {
+  background: rgba(50,65,87,0.04);
+  border: 1px solid var(--border-card);
+  border-radius: 8px;
+  padding: var(--space-md);
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.wi-draft-preview h4 {
+  margin: 0 0 var(--space-sm);
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.wi-draft-text {
+  margin: 0;
+  font-size: 0.8125rem;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  font-family: inherit;
+  color: var(--text-primary);
+}
+
+.wi-refine-block label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 0.875rem;
+  font-weight: 600;
+  margin-bottom: var(--space-xs);
+  color: var(--text-primary);
+}
+
+.wi-refine-row {
+  display: flex;
+  gap: var(--space-sm);
+}
+
+.wi-refine-row input {
+  flex: 1;
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--border-card);
+  border-radius: 6px;
+  font-size: 0.875rem;
+}
+
+.wi-refine-btn {
+  padding: var(--space-sm) var(--space-lg);
+  background: var(--yb-blue);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.wi-refine-btn:hover:not(:disabled) {
+  opacity: 0.92;
+}
+
+.wi-refine-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.wi-proceed-row {
+  display: flex;
+  gap: var(--space-md);
+  align-items: center;
+}

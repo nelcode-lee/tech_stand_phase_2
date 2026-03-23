@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Upload, X } from 'lucide-react';
-import { addInteractionLog, ingestFile, listDocuments } from '../api';
+import { Upload, X, MessageSquare } from 'lucide-react';
+import { addInteractionLog, ingestFile, listDocuments, generateWorkInstruction } from '../api';
 import PolicyRefSelect from '../components/PolicyRefSelect';
 import { useAnalysis } from '../context/AnalysisContext';
 import { resolveSitesForApi, SITES_OPTIONS } from '../constants/sites';
@@ -58,6 +58,25 @@ export default function ConfigurePage({ mode = 'review' }) {
   const [allDocs, setAllDocs] = useState([]);
   const [loadingDocs, setLoadingDocs] = useState(false);
   const fileInputRef = useRef(null);
+
+  // Work Instruction create-from-scratch flow
+  const [wiDraft, setWiDraft] = useState(null);
+  const [wiSuggestedId, setWiSuggestedId] = useState(null);
+  const [wiLoading, setWiLoading] = useState(false);
+  const [wiRefineInput, setWiRefineInput] = useState('');
+  const [wiStep, setWiStep] = useState('questionnaire'); // 'questionnaire' | 'draft'
+  const [wiForm, setWiForm] = useState({
+    taskName: '',
+    parentSop: '',
+    site: '',
+    processType: '',
+    hasMeasurements: false,
+    measurementsDetail: '',
+    hasSafety: false,
+    safetyDetail: '',
+    needsVisuals: false,
+    needsChecklist: true,
+  });
 
   // Fetch document list for review (document picker) and policy-ref dropdown (review + create)
   useEffect(() => {
@@ -286,6 +305,76 @@ export default function ConfigurePage({ mode = 'review' }) {
     navigate(url, { state: docId ? { fromIngest: false, documentId: docId, title: config?.title || docId, docLayer: config?.docLayer || 'sop' } : undefined });
   }
 
+  const isWiCreate = isCreate && config?.docLayer === 'work_instruction';
+
+  async function handleWiGenerate() {
+    const taskName = (wiForm.taskName || '').trim();
+    if (!taskName) {
+      setStatus({ ok: false, message: 'Task name is required.' });
+      return;
+    }
+    setWiLoading(true);
+    setStatus(null);
+    try {
+      const res = await generateWorkInstruction({
+        task_name: taskName,
+        parent_sop: wiForm.parentSop || undefined,
+        site: wiForm.site || (Array.isArray(config.sites) ? config.sites[0] : config.sites) || undefined,
+        process_type: wiForm.processType || undefined,
+        has_measurements: wiForm.hasMeasurements,
+        measurements_detail: wiForm.measurementsDetail || undefined,
+        has_safety: wiForm.hasSafety,
+        safety_detail: wiForm.safetyDetail || undefined,
+        needs_visuals: wiForm.needsVisuals,
+        needs_checklist: wiForm.needsChecklist,
+        reference_doc_ids: (config.additionalDocIds || []).length > 0 ? config.additionalDocIds : undefined,
+      });
+      setWiDraft(res.draft || '');
+      setWiSuggestedId(res.suggested_document_id || `WI-${taskName.replace(/\s+/g, '-')}`);
+      setWiStep('draft');
+      setConfig(c => ({ ...c, documentId: res.suggested_document_id || c.documentId, title: taskName }));
+      setStatus({ ok: true, message: 'Work Instruction generated. Review below and refine if needed.' });
+    } catch (err) {
+      setStatus({ ok: false, message: err.message || 'Generation failed' });
+    } finally {
+      setWiLoading(false);
+    }
+  }
+
+  async function handleWiRefine() {
+    const msg = (wiRefineInput || '').trim();
+    if (!msg || !wiDraft) return;
+    setWiLoading(true);
+    setStatus(null);
+    try {
+      const res = await generateWorkInstruction({
+        task_name: wiForm.taskName,
+        follow_up_message: msg,
+        previous_draft: wiDraft,
+        reference_doc_ids: (config.additionalDocIds || []).length > 0 ? config.additionalDocIds : undefined,
+      });
+      setWiDraft(res.draft || wiDraft);
+      setWiRefineInput('');
+      setStatus({ ok: true, message: 'Draft updated with your refinements.' });
+    } catch (err) {
+      setStatus({ ok: false, message: err.message || 'Refinement failed' });
+    } finally {
+      setWiLoading(false);
+    }
+  }
+
+  function handleWiProceedToAnalyse() {
+    if (!wiDraft) return;
+    const docId = wiSuggestedId || config?.documentId || `WI-${Date.now()}`;
+    const title = wiForm.taskName || config?.title || docId;
+    const sites = wiForm.site ? [wiForm.site] : (config?.sites || []);
+    setConfig(c => ({ ...c, documentId: docId, title, sites }));
+    navigate(`${base}/analyse`, {
+      state: { generatedContent: wiDraft, documentId: docId, title, docLayer: 'work_instruction', sites },
+      replace: true,
+    });
+  }
+
   return (
     <div className="configure-page">
       <div className="configure-top-bar">
@@ -296,9 +385,11 @@ export default function ConfigurePage({ mode = 'review' }) {
           <button type="button" className="configure-top-btn" onClick={() => navigate('/dashboard')}>
             ← Back
           </button>
+          {!isWiCreate && (
           <button type="button" className="configure-top-btn primary next-action" onClick={goToAnalyse}>
             Go to Analyse
           </button>
+          )}
         </div>
       </div>
       <div className="configure-header">
@@ -317,7 +408,7 @@ export default function ConfigurePage({ mode = 'review' }) {
         </p>
       </div>
 
-      <form onSubmit={handleIngest} className="configure-form">
+      <form onSubmit={e => { e.preventDefault(); if (isWiCreate) return; handleIngest(e); }} className="configure-form">
 
         {/* Request type — create only; review always uses single_document_review (Review SOP) */}
         {mode === 'create' && (
@@ -344,9 +435,14 @@ export default function ConfigurePage({ mode = 'review' }) {
           <h3 className="config-section-title">
             {mode === 'create' ? 'Document Type & Format' : 'Document Details'}
           </h3>
-          {mode === 'create' && (
+          {mode === 'create' && !isWiCreate && (
             <p className="config-section-hint">
               Build new SOPs or principle-layer docs using ingested content and project logic. The <strong>policy layer</strong> underpins all documents; we adhere to it. The <strong>principle layer</strong> (design rules — the &quot;What&quot;) is being built out; procedures and work instructions are the procedural &quot;How&quot;.
+            </p>
+          )}
+          {isWiCreate && (
+            <p className="config-section-hint">
+              Work Instructions are step-by-step guides for one specific task — like a YouTube tutorial. Answer the questions below; the agent will generate a first draft from policy context. You can refine it via chat before running full analysis.
             </p>
           )}
           {mode === 'review' && (
@@ -364,7 +460,7 @@ export default function ConfigurePage({ mode = 'review' }) {
                       key={opt.value}
                       type="button"
                       className={`doc-type-btn ${config.docLayer === opt.value ? 'active' : ''}`}
-                      onClick={() => setField('docLayer', opt.value)}
+                      onClick={() => { setField('docLayer', opt.value); if (opt.value !== 'work_instruction') setWiStep('questionnaire'); }}
                     >
                       <span className="doc-type-label">{opt.label}</span>
                       <span className="doc-type-desc">{opt.desc}</span>
@@ -373,6 +469,155 @@ export default function ConfigurePage({ mode = 'review' }) {
                 </div>
               </div>
             ) : null}
+
+            {/* Work Instruction questionnaire — create from scratch */}
+            {isWiCreate && wiStep === 'questionnaire' && (
+              <div className="wi-questionnaire">
+                <div className="form-row">
+                  <label>Task name *</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Prepare béchamel sauce, Torque settings for assembly"
+                    value={wiForm.taskName}
+                    onChange={e => setWiForm(f => ({ ...f, taskName: e.target.value }))}
+                  />
+                </div>
+                <div className="form-row">
+                  <label>Parent SOP (optional)</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. GEN-OP-17-Vehicle-Loading"
+                    value={wiForm.parentSop}
+                    onChange={e => setWiForm(f => ({ ...f, parentSop: e.target.value }))}
+                  />
+                </div>
+                <div className="form-row">
+                  <label>Site / area</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Yorkshire Baker, Production Hall A"
+                    value={wiForm.site}
+                    onChange={e => setWiForm(f => ({ ...f, site: e.target.value }))}
+                  />
+                </div>
+                <div className="form-row">
+                  <label>Process type</label>
+                  <select value={wiForm.processType} onChange={e => setWiForm(f => ({ ...f, processType: e.target.value }))}>
+                    <option value="">— Select —</option>
+                    <option value="manufacturing">Manufacturing</option>
+                    <option value="quality">Quality</option>
+                    <option value="maintenance">Maintenance</option>
+                    <option value="hygiene">Hygiene</option>
+                    <option value="other">Other</option>
+                  </select>
+                </div>
+                <div className="form-row wi-check-row">
+                  <label>
+                    <input type="checkbox" checked={wiForm.hasMeasurements} onChange={e => setWiForm(f => ({ ...f, hasMeasurements: e.target.checked }))} />
+                    Measurements / tolerances / timing required
+                  </label>
+                  {wiForm.hasMeasurements && (
+                    <input
+                      type="text"
+                      placeholder="e.g. Torque 12 Nm, temperature 2–5 °C"
+                      value={wiForm.measurementsDetail}
+                      onChange={e => setWiForm(f => ({ ...f, measurementsDetail: e.target.value }))}
+                      className="wi-detail-input"
+                    />
+                  )}
+                </div>
+                <div className="form-row wi-check-row">
+                  <label>
+                    <input type="checkbox" checked={wiForm.hasSafety} onChange={e => setWiForm(f => ({ ...f, hasSafety: e.target.checked }))} />
+                    Safety / PPE required
+                  </label>
+                  {wiForm.hasSafety && (
+                    <input
+                      type="text"
+                      placeholder="e.g. Gloves, safety glasses"
+                      value={wiForm.safetyDetail}
+                      onChange={e => setWiForm(f => ({ ...f, safetyDetail: e.target.value }))}
+                      className="wi-detail-input"
+                    />
+                  )}
+                </div>
+                <div className="form-row wi-check-row">
+                  <label>
+                    <input type="checkbox" checked={wiForm.needsVisuals} onChange={e => setWiForm(f => ({ ...f, needsVisuals: e.target.checked }))} />
+                    Include placeholders for diagrams / photos
+                  </label>
+                </div>
+                <div className="form-row wi-check-row">
+                  <label>
+                    <input type="checkbox" checked={wiForm.needsChecklist} onChange={e => setWiForm(f => ({ ...f, needsChecklist: e.target.checked }))} />
+                    Include verification checklist
+                  </label>
+                </div>
+                <div className="form-row">
+                  <label>Reference documents (optional)</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. P-001, GEN-OP-02 (comma-separated document IDs from Library)"
+                    value={(config.additionalDocIds || []).join(', ')}
+                    onChange={e => {
+                      const ids = e.target.value.split(/[,\s]+/).map(s => s.trim()).filter(Boolean);
+                      setField('additionalDocIds', ids);
+                    }}
+                  />
+                  <span className="form-hint">Ingested policies or SOPs to use as source material.</span>
+                </div>
+                <div className="form-row">
+                  <label>Requester</label>
+                  <input
+                    type="text"
+                    placeholder="Your name (logged with findings)"
+                    value={config.requester || ''}
+                    onChange={e => setField('requester', e.target.value)}
+                  />
+                </div>
+                <div className="wi-generate-actions">
+                  <button type="button" className="configure-next-btn primary" onClick={handleWiGenerate} disabled={wiLoading}>
+                    {wiLoading ? 'Generating…' : 'Generate Work Instruction'}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Work Instruction draft + refine */}
+            {isWiCreate && wiStep === 'draft' && (
+              <div className="wi-draft-panel">
+                <div className="wi-draft-preview">
+                  <h4>Generated draft</h4>
+                  <pre className="wi-draft-text">{wiDraft}</pre>
+                </div>
+                <div className="wi-refine-block">
+                  <label><MessageSquare size={16} /> Anything else? Add refinements below</label>
+                  <div className="wi-refine-row">
+                    <input
+                      type="text"
+                      placeholder="e.g. Add a note about stirring to avoid lumps"
+                      value={wiRefineInput}
+                      onChange={e => setWiRefineInput(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') handleWiRefine(); }}
+                    />
+                    <button type="button" className="wi-refine-btn" onClick={handleWiRefine} disabled={wiLoading || !wiRefineInput.trim()}>
+                      {wiLoading ? '…' : 'Refine'}
+                    </button>
+                  </div>
+                </div>
+                <div className="wi-proceed-row">
+                  <button type="button" className="configure-next-btn primary" onClick={handleWiProceedToAnalyse}>
+                    Proceed to Analyse
+                  </button>
+                  <button type="button" className="configure-top-btn" onClick={() => setWiStep('questionnaire')}>
+                    Start over
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {!isWiCreate && (
+            <>
             <div className="form-row">
               <label>Document</label>
               {mode === 'review' ? (
@@ -490,10 +735,13 @@ export default function ConfigurePage({ mode = 'review' }) {
               />
               <span className="form-hint">Additional knowledge for agents (site context, constraints, etc.). Policy and standards always take precedence.</span>
             </div>
+            </>
+            )}
           </div>
         </section>
 
-        {/* Supporting docs / reference materials upload */}
+        {/* Supporting docs / reference materials upload — hide for WI create-from-scratch */}
+        {!isWiCreate && (
         <section className="config-section">
           <h3 className="config-section-title">
             {isCreate ? 'Reference Materials' : 'Document to Review'}
@@ -537,6 +785,7 @@ export default function ConfigurePage({ mode = 'review' }) {
             )}
           </div>
         </section>
+        )}
 
         {loading && (
           <div className="ingest-progress-wrap">
@@ -551,6 +800,7 @@ export default function ConfigurePage({ mode = 'review' }) {
           </div>
         )}
 
+        {!isWiCreate && (
         <div className="configure-footer">
           <button type="submit" className="configure-next-btn next-action" disabled={loading}>
             {loading
@@ -560,6 +810,7 @@ export default function ConfigurePage({ mode = 'review' }) {
                 : (config.documentId && !pendingFiles?.length) ? 'Continue to Analyse' : 'Ingest'}
           </button>
         </div>
+        )}
       </form>
     </div>
   );

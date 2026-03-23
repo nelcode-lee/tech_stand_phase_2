@@ -45,6 +45,23 @@ class QueryRequest(BaseModel):
     doc_layer: str | None = None  # Optional: filter by layer (policy, principle, sop, work_instruction)
 
 
+class GenerateWorkInstructionRequest(BaseModel):
+    """Qualifying answers for Work Instruction generation + optional refinement."""
+    task_name: str
+    parent_sop: str | None = None
+    site: str | None = None
+    process_type: str | None = None
+    has_measurements: bool = False
+    measurements_detail: str | None = None
+    has_safety: bool = False
+    safety_detail: str | None = None
+    needs_visuals: bool = False
+    needs_checklist: bool = False
+    reference_doc_ids: list[str] | None = None
+    follow_up_message: str | None = None  # For chat refinement
+    previous_draft: str | None = None  # For chat refinement
+
+
 class AnalyseRequest(BaseModel):
     tracking_id: str
     request_type: str
@@ -144,6 +161,7 @@ def _chunks_from_request(req: AnalyseRequest) -> list[DocumentChunk]:
                 doc_layer=_to_doc_layer(req.doc_layer),
                 sites=req.sites,
                 policy_ref=req.policy_ref,
+                document_id=req.document_id,
                 chunk_index=0,
             )
         ]
@@ -1050,3 +1068,66 @@ async def post_query(body: QueryRequest):
             })
 
     return {"answer": answer, "citations": unique_citations}
+
+
+@router.post("/analysis/generate-work-instruction")
+async def generate_work_instruction_route(body: GenerateWorkInstructionRequest):
+    """
+    Generate or refine a Work Instruction from qualifying questions.
+    First call: use task_name + questionnaire fields.
+    Refinement: use follow_up_message + previous_draft.
+    """
+    from src.pipeline.generate_work_instruction import generate_work_instruction
+    from src.rag.document_registry import (
+        get_document_content,
+        get_policy_clauses,
+        distinct_policy_document_ids_for_standard_names,
+    )
+
+    task_name = (body.task_name or "").strip()
+    if not task_name and not body.follow_up_message:
+        raise HTTPException(status_code=400, detail="task_name is required for initial generation")
+
+    # Fetch policy context (BRCGS + Cranswick MS)
+    from src.pipeline.clause_mapping import _PINNED_POLICY_DOCUMENT_IDS
+    doc_ids = distinct_policy_document_ids_for_standard_names(
+        ["BRCGS Food Safety", "Cranswick Manufacturing Standard"],
+        extra_document_ids=_PINNED_POLICY_DOCUMENT_IDS,
+    )
+    policy_clauses: list[dict] = []
+    for did in doc_ids[:2]:
+        policy_clauses.extend(get_policy_clauses(document_id=did, limit=30))
+    if not policy_clauses and task_name:
+        policy_clauses = get_policy_clauses(standard_name="BRCGS Food Safety", limit=20)
+        policy_clauses.extend(get_policy_clauses(standard_name="Cranswick Manufacturing Standard", limit=20))
+
+    # Fetch reference docs if provided
+    ref_contents: list[str] = []
+    for doc_id in (body.reference_doc_ids or []):
+        doc_id = str(doc_id).strip()
+        if not doc_id:
+            continue
+        try:
+            content, _ = get_document_content(doc_id)
+            if content and content.strip():
+                ref_contents.append(content)
+        except Exception as e:
+            log.debug("Could not fetch ref doc %s: %s", doc_id, e)
+
+    draft, suggested_id = await generate_work_instruction(
+        task_name=task_name or "Untitled",
+        parent_sop=body.parent_sop,
+        site=body.site,
+        process_type=body.process_type,
+        has_measurements=body.has_measurements,
+        measurements_detail=body.measurements_detail,
+        has_safety=body.has_safety,
+        safety_detail=body.safety_detail,
+        needs_visuals=body.needs_visuals,
+        needs_checklist=body.needs_checklist,
+        reference_doc_contents=ref_contents if ref_contents else None,
+        follow_up_message=body.follow_up_message,
+        previous_draft=body.previous_draft,
+        policy_clauses=policy_clauses,
+    )
+    return {"draft": draft, "suggested_document_id": suggested_id}

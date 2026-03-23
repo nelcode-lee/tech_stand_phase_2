@@ -27,10 +27,12 @@ _POLICY_CLAUSE_QUERY_FALLBACK = (
 )
 
 # Words so common in BRCGS / MS clause text they add noise without the phrase bonus below.
+# NOTE: do NOT add operational terms like "check", "document", "record" here — they are
+# meaningful discriminators when extracted from compliance findings.
 _POLICY_QUERY_STOPWORDS = frozenset({
     "shall", "must", "with", "that", "this", "from", "there", "their", "where", "when",
-    "procedure", "document", "process", "record", "check", "checks", "using", "used",
-    "ensure", "appropriate", "relevant", "including", "within", "against", "through",
+    "using", "used", "ensure", "appropriate", "relevant", "including", "within", "against",
+    "through",
 })
 
 

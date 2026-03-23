@@ -72,6 +72,18 @@ export async function analyse(body) {
 }
 
 /**
+ * Generate or refine a Work Instruction from qualifying questions.
+ * @param {object} body - task_name, parent_sop?, site?, process_type?, has_measurements, measurements_detail?, has_safety, safety_detail?, needs_visuals, needs_checklist, reference_doc_ids?, follow_up_message?, previous_draft?
+ * @returns {Promise<{draft: string, suggested_document_id: string}>}
+ */
+export async function generateWorkInstruction(body) {
+  return request('/analysis/generate-work-instruction', {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+}
+
+/**
  * Run analysis with NDJSON streaming: progress events then final result.
  * @param {object} body - Same payload as analyse()
  * @param {(msg: object) => void} [onEvent] - Called for each line: start, progress, complete (complete also returns from promise)
