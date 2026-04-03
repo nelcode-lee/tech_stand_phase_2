@@ -13,7 +13,7 @@ import os
 import re
 
 from src.pipeline.context_limits import slice_document_for_agent
-from src.pipeline.llm import completion, parse_json_object
+from src.pipeline.llm import completion, compliance_llm_temperature, parse_json_object
 from src.pipeline.models import PipelineContext, RiskLevel
 
 log = logging.getLogger(__name__)
@@ -25,6 +25,21 @@ FINDING_VERIFICATION_ENABLED = os.environ.get("FINDING_VERIFICATION_ENABLED", "t
 )
 
 MIN_VERIFICATION_QUOTE_LEN = 25
+_MISSING_INFO_PATTERNS = (
+    r"\bmissing\b",
+    r"\bnot\s+defined\b",
+    r"\bnot\s+specified\b",
+    r"\bnot\s+stated\b",
+    r"\bno\s+(?:defined|clear|explicit|documented)\b",
+    r"\babsent\b",
+    r"\bomitted?\b",
+    r"\bunspecified\b",
+    r"\bunclear\b",
+    r"\bvague\b",
+    r"\bnot\s+referenced\b",
+    r"\bno\s+reference\b",
+    r"\bnot\s+mentioned\b",
+)
 
 _BAND_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 _RISK_LEVEL_MAP = {
@@ -81,7 +96,15 @@ def _quote_verified_in_doc(quote: str, doc: str) -> bool:
 
 
 def _document_text_for_verification(ctx: PipelineContext) -> str:
-    return (ctx.draft_content or ctx.cleansed_content or "").strip()
+    # Prefer original full document content so mitigations in later sections are visible.
+    return (ctx.full_document_content or ctx.draft_content or ctx.cleansed_content or "").strip()
+
+
+def _is_missing_information_issue(issue: str | None) -> bool:
+    text = (issue or "").strip().lower()
+    if not text:
+        return False
+    return any(re.search(pat, text) for pat in _MISSING_INFO_PATTERNS)
 
 
 def _build_finding_manifest(ctx: PipelineContext) -> list[dict]:
@@ -89,6 +112,9 @@ def _build_finding_manifest(ctx: PipelineContext) -> list[dict]:
     rows: list[dict] = []
 
     def add(kind: str, idx: int, issue: str, excerpt: str | None, location: str | None) -> None:
+        # Verification only suppresses "missing/unspecified" style findings.
+        if not _is_missing_information_issue(issue):
+            return
         ex = (excerpt or "").strip()[:400]
         loc = (location or "").strip()[:200]
         iss = (issue or "").strip()[:500]
@@ -114,6 +140,8 @@ def _build_finding_manifest(ctx: PipelineContext) -> list[dict]:
         add("formatting", i, f.issue, f.excerpt, f.location)
     for i, c in enumerate(ctx.cleanser_flags):
         add("cleanser", i, c.issue, c.current_text, c.location)
+    for i, c in enumerate(ctx.terminology_flags):
+        add("terminology", i, c.issue, c.location, c.location)
 
     return rows
 
@@ -131,7 +159,7 @@ async def _verify_batch(doc_slice: str, batch: list[dict]) -> list[tuple[str, st
         + "\n```\n\nFINDINGS TO REVIEW (use exact id strings):\n"
         + "\n".join(lines)
     )
-    raw = await completion(user, system=VERIFICATION_SYSTEM)
+    raw = await completion(user, system=VERIFICATION_SYSTEM, temperature=compliance_llm_temperature())
     data = parse_json_object(raw) or {}
     suppressed = data.get("suppressed")
     if not isinstance(suppressed, list):
@@ -191,6 +219,7 @@ def _apply_suppressions(ctx: PipelineContext, suppress_ids: set[str]) -> int:
     ctx.compliance_flags = drop_by_indices(list(ctx.compliance_flags), "compliance")
     ctx.formatting_flags = drop_by_indices(list(ctx.formatting_flags), "formatting")
     ctx.cleanser_flags = drop_by_indices(list(ctx.cleanser_flags), "cleanser")
+    ctx.terminology_flags = drop_by_indices(list(ctx.terminology_flags), "terminology")
 
     _recompute_overall_risk(ctx)
     return removed_total

@@ -4,7 +4,7 @@ import re
 from src.pipeline.agent_rules import DOCUMENT_REFERENCE_RULE, JOB_TITLE_RULE, TOLERANCE_VS_REFERENCE_RULE, PURPOSE_OBJECTIVE_RULE
 from src.pipeline.base_agent import BaseAgent
 from src.pipeline.context_limits import slice_document_for_agent, slice_policy_appendix_for_agent
-from src.pipeline.llm import completion, parse_json_array
+from src.pipeline.llm import completion, compliance_llm_temperature, parse_json_array
 from src.pipeline.models import (
     PipelineContext,
     ValidationResult,
@@ -20,6 +20,7 @@ CORE PRINCIPLES
 - Do not guess intent.
 - Only flag compliance issues that are directly observable.
 - If no clause text or requirement is provided, you cannot validate it.
+- Food safety: HACCP (Hazard Analysis and Critical Control Points) and CCP records are in scope when the text shows a gap vs BRCGS / regulatory expectation (aligned with Risk agent HACCP context and glossary).
 
 BRC EXPECTATIONS (for loading/despatch procedures)
 - Vehicle hygiene checks: vehicle "free from debris, glass, pests, signs of damp"
@@ -57,8 +58,8 @@ class ValidationAgent(BaseAgent):
     async def run(self, ctx: PipelineContext) -> PipelineContext:
         result = ValidationResult(draft_ready=True)
 
-        # Run compliance analysis on draft content
-        content = ctx.draft_content or ctx.cleansed_content or ""
+        # Compliance flags: prefer cleansed source text so harmonisation/sessions are stable vs draft/HITL edits.
+        content = (ctx.cleansed_content or ctx.draft_content or "").strip()
         if content:
             try:
                 doc_slice = slice_document_for_agent(content)
@@ -70,7 +71,7 @@ class ValidationAgent(BaseAgent):
                 system = VALIDATION_COMPLIANCE_PROMPT
                 if getattr(ctx, "glossary_block", None) and (ctx.glossary_block or "").strip():
                     system += "\n\n" + (ctx.glossary_block or "").strip()
-                raw = await completion(prompt, system=system)
+                raw = await completion(prompt, system=system, temperature=compliance_llm_temperature())
                 items = parse_json_array(raw)
                 for item in items:
                     if isinstance(item, dict) and item.get("location") and item.get("issue") and item.get("recommendation"):

@@ -231,6 +231,7 @@ export default function ConfigurePage({ mode = 'review' }) {
 
     let docIdForNav = config?.documentId?.trim() || '';
     let docTitleForNav = config?.title || docIdForNav;
+    let ingestSummary = null;
     if (hasUpload) {
       const bad = pendingFiles.find(f => !isAllowedFileName(f.name));
       if (bad) {
@@ -243,6 +244,7 @@ export default function ConfigurePage({ mode = 'review' }) {
         const sitesForApi = resolveSitesForApi(sitesArr);
         const existingAdditional = Array.isArray(config?.additionalDocIds) ? config.additionalDocIds : [];
         const ingestedIds = [];
+        const ingestStats = [];
 
         for (const f of pendingFiles) {
           const docIdForIngest = f.name.replace(/\.[^.]+$/, '').replace(/\s+/g, '-');
@@ -253,7 +255,13 @@ export default function ConfigurePage({ mode = 'review' }) {
             policy_ref: mode === 'create' ? (config?.policyRef || undefined) : undefined,
             title: f.name.replace(/\.[^.]+$/, '') || docIdForIngest,
           });
-          ingestedIds.push(res.document_id || docIdForIngest);
+          const finalDocId = res.document_id || docIdForIngest;
+          ingestedIds.push(finalDocId);
+          ingestStats.push({
+            documentId: finalDocId,
+            title: res.title || f.name.replace(/\.[^.]+$/, '') || finalDocId,
+            chunksIngested: Number(res.chunks_ingested) || 0,
+          });
         }
 
         setPendingFiles([]);
@@ -275,6 +283,14 @@ export default function ConfigurePage({ mode = 'review' }) {
         }
 
         setStatus({ ok: true, message: `Ingested ${ingestedIds.length} document(s).` });
+        ingestSummary = {
+          fileCount: pendingFiles.length,
+          documentCount: ingestedIds.length,
+          totalChunks: ingestStats.reduce((sum, item) => sum + (item.chunksIngested || 0), 0),
+          primaryDocumentId: ingestedIds[0] || '',
+          primaryTitle: pendingFiles[0]?.name?.replace(/\.[^.]+$/, '') || ingestedIds[0] || '',
+          items: ingestStats,
+        };
         logInteraction('ingest_success', {
           file_count: pendingFiles.length,
           files: pendingFiles.map(f => f.name),
@@ -295,13 +311,22 @@ export default function ConfigurePage({ mode = 'review' }) {
     }
 
     const docId = docIdForNav;
-    const analyseUrl = docId ? `${base}/analyse?documentId=${encodeURIComponent(docId)}` : `${base}/analyse`;
-    navigate(analyseUrl, { state: { fromIngest: true, documentId: docId, title: docTitleForNav, docLayer: config?.docLayer || 'sop' }, replace: true });
+    const analyseUrl = docId ? `${base}/analyse/overview?documentId=${encodeURIComponent(docId)}` : `${base}/analyse/overview`;
+    navigate(analyseUrl, {
+      state: {
+        fromIngest: true,
+        documentId: docId,
+        title: docTitleForNav,
+        docLayer: config?.docLayer || 'sop',
+        ingestSummary,
+      },
+      replace: true,
+    });
   }
 
   function goToAnalyse() {
     const docId = config?.documentId?.trim() || '';
-    const url = docId ? `${base}/analyse?documentId=${encodeURIComponent(docId)}` : `${base}/analyse`;
+    const url = docId ? `${base}/analyse/overview?documentId=${encodeURIComponent(docId)}` : `${base}/analyse/overview`;
     navigate(url, { state: docId ? { fromIngest: false, documentId: docId, title: config?.title || docId, docLayer: config?.docLayer || 'sop' } : undefined });
   }
 
@@ -369,7 +394,8 @@ export default function ConfigurePage({ mode = 'review' }) {
     const title = wiForm.taskName || config?.title || docId;
     const sites = wiForm.site ? [wiForm.site] : (config?.sites || []);
     setConfig(c => ({ ...c, documentId: docId, title, sites }));
-    navigate(`${base}/analyse`, {
+    const url = `${base}/analyse/overview${docId ? `?documentId=${encodeURIComponent(docId)}` : ''}`;
+    navigate(url, {
       state: { generatedContent: wiDraft, documentId: docId, title, docLayer: 'work_instruction', sites },
       replace: true,
     });
@@ -769,6 +795,7 @@ export default function ConfigurePage({ mode = 'review' }) {
               type="file"
               accept=".docx,.pdf,.doc,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,text/plain"
               multiple
+              onClick={e => e.stopPropagation()}
               onChange={handleFileSelect}
               className="upload-input"
               id="config-upload-input"

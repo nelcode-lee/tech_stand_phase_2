@@ -18,16 +18,32 @@ function errorMessage(err, fallback) {
   return err.message || fallback;
 }
 
-async function request(path, options = {}) {
+/** Fetch with timeout. ms=0 means no timeout. */
+function fetchWithTimeout(url, options = {}, ms = 60000) {
+  if (ms <= 0) return fetch(url, options);
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), ms);
+  return fetch(url, { ...options, signal: ctrl.signal }).finally(() => clearTimeout(t));
+}
+
+async function request(path, options = {}, timeoutMs = 30000) {
   const url = `${BASE}${path}`;
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
-  });
+  let res;
+  try {
+    res = await fetchWithTimeout(url, {
+      ...options,
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        ...options.headers,
+      },
+    }, timeoutMs);
+  } catch (e) {
+    if (e.name === 'AbortError' || (e.message && e.message.includes('aborted'))) {
+      throw new Error('Request timed out. The backend may be slow or unavailable.');
+    }
+    throw e;
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(errorMessage(err, res.statusText || `HTTP ${res.status}`));
@@ -176,7 +192,7 @@ export async function queryDocuments(question, documentId, docLayer) {
  * Returns an array of { document_id, title, doc_layer, sites, library, source_path, chunk_count }.
  */
 export async function listDocuments() {
-  return request('/ingest/documents');
+  return request('/ingest/documents', {}, 60000);
 }
 
 /**
@@ -225,7 +241,7 @@ export async function clearSopsAndResetMetrics() {
  * Returns { document_id, content, sections }.
  */
 export async function getDocumentContent(documentId) {
-  return request(`/ingest/documents/${encodeURIComponent(documentId)}/content`);
+  return request(`/ingest/documents/${encodeURIComponent(documentId)}/content`, {}, 60000);
 }
 
 /**
@@ -234,7 +250,15 @@ export async function getDocumentContent(documentId) {
  */
 export async function getDocumentFile(documentId) {
   const url = `${BASE}/ingest/documents/${encodeURIComponent(documentId)}/file`;
-  const res = await fetch(url);
+  let res;
+  try {
+    res = await fetchWithTimeout(url, {}, 60000);
+  } catch (e) {
+    if (e.name === 'AbortError' || (e.message && e.message.includes('aborted'))) {
+      throw new Error('Request timed out. The document may be large or the backend is slow.');
+    }
+    throw e;
+  }
   if (!res.ok) {
     if (res.status === 404) return null;
     const err = await res.json().catch(() => ({}));
@@ -249,7 +273,7 @@ export async function getDocumentFile(documentId) {
  *   totalFindings, agentsRun, agentFindings, workflowType, completedAt }.
  */
 export async function listAnalysisSessions(limit = 50) {
-  return request(`/analysis/sessions?limit=${limit}`);
+  return request(`/analysis/sessions?limit=${limit}`, {}, 45000);
 }
 
 /**
@@ -257,6 +281,17 @@ export async function listAnalysisSessions(limit = 50) {
  */
 export async function getAnalysisSession(trackingId) {
   return request(`/analysis/sessions/${encodeURIComponent(trackingId)}`);
+}
+
+/**
+ * Fetch harmonisation scorecard for a document.
+ */
+export async function getHarmonisationScorecard(documentId, options = {}) {
+  const params = new URLSearchParams();
+  if (options.site) params.set('site', options.site);
+  if (options.docLayer) params.set('doc_layer', options.docLayer);
+  const qs = params.toString();
+  return request(`/analysis/harmonisation-scorecard/${encodeURIComponent(documentId)}${qs ? `?${qs}` : ''}`);
 }
 
 /**
@@ -302,6 +337,135 @@ export async function saveAnalysisSession(body) {
     method: 'POST',
     body: JSON.stringify(body),
   });
+}
+
+/**
+ * Build audit & regulatory readiness Markdown pack (server-side). Returns blob + filename from Content-Disposition.
+ * @param {object} payload - Full analysis result JSON (same shape as /analyse), optional `sites` array.
+ */
+export async function downloadAuditPack(payload) {
+  const url = `${BASE}/analysis/audit-pack`;
+  let body;
+  try {
+    body = JSON.stringify(payload);
+  } catch (e) {
+    throw new Error(
+      e instanceof Error && e.message.includes('circular')
+        ? 'Cannot build audit pack: result payload is not serialisable (try saving and reloading the session).'
+        : 'Cannot build audit pack: failed to serialise analysis data.',
+    );
+  }
+  let res;
+  try {
+    res = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: {
+          Accept: 'text/markdown',
+          'Content-Type': 'application/json',
+        },
+        body,
+      },
+      120000,
+    );
+  } catch (e) {
+    if (e.name === 'AbortError' || (e.message && e.message.includes('aborted'))) {
+      throw new Error('Request timed out. The backend may be slow or unavailable.');
+    }
+    throw e;
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(errorMessage(err, res.statusText || `HTTP ${res.status}`));
+  }
+  const cd = res.headers.get('Content-Disposition') || '';
+  let filename = 'audit-pack.md';
+  const star = /filename\*=UTF-8''([^;\s]+)/i.exec(cd);
+  if (star) {
+    try {
+      filename = decodeURIComponent(star[1]);
+    } catch {
+      filename = star[1];
+    }
+  } else {
+    const quoted = /filename="([^"]+)"/i.exec(cd);
+    if (quoted) filename = quoted[1];
+    else {
+      const plain = /filename=([^;\s]+)/i.exec(cd);
+      if (plain) filename = plain[1].replace(/^["']|["']$/g, '');
+    }
+  }
+  const text = await res.text();
+  if (!text.length) {
+    throw new Error('Audit pack response was empty. Check the backend logs.');
+  }
+  const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+  return { blob, filename };
+}
+
+/**
+ * Build structured audit & regulatory readiness DOCX pack (server-side). Returns blob + filename from Content-Disposition.
+ * @param {object} payload - Full analysis result JSON (same shape as /analyse), optional `sites` array.
+ */
+export async function downloadAuditPackDocx(payload) {
+  const url = `${BASE}/analysis/audit-pack.docx`;
+  let body;
+  try {
+    body = JSON.stringify(payload);
+  } catch (e) {
+    throw new Error(
+      e instanceof Error && e.message.includes('circular')
+        ? 'Cannot build audit pack: result payload is not serialisable (try saving and reloading the session).'
+        : 'Cannot build audit pack: failed to serialise analysis data.',
+    );
+  }
+  let res;
+  try {
+    res = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: {
+          Accept: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          'Content-Type': 'application/json',
+        },
+        body,
+      },
+      180000,
+    );
+  } catch (e) {
+    if (e.name === 'AbortError' || (e.message && e.message.includes('aborted'))) {
+      throw new Error('Request timed out. The backend may be slow or unavailable.');
+    }
+    throw e;
+  }
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(errorMessage(err, res.statusText || `HTTP ${res.status}`));
+  }
+  const cd = res.headers.get('Content-Disposition') || '';
+  let filename = 'audit-pack.docx';
+  const star = /filename\*=UTF-8''([^;\s]+)/i.exec(cd);
+  if (star) {
+    try {
+      filename = decodeURIComponent(star[1]);
+    } catch {
+      filename = star[1];
+    }
+  } else {
+    const quoted = /filename="([^"]+)"/i.exec(cd);
+    if (quoted) filename = quoted[1];
+    else {
+      const plain = /filename=([^;\s]+)/i.exec(cd);
+      if (plain) filename = plain[1].replace(/^["']|["']$/g, '');
+    }
+  }
+  const blob = await res.blob();
+  if (!blob || blob.size === 0) {
+    throw new Error('Audit pack response was empty. Check the backend logs.');
+  }
+  return { blob, filename };
 }
 
 /**

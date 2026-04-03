@@ -1,5 +1,7 @@
-"""Pipeline router: selects agents and runs the pipeline. Runs independent agents in parallel to reduce latency."""
+"""Pipeline router: selects agents and runs the pipeline."""
 import asyncio
+import os
+import time
 from collections.abc import Awaitable, Callable
 
 from src.pipeline.models import (
@@ -38,6 +40,14 @@ PARALLEL_GROUP = {"terminology", "conflict", "specifying", "sequencing", "format
 # Risk runs after conflict (uses ctx.conflicts); validation runs after all (uses other flags for summary)
 RISK_AFTER = "conflict"
 VALIDATION_LAST = "validation"
+
+# Sequential by default for clearer progress/trust in review workflows.
+# Set PIPELINE_PARALLEL_SPECIALISTS=true to re-enable parallel specialist wave.
+ENABLE_PARALLEL_SPECIALISTS = os.environ.get("PIPELINE_PARALLEL_SPECIALISTS", "false").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 # Stable order for progress UI when emitting parallel specialist agents (matches typical pipeline order)
 _PARALLEL_PROGRESS_ORDER = {
@@ -100,15 +110,18 @@ class PipelineRouter:
             agent = agents[i]
             await emit(agent.name)
             # Run a single agent
+            started = time.perf_counter()
             ctx = await agent.run(ctx)
+            duration_ms = int((time.perf_counter() - started) * 1000)
             ctx.agents_run.append(agent.name)
+            ctx.agent_timings.append({"agent": agent.name, "duration_ms": duration_ms})
             blockers = [e for e in ctx.errors if e.severity == "critical"]
             if blockers:
                 break
             i += 1
-            # If next agents are in PARALLEL_GROUP, run them all in parallel
+            # If enabled, run eligible specialist agents in parallel.
             wave = []
-            while i < len(agents) and agents[i].name in PARALLEL_GROUP:
+            while ENABLE_PARALLEL_SPECIALISTS and i < len(agents) and agents[i].name in PARALLEL_GROUP:
                 wave.append(agents[i])
                 i += 1
             if wave:
@@ -118,9 +131,18 @@ class PipelineRouter:
                 )
                 for a in wave_sorted:
                     await emit(a.name)
-                results = await asyncio.gather(*[a.run(ctx) for a in wave])
+                async def run_with_timing(a: BaseAgent) -> tuple[BaseAgent, PipelineContext, int]:
+                    started = time.perf_counter()
+                    out = await a.run(ctx)
+                    duration_ms = int((time.perf_counter() - started) * 1000)
+                    return a, out, duration_ms
+
+                timed_results = await asyncio.gather(*[run_with_timing(a) for a in wave])
+                results = [res for _, res, _ in timed_results]
                 for a in wave:
                     ctx.agents_run.append(a.name)
+                for a, _, duration_ms in timed_results:
+                    ctx.agent_timings.append({"agent": a.name, "duration_ms": duration_ms})
                 ctx = _merge_parallel_agent_results(results)
                 blockers = [e for e in ctx.errors if e.severity == "critical"]
                 if blockers:
@@ -129,8 +151,11 @@ class PipelineRouter:
         while i < len(agents):
             agent = agents[i]
             await emit(agent.name)
+            started = time.perf_counter()
             ctx = await agent.run(ctx)
+            duration_ms = int((time.perf_counter() - started) * 1000)
             ctx.agents_run.append(agent.name)
+            ctx.agent_timings.append({"agent": agent.name, "duration_ms": duration_ms})
             blockers = [e for e in ctx.errors if e.severity == "critical"]
             if blockers:
                 break

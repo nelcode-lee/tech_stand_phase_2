@@ -4,7 +4,7 @@ Uses policy context (BRCGS, Cranswick MS) and reference docs when provided.
 """
 import re
 
-from src.pipeline.llm import completion
+from src.pipeline.llm import completion_for_draft
 
 
 WI_SYSTEM = """You are a Technical Standards Officer for a UK food manufacturer (Cranswick).
@@ -147,7 +147,7 @@ REFERENCE MATERIAL (from Library):
 """
         user += "\n\nOutput the Work Instruction now. Plain text only, no markdown."
 
-    out = await completion(user, system=WI_SYSTEM)
+    out = await completion_for_draft(user, system=WI_SYSTEM)
     draft = (out or "").strip()
     suggested_id = f"WI-{_slug(task_name)}" if task_name else "WI-unnamed"
     return draft, suggested_id

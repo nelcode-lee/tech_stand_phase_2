@@ -2,7 +2,7 @@
 from src.pipeline.base_agent import BaseAgent
 from src.pipeline.context_limits import slice_document_for_agent
 from src.pipeline.domain import load_domain_context
-from src.pipeline.llm import completion
+from src.pipeline.llm import completion_for_draft
 from src.pipeline.models import PipelineContext
 
 DRAFT_LAYOUT_SYSTEM = """You are restructuring a procedure document into the Cranswick FSP003-style draft layout for human-in-the-loop review.
@@ -68,7 +68,7 @@ class DraftLayoutAgent(BaseAgent):
         )
 
         try:
-            raw = await completion(prompt, system=system)
+            raw = await completion_for_draft(prompt, system=system)
             if raw and raw.strip():
                 ctx.draft_content = raw.strip()
             else:

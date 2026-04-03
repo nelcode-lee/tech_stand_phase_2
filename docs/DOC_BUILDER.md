@@ -10,7 +10,7 @@
 The document builder (and upstream agents) infer requirements from:
 
 1. **Checklist categories** — Hardcoded in agents (e.g. `_SITE_TYPE_CATEGORIES`, `_CROSS_DOC_CATEGORIES` in risk agent). Injected into prompts as guidance.
-2. **Domain context** — `domain_context.json`: severity rules, FMEA scales, regulatory references (names only), standard sections.
+2. **Domain context** — `domain_context.json`: severity rules, HACCP RPN bands, regulatory references (names only), standard sections.
 3. **Document content** — The primary document (cleansed content) and findings from analysis.
 4. **Parent policy** — When `policy_ref` is set, parent policy content is retrieved and passed to agents.
 

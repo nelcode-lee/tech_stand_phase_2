@@ -203,6 +203,7 @@ export default function LibraryUploadPage() {
               ref={fileInputRef}
               type="file"
               accept=".docx,.pdf,.doc"
+              onClick={e => e.stopPropagation()}
               onChange={e => {
                 const f = e.target.files?.[0];
                 if (f) {

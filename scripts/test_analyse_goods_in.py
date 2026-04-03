@@ -79,7 +79,7 @@ def badge(text: str, style: str) -> str:
     return f"{STYLES.get(style, '▪')} **{text}**"
 
 
-def fmea_bar(band: str) -> str:
+def haccp_rpn_bar(band: str) -> str:
     BARS = {
         "critical": "████████████  CRITICAL",
         "high":     "█████████     HIGH",
@@ -110,8 +110,12 @@ else:
         lines.append(f"### {badge(g.get('gap_type','Gap'), sev)} — {g.get('gap_type','')}")
         lines.append(f"> {g.get('description','')}\n")
         if score is not None:
-            lines.append(f"**FMEA:** `{fmea_bar(band)}` (score {score})  ")
-            lines.append(f"S={g.get('severity')} · Sc={g.get('scope')} · D={g.get('detectability')}  ")
+            lines.append(f"**HACCP RPN:** `{haccp_rpn_bar(band)}` (score {score})  ")
+            lik = g.get("likelihood") or g.get("scope")
+            det = g.get("detectability")
+            lines.append(
+                f"S={g.get('severity')} · L={lik} · D={det or '3 (default)'}  "
+            )
         if g.get("location"):
             lines.append(f"**Location:** {g['location']}  ")
         if g.get("recommendation"):

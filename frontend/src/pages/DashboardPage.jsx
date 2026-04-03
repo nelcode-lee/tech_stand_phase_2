@@ -11,9 +11,10 @@ import {
   Activity,
   ShieldAlert,
   RefreshCw,
+  Target,
 } from 'lucide-react';
 import { useAnalysis } from '../context/AnalysisContext';
-import { addInteractionLog, listDocuments, listAnalysisSessions } from '../api';
+import { addInteractionLog, getHarmonisationScorecard, listDocuments, listAnalysisSessions } from '../api';
 import { computeRiskMetrics } from '../utils/riskMetrics';
 import './DashboardPage.css';
 
@@ -203,6 +204,8 @@ export default function DashboardPage() {
   const [loadingSessions, setLoadingSessions] = useState(false);
   const [sessionsError, setSessionsError] = useState(null);
   const [dismissedAlerts, setDismissedAlerts] = useState(loadDismissedAlerts);
+  const [harmonisationSnapshot, setHarmonisationSnapshot] = useState([]);
+  const [loadingHarmonisation, setLoadingHarmonisation] = useState(false);
 
   async function fetchDocs() {
     setLoadingDocs(true);
@@ -318,8 +321,8 @@ export default function DashboardPage() {
     return Math.max(0, siteFilteredSessions.length - sessionsForMetrics.length);
   }, [loadingDocs, docsError, backendDocs.length, siteFilteredSessions, sessionsForMetrics]);
 
-  // Gap-level FMEA bands (aggregated from risk_metrics / local result)
-  const fmeaGapTotals = useMemo(() => {
+  // Gap-level HACCP RPN bands (aggregated from risk_metrics / local result)
+  const haccpGapTotals = useMemo(() => {
     const counts = { low: 0, medium: 0, high: 0, critical: 0 };
     let unknown = 0;
     let hasData = false;
@@ -339,21 +342,57 @@ export default function DashboardPage() {
     return { counts, unknown, total: total > 0 ? total : 1, hasData, sumBands };
   }, [sessionsForMetrics]);
 
-  const repeatDocAnalyses = useMemo(() => {
-    const m = new Map();
+  const harmonisationDocIds = useMemo(() => {
+    const latest = new Map();
     for (const s of sessionsForMetrics) {
       const docId = s.documentId || s.document_id;
-      if (!docId) continue;
-      const cur = m.get(docId) || { documentId: docId, title: s.title || docId, count: 0 };
-      cur.count += 1;
-      if (s.title) cur.title = s.title;
-      m.set(docId, cur);
+      if (!docId || !String(docId).trim()) continue;
+      const t = sessionTimestamp(s);
+      const prev = latest.get(docId);
+      if (!prev || t > prev.t) latest.set(docId, { t, title: s.title || docId });
     }
-    return [...m.values()]
-      .filter((x) => x.count > 1)
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 8);
+    return [...latest.entries()]
+      .sort((a, b) => b[1].t - a[1].t)
+      .slice(0, 8)
+      .map(([documentId, meta]) => ({ documentId, title: meta.title }));
   }, [sessionsForMetrics]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (harmonisationDocIds.length === 0) {
+      setHarmonisationSnapshot([]);
+      setLoadingHarmonisation(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+    const siteOpt = selectedSite !== 'all' ? selectedSite : '';
+    setLoadingHarmonisation(true);
+    const ids = harmonisationDocIds;
+    Promise.all(
+      ids.map(({ documentId }) =>
+        getHarmonisationScorecard(documentId, { site: siteOpt, docLayer: '' })
+          .then((data) => ({
+            documentId: data.document_id || documentId,
+            title: data.title || documentId,
+            score: data.summary?.harmonisation_score ?? 0,
+            missing: data.summary?.missing ?? 0,
+            conflict: data.summary?.conflict ?? 0,
+            partial: data.summary?.partial ?? 0,
+            covered: data.summary?.covered ?? 0,
+            gatePassed: data.summary?.gate_passed === true,
+          }))
+          .catch(() => null),
+      ),
+    ).then((rows) => {
+      if (cancelled) return;
+      setHarmonisationSnapshot(rows.filter(Boolean));
+      setLoadingHarmonisation(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [harmonisationDocIds, selectedSite]);
 
   // ---- Derived KPIs ---------------------------------------------------
 
@@ -380,9 +419,9 @@ export default function DashboardPage() {
       riskCounts,
       overdueReviews: 0,   // Without a review DB, leave at 0
       reviewsDue:     0,
-      criticalFmeaGaps: fmeaGapTotals.counts.critical,
+      criticalHaccpGaps: haccpGapTotals.counts.critical,
     };
-  }, [backendDocs.length, siteFilteredDocIds, sessionsForMetrics, fmeaGapTotals]);
+  }, [backendDocs.length, siteFilteredDocIds, sessionsForMetrics, haccpGapTotals]);
 
   // Agent breakdown: findings (flags) vs pipeline runs per agent
   const agentStats = useMemo(() => {
@@ -546,14 +585,6 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {hiddenSessionCount > 0 && (
-        <div className="dash-info-banner" role="status">
-          <strong>{hiddenSessionCount}</strong> saved analysis session(s) refer to documents that are no longer in the Library
-          (or have no document ID). Totals and Attention Required below only include sessions for documents currently in the Library.
-          To remove old metrics from the database, use <strong>Settings → Clear all SOP data &amp; reset metrics</strong> (or the full library reset).
-        </div>
-      )}
-
       {/* Workflow hint — start here for new users */}
       <div className="workflow-hint" role="status">
         <span className="workflow-hint-label">Start here</span>
@@ -601,8 +632,8 @@ export default function DashboardPage() {
         <div className="kpi-card">
           <span className="kpi-icon kpi-icon-red"><AlertTriangle size={18} /></span>
           <div>
-            <span className="kpi-value">{kpi.criticalFmeaGaps}</span>
-            <span className="kpi-label">Critical FMEA gaps</span>
+            <span className="kpi-value">{kpi.criticalHaccpGaps}</span>
+            <span className="kpi-label">Critical HACCP (RPN) gaps</span>
           </div>
         </div>
         <div className="kpi-card">
@@ -761,11 +792,11 @@ export default function DashboardPage() {
           )}
         </section>
 
-        {/* Document health + gap-level FMEA */}
+        {/* Document health + gap-level HACCP RPN */}
         <section className="dash-card dash-health">
           <h2 className="dash-card-title">
             <FileText size={15} />
-            Risk profile &amp; FMEA gaps
+            Risk profile (HACCP)
           </h2>
           {sessionsForMetrics.length === 0 ? (
             <p className="dash-empty">
@@ -804,40 +835,41 @@ export default function DashboardPage() {
                 <span>{healthCounts.critical} critical</span>
               </div>
 
-              <h3 className="dash-health-subtitle dash-health-subtitle-spaced">Risk gaps by FMEA band</h3>
-              {!fmeaGapTotals.hasData ? (
-                <p className="dash-chart-hint dash-fmea-missing">
-                  Gap-level FMEA counts appear after analyses that store risk metrics (new runs and re-saved sessions). Local browser sessions from this device include them immediately.
+              <h3 className="dash-health-subtitle dash-health-subtitle-spaced">Risk gaps by HACCP RPN band</h3>
+              <p className="dash-chart-hint">Food safety / HACCP-related gaps use higher severity floors in domain rules before RPN scoring.</p>
+              {!haccpGapTotals.hasData ? (
+                <p className="dash-chart-hint dash-haccp-missing">
+                  Gap-level HACCP RPN counts appear after analyses that store risk metrics (new runs and re-saved sessions). Local browser sessions from this device include them immediately.
                 </p>
               ) : (
                 <>
                   <p className="dash-chart-hint">Each risk gap is counted once (aggregated across filtered sessions).</p>
                   <div className="health-legend">
-                    <span className="legend-dot legend-current" /> Low ({fmeaGapTotals.counts.low})
-                    <span className="legend-dot legend-due" /> Medium ({fmeaGapTotals.counts.medium})
-                    <span className="legend-dot legend-overdue" /> High ({fmeaGapTotals.counts.high})
-                    <span className="legend-dot" style={{ background: '#7f0000' }} /> Critical ({fmeaGapTotals.counts.critical})
-                    {fmeaGapTotals.unknown > 0 && (
+                    <span className="legend-dot legend-current" /> Low ({haccpGapTotals.counts.low})
+                    <span className="legend-dot legend-due" /> Medium ({haccpGapTotals.counts.medium})
+                    <span className="legend-dot legend-overdue" /> High ({haccpGapTotals.counts.high})
+                    <span className="legend-dot" style={{ background: '#7f0000' }} /> Critical ({haccpGapTotals.counts.critical})
+                    {haccpGapTotals.unknown > 0 && (
                       <>
-                        <span className="legend-dot legend-draft" /> Unbanded ({fmeaGapTotals.unknown})
+                        <span className="legend-dot legend-draft" /> Unbanded ({haccpGapTotals.unknown})
                       </>
                     )}
                   </div>
                   <div className="health-bar-wrap">
-                    {fmeaGapTotals.counts.low > 0 && (
-                      <div className="health-bar health-current" style={{ width: `${(fmeaGapTotals.counts.low / fmeaGapTotals.total) * 100}%` }} title={`${fmeaGapTotals.counts.low} low-band gaps`} />
+                    {haccpGapTotals.counts.low > 0 && (
+                      <div className="health-bar health-current" style={{ width: `${(haccpGapTotals.counts.low / haccpGapTotals.total) * 100}%` }} title={`${haccpGapTotals.counts.low} low-band gaps`} />
                     )}
-                    {fmeaGapTotals.counts.medium > 0 && (
-                      <div className="health-bar health-due" style={{ width: `${(fmeaGapTotals.counts.medium / fmeaGapTotals.total) * 100}%` }} title={`${fmeaGapTotals.counts.medium} medium-band gaps`} />
+                    {haccpGapTotals.counts.medium > 0 && (
+                      <div className="health-bar health-due" style={{ width: `${(haccpGapTotals.counts.medium / haccpGapTotals.total) * 100}%` }} title={`${haccpGapTotals.counts.medium} medium-band gaps`} />
                     )}
-                    {fmeaGapTotals.counts.high > 0 && (
-                      <div className="health-bar health-overdue" style={{ width: `${(fmeaGapTotals.counts.high / fmeaGapTotals.total) * 100}%` }} title={`${fmeaGapTotals.counts.high} high-band gaps`} />
+                    {haccpGapTotals.counts.high > 0 && (
+                      <div className="health-bar health-overdue" style={{ width: `${(haccpGapTotals.counts.high / haccpGapTotals.total) * 100}%` }} title={`${haccpGapTotals.counts.high} high-band gaps`} />
                     )}
-                    {fmeaGapTotals.counts.critical > 0 && (
-                      <div className="health-bar" style={{ width: `${(fmeaGapTotals.counts.critical / fmeaGapTotals.total) * 100}%`, background: '#7f0000' }} title={`${fmeaGapTotals.counts.critical} critical-band gaps`} />
+                    {haccpGapTotals.counts.critical > 0 && (
+                      <div className="health-bar" style={{ width: `${(haccpGapTotals.counts.critical / haccpGapTotals.total) * 100}%`, background: '#7f0000' }} title={`${haccpGapTotals.counts.critical} critical-band gaps`} />
                     )}
-                    {fmeaGapTotals.unknown > 0 && (
-                      <div className="health-bar health-unknown-band" style={{ width: `${(fmeaGapTotals.unknown / fmeaGapTotals.total) * 100}%` }} title={`${fmeaGapTotals.unknown} gaps without band`} />
+                    {haccpGapTotals.unknown > 0 && (
+                      <div className="health-bar health-unknown-band" style={{ width: `${(haccpGapTotals.unknown / haccpGapTotals.total) * 100}%` }} title={`${haccpGapTotals.unknown} gaps without band`} />
                     )}
                   </div>
                 </>
@@ -846,35 +878,41 @@ export default function DashboardPage() {
           )}
         </section>
 
-        {/* Documents analysed more than once */}
-        <section className="dash-card dash-repeat-docs">
+        {/* Latest harmonisation scores (policy alignment from saved sessions) */}
+        <section className="dash-card dash-harmonisation-snapshot">
           <h2 className="dash-card-title">
-            <Activity size={15} />
-            Repeat analyses
+            <Target size={15} />
+            Harmonisation snapshot
           </h2>
-          {repeatDocAnalyses.length === 0 ? (
-            <p className="dash-empty">No document has more than one analysis in the current filter. Re-run reviews to track iteration here.</p>
+          <p className="dash-chart-hint">
+            Latest saved analysis per document — alignment score from compliance flags and clause mapping.
+          </p>
+          {loadingHarmonisation && harmonisationSnapshot.length === 0 ? (
+            <p className="dash-empty">Loading harmonisation metrics…</p>
+          ) : harmonisationSnapshot.length === 0 ? (
+            <p className="dash-empty">
+              No scorecard data for recent sessions. Run an analysis (with a saved session) or open the full scorecard.
+            </p>
           ) : (
-            <ul className="repeat-doc-list">
-              {repeatDocAnalyses.map((row) => (
-                <li key={row.documentId} className="repeat-doc-item">
-                  <span className="repeat-doc-title" title={row.title}>{row.title}</span>
-                  <span className="repeat-doc-count">{row.count}×</span>
+            <ul className="harmon-snap-list">
+              {harmonisationSnapshot.map((row) => (
+                <li key={row.documentId} className="harmon-snap-item">
+                  <span className="harmon-snap-title" title={row.title}>{row.title}</span>
+                  <div className="harmon-snap-metrics">
+                    <span className={`harmon-snap-score ${row.gatePassed ? 'harmon-snap-gate-ok' : ''}`} title="Harmonisation score">
+                      {row.score}%
+                    </span>
+                    <span className="harmon-snap-detail" title="Missing and conflict clause gaps">
+                      Missing {row.missing} · Conflict {row.conflict}
+                      {row.partial > 0 ? ` · Partial ${row.partial}` : ''}
+                    </span>
+                  </div>
                   <button
                     type="button"
-                    className="repeat-doc-action"
-                    onClick={() => {
-                      setWorkflowMode('review');
-                      setConfig((c) => ({
-                        ...c,
-                        requestType: 'single_document_review',
-                        documentId: row.documentId,
-                        title: row.title,
-                      }));
-                      navigate('/review/configure');
-                    }}
+                    className="harmon-snap-action"
+                    onClick={() => navigate('/harmonisation', { state: { documentId: row.documentId } })}
                   >
-                    Review
+                    Scorecard
                   </button>
                 </li>
               ))}

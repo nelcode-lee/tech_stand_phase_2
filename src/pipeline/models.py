@@ -1,6 +1,8 @@
 """Pipeline models: PipelineContext, agent outputs, enums."""
 from enum import Enum
-from pydantic import BaseModel, Field
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field, model_validator
 
 from src.rag.models import DocLayer, DocumentChunk
 
@@ -53,9 +55,9 @@ class Conflict(BaseModel):
 
 class RiskScore(BaseModel):
     conflict_ref: str
-    severity: int  # 1-5
-    scope: int  # 1-5
-    detectability: int  # 1-5
+    severity: int  # 1-6
+    likelihood: int  # 1-6
+    detectability: int  # 1-6
     score: int
     band: str  # low | medium | high | critical
     rationale: str
@@ -63,17 +65,26 @@ class RiskScore(BaseModel):
 
 
 class RiskGap(BaseModel):
-    """Gap or assumption identified by Risk agent."""
+    """Gap or assumption identified by Risk agent. HACCP score = severity × likelihood × detectability (JSON fields fmea_score / fmea_band retained for API compatibility)."""
     location: str
     excerpt: str | None = None  # Exact text from document to highlight (copy-paste from source)
     issue: str
     risk: str
     recommendation: str
-    severity: int = 0          # FMEA severity 1–5 (0 = not scored)
-    scope: int = 0             # FMEA scope 1–5
-    detectability: int = 0     # FMEA detectability 1–5
-    fmea_score: int = 0        # RPN = severity × scope × detectability (1–125)
-    fmea_band: str = ""        # low | medium | high | critical
+    severity: int = 0          # 1–6 (0 = not scored)
+    likelihood: int = 0       # 1–6; failure likelihood under current controls
+    detectability: int = 0    # 1–6, or 0 = omitted (server uses neutral default for product)
+    fmea_score: int = 0       # HACCP score = S×L×D (1–216); field name legacy
+    fmea_band: str = ""       # low | medium | high | critical; field name legacy
+
+    @model_validator(mode="before")
+    @classmethod
+    def _legacy_scope_to_likelihood(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        if "likelihood" not in data and "scope" in data:
+            return {**data, "likelihood": data.get("scope") or 0}
+        return data
 
 
 class SpecifyingFlag(BaseModel):
@@ -84,12 +95,22 @@ class SpecifyingFlag(BaseModel):
     recommendation: str
 
 
+CleanserIssueCategory = Literal[
+    "readability",
+    "tacit_assumption",
+    "generic_filler_language",
+    "sentence_structure",
+    "reference_usability",
+]
+
+
 class CleanserFlag(BaseModel):
     """Clarity or accessibility issue flagged by Cleanser."""
     location: str
     current_text: str
     issue: str
     recommendation: str
+    issue_category: CleanserIssueCategory = "readability"
 
 
 class StructureFlag(BaseModel):
@@ -129,8 +150,14 @@ class SequencingFlag(BaseModel):
     location: str
     excerpt: str | None = None  # Exact text from document to highlight (copy-paste from source)
     issue: str
+    finding_type: str | None = None  # EXPLICIT_REFERENCE | PREREQUISITE | COMPLETION_SEQUENCE | DECISION_LOGIC | INTERNAL_CONTRADICTION
+    dependency_signal: str | None = None  # "1" | "2" | "3" | "4" | "5"
+    signal_evidence: str | None = None  # Exact phrase(s) that create the dependency
     impact: str
-    recommendation: str
+    recommendation: str | None = None  # null when escalated to HITL (e.g. branch ambiguity per agent rules)
+    hitl_reason: str | None = None
+    priority: str | None = None  # MUST FIX | SHOULD FIX
+    citations: list[str] = Field(default_factory=list)
 
 
 class FormattingFlag(BaseModel):
@@ -139,6 +166,7 @@ class FormattingFlag(BaseModel):
     excerpt: str | None = None  # Exact text from document to highlight (copy-paste from source)
     issue: str
     recommendation: str
+    citations: list[str] = Field(default_factory=list)
 
 
 class PolicyClauseMapping(BaseModel):
@@ -229,6 +257,7 @@ class PipelineContext(BaseModel):
     errors: list[PipelineError] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     agents_run: list[str] = Field(default_factory=list)
+    agent_timings: list[dict] = Field(default_factory=list)  # [{"agent": str, "duration_ms": int}]
     draft_ready: bool = False
 
     # Output summary (populated by router)

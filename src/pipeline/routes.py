@@ -7,7 +7,7 @@ import re
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 log = logging.getLogger(__name__)
 from pydantic import BaseModel
@@ -32,7 +32,7 @@ def _agent_to_frontend_step_key(agent_name: str) -> str:
         "formatting": "formatter",
         "risk": "risk-assessor",
         "validation": "validator",
-        "finding_verification": "finding-verifier",
+        "finding_verification": "validator",
     }.get(agent_name, "cleansor")
 
 router = APIRouter(tags=["pipeline"])
@@ -426,6 +426,14 @@ def _filter_chunks_by_document(chunks: list[DocumentChunk], document_id: str | N
 async def _execute_analyse(body: AnalyseRequest, progress_emit: ProgressEmit | None = None) -> dict:
     """Build context, run pipeline, return the same JSON dict as the non-streaming /analyse response."""
     try:
+        if body.document_id:
+            from src.rag.document_registry import resolve_registry_document_id
+
+            canon = resolve_registry_document_id(body.document_id)
+            if canon and canon != body.document_id.strip():
+                log.info("Resolved document_id for analysis: %r -> %r", body.document_id, canon)
+                body.document_id = canon
+
         chunks = _chunks_from_request(body)
         chunks = _filter_chunks_by_document(chunks, body.document_id)
         if body.document_id and not chunks:
@@ -608,6 +616,7 @@ async def _execute_analyse(body: AnalyseRequest, progress_emit: ProgressEmit | N
             "warnings": ctx.warnings,
             "errors": [e.model_dump() for e in ctx.errors],
             "agents_run": ctx.agents_run,
+            "agent_timings": ctx.agent_timings,
         }
         session_saved = False
         try:
@@ -852,8 +861,13 @@ async def post_validate_solution(body: ValidateSolutionRequest):
 @router.get("/analysis/sessions")
 async def get_analysis_sessions(limit: int = Query(50, ge=1, le=200)):
     """Return recent analysis sessions for dashboard metrics."""
-    from src.rag.analysis_sessions import list_sessions
-    return list_sessions(limit=limit)
+    try:
+        from src.rag.analysis_sessions import list_sessions
+
+        return list_sessions(limit=limit)
+    except Exception as e:
+        log.warning("get_analysis_sessions failed: %s", e)
+        return []
 
 
 @router.get("/analysis/sessions/{tracking_id}")
@@ -864,6 +878,37 @@ async def get_analysis_session(tracking_id: str):
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
+
+
+@router.get("/analysis/harmonisation-scorecard/{document_id}")
+async def get_harmonisation_scorecard_route(
+    document_id: str,
+    site: str = Query("", description="Optional site filter"),
+    doc_layer: str = Query("", description="Optional doc layer filter"),
+):
+    """Return harmonisation scorecard for a specific document."""
+    from src.rag.analysis_sessions import get_harmonisation_scorecard
+
+    scorecard = get_harmonisation_scorecard(document_id, site=site, doc_layer=doc_layer)
+    if not scorecard:
+        raise HTTPException(status_code=404, detail="No harmonisation scorecard found for document")
+    return scorecard
+
+
+@router.get("/analysis/harmonisation-trend/{document_id}")
+async def get_harmonisation_trend_route(
+    document_id: str,
+    limit: int = Query(12, ge=1, le=36),
+    site: str = Query("", description="Optional site filter"),
+    doc_layer: str = Query("", description="Optional doc layer filter"),
+):
+    """Return harmonisation score trend for a specific document."""
+    from src.rag.analysis_sessions import get_harmonisation_trend
+
+    trend = get_harmonisation_trend(document_id, limit=limit, site=site, doc_layer=doc_layer)
+    if not trend:
+        raise HTTPException(status_code=404, detail="No harmonisation trend found for document")
+    return trend
 
 
 class GlossaryTermRequest(BaseModel):
@@ -960,8 +1005,13 @@ async def add_finding_note_route(body: FindingNoteRequest):
 @router.get("/analysis/interaction-logs")
 async def list_interaction_logs_route(limit: int = Query(200, ge=1, le=1000)):
     """Return recent governance interaction logs."""
-    from src.rag.interaction_logs import list_interaction_logs
-    return list_interaction_logs(limit=limit)
+    try:
+        from src.rag.interaction_logs import list_interaction_logs
+
+        return list_interaction_logs(limit=limit)
+    except Exception as e:
+        log.warning("list_interaction_logs_route failed: %s", e)
+        return []
 
 
 @router.post("/analysis/interaction-logs")
@@ -1007,6 +1057,48 @@ async def save_analysis_session(body: SaveAnalysisRequest):
         return {"ok": True, "message": "Changes saved"}
     except Exception as e:
         return {"ok": False, "message": str(e)}
+
+
+@router.post("/analysis/audit-pack")
+def post_audit_pack(body: dict):
+    """
+    Build a Markdown audit & regulatory readiness pack from a full analysis result payload.
+    Body should match the JSON returned by POST /analyse (optionally with `sites` as a list).
+    """
+    from src.pipeline.audit_report_export import export_from_dict
+
+    if not body or not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON object body required")
+    tid_raw = str(body.get("tracking_id") or "session").strip() or "session"
+    safe_tid = re.sub(r"[^\w.\-]+", "-", tid_raw)[:120]
+    md = export_from_dict(body, audit_pack=True)
+    filename = f"audit-pack-{safe_tid}.md"
+    return Response(
+        content=md.encode("utf-8"),
+        media_type="text/markdown; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post("/analysis/audit-pack.docx")
+def post_audit_pack_docx(body: dict):
+    """
+    Build a structured DOCX audit & regulatory readiness pack from a full analysis result payload.
+    Body should match the JSON returned by POST /analyse (optionally with `sites` as a list).
+    """
+    from src.pipeline.audit_report_export_docx import export_docx_bytes
+
+    if not body or not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="JSON object body required")
+    tid_raw = str(body.get("tracking_id") or "session").strip() or "session"
+    safe_tid = re.sub(r"[^\w.\-]+", "-", tid_raw)[:120]
+    blob = export_docx_bytes(body, audit_pack=True)
+    filename = f"audit-pack-{safe_tid}.docx"
+    return Response(
+        content=blob,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/query")

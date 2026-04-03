@@ -65,7 +65,7 @@ def badge(text, style):
              "low":"[LOW]","info":"[INFO]","omission":"[OMISSION]","ordering":"[ORDER]"}
     return f"{icons.get(str(style).lower(),'[?]')} **{text}**"
 
-def fmea_bar(band):
+def haccp_rpn_bar(band):
     bars = {"critical":"||||||||||||||  CRITICAL","high":"|||||||||     HIGH",
             "medium":"||||||        MEDIUM","low":"|||           LOW"}
     return bars.get((band or "low").lower(), "--")
@@ -91,8 +91,12 @@ for i, g in enumerate(gaps, 1):
     if g.get("risk"):
         lines.append(f"> **Risk:** {g['risk']}\n")
     if score is not None:
-        lines.append(f"**FMEA:** `{fmea_bar(band)}` (score {score})  ")
-        lines.append(f"Severity={g.get('severity')} x Scope={g.get('scope')} x Detectability={g.get('detectability')}  ")
+        lines.append(f"**HACCP RPN:** `{haccp_rpn_bar(band)}` (score {score})  ")
+        lik = g.get("likelihood") or g.get("scope")
+        det = g.get("detectability")
+        lines.append(
+            f"Severity={g.get('severity')} x Likelihood={lik} x Detectability={det or '3 (default)'}  "
+        )
     if g.get("recommendation"):
         lines.append(f"**Recommendation:** {g['recommendation']}  ")
     lines.append("")

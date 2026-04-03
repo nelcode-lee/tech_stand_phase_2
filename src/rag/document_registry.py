@@ -75,7 +75,7 @@ def _get_conn():
     """Create a connection using SUPABASE_DB_URL."""
     if not SUPABASE_DB_URL:
         raise ValueError("SUPABASE_DB_URL environment variable is required")
-    return psycopg2.connect(SUPABASE_DB_URL)
+    return psycopg2.connect(SUPABASE_DB_URL, connect_timeout=15)
 
 
 @contextmanager
@@ -694,6 +694,49 @@ def _fetch_chunks_via_vector_store(document_id: str) -> list[dict]:
         return []
 
 
+def resolve_registry_document_id(document_id: str) -> str:
+    """
+    Map a requested id to the canonical `documents.document_id` when possible.
+    Handles case differences (fsp048 vs FSP048) and extended ids (FSP048 vs FSP048-METAL-DETECTION).
+    If nothing matches, returns the trimmed request unchanged.
+    """
+    rid = (document_id or "").strip()
+    if not rid or not SUPABASE_DB_URL:
+        return rid
+    try:
+        ensure_table()
+        with _cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT document_id FROM public.{TABLE_NAME}
+                WHERE document_id = %s OR LOWER(document_id) = LOWER(%s)
+                LIMIT 1
+                """,
+                (rid, rid),
+            )
+            row = cur.fetchone()
+            if row and row.get("document_id"):
+                return row["document_id"]
+            base = rid.split()[0].strip()
+            if not base:
+                return rid
+            cur.execute(
+                f"""
+                SELECT document_id FROM public.{TABLE_NAME}
+                WHERE document_id ILIKE %s OR document_id ILIKE %s OR document_id ILIKE %s
+                ORDER BY LENGTH(document_id) ASC
+                LIMIT 1
+                """,
+                (base, base + "-%", base + "_%"),
+            )
+            row = cur.fetchone()
+            if row and row.get("document_id"):
+                return row["document_id"]
+    except Exception:
+        pass
+    return rid
+
+
 def get_document_content(document_id: str) -> tuple[str | None, list[dict]]:
     """
     Return (content, sections). First checks document_content table.
@@ -707,8 +750,11 @@ def get_document_content(document_id: str) -> tuple[str | None, list[dict]]:
         ensure_document_content_table()
         with _cursor() as cur:
             cur.execute(
-                f"SELECT content, sections FROM public.{CONTENT_TABLE_NAME} WHERE document_id = %s",
-                (document_id,),
+                f"""
+                SELECT content, sections FROM public.{CONTENT_TABLE_NAME}
+                WHERE document_id = %s OR LOWER(document_id) = LOWER(%s)
+                """,
+                (document_id, document_id),
             )
             row = cur.fetchone()
         if row and row.get("content"):
@@ -751,7 +797,7 @@ def _fetch_chunks_for_document(document_id: str) -> list[dict]:
                 cur.execute(f"""
                     SELECT metadata->>'text' AS text, (metadata->>'chunk_index')::int AS chunk_index
                     FROM {table}
-                    WHERE metadata->>'document_id' = %s
+                    WHERE LOWER(TRIM(metadata->>'document_id')) = LOWER(TRIM(%s))
                     ORDER BY chunk_index
                 """, (document_id,))
                 rows = cur.fetchall()
@@ -1099,6 +1145,28 @@ def list_site_standard_links(*, site_id: str | None = None) -> list[dict]:
             tuple(params),
         )
         return [dict(r) for r in cur.fetchall()]
+
+
+def get_friendly_standard_name_for_document(standard_document_id: str | None) -> str | None:
+    """
+    Return the friendly standard_name from site_standard_links for the given document_id.
+
+    Used when policy_clause_records.standard_name is a raw filename (e.g. Cranswick doc);
+    site_standard_links maps standard_document_id → friendly name (e.g. "Cranswick Manufacturing Standard").
+    """
+    if not SUPABASE_DB_URL or not standard_document_id or not str(standard_document_id).strip():
+        return None
+    try:
+        ensure_site_standard_table()
+    except Exception:
+        return None
+    with _cursor() as cur:
+        cur.execute(
+            f"SELECT standard_name FROM public.{SITE_STANDARD_TABLE_NAME} WHERE standard_document_id = %s LIMIT 1",
+            (str(standard_document_id).strip(),),
+        )
+        row = cur.fetchone()
+        return str(row["standard_name"]).strip() if row and row.get("standard_name") else None
 
 
 def get_site_scope_for_standard(

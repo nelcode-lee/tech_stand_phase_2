@@ -30,7 +30,7 @@ Scores unresolved conflicts by operational consequence. The Conflict agent ident
 
 ## Scoring Model
 
-Uses a simplified FMEA-style (Failure Mode and Effects Analysis) approach:
+Uses a simplified HACCP-aligned risk (RPN-style) approach:
 
 ```
 Risk Score = Severity × Scope × (1 / Detectability)
@@ -88,10 +88,10 @@ ctx.overall_risk            # RiskLevel enum: low | medium | high | critical
 ```python
 class RiskScore(BaseModel):
     conflict_ref: str       # links to Conflict.document_refs
-    severity: int           # 1–5
-    scope: int              # 1–5
-    detectability: int      # 1–5
-    score: int              # computed
+    severity: int           # 1–6
+    likelihood: int         # 1–6
+    detectability: int      # 1–6
+    score: int              # computed (HACCP score)
     band: str               # low | medium | high | critical
     rationale: str          # plain English: why this score
     remediation_priority: int   # 1 = fix first
@@ -105,12 +105,11 @@ class RiskScore(BaseModel):
 You are a risk analyst for a multi-site retail food operation. You will be 
 given a list of document conflicts identified by a compliance analysis.
 
-For each conflict, score it using this FMEA-style model:
-- Severity (1–5): How serious are the consequences if this conflict causes 
-  an incorrect action? 5 = regulatory breach or safety incident.
-- Scope (1–5): How many sites and people are affected? 5 = all sites.
-- Detectability (1–5): How likely is this to be caught before it causes 
-  real harm? 5 = very unlikely to be caught.
+For each conflict, score it using this HACCP-aligned model:
+- Severity (1–6): How serious are the consequences if this conflict causes 
+  an incorrect action? 6 = catastrophic harm or recall risk.
+- Likelihood (1–6): How likely is failure under current controls?
+- Detectability (1–6): How hard is failure to detect before harm? (optional in some flows)
 
 Domain context (use to calibrate severity):
 {domain_context}

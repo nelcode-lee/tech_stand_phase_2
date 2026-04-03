@@ -1,5 +1,6 @@
 """Agent 4: Risk — identifies gaps, assumptions, and operational risks in procedures."""
 import json
+import re
 from pathlib import Path
 
 from src.pipeline.agent_rules import (
@@ -90,29 +91,39 @@ _CROSS_DOC_CATEGORIES = [
     "Document control for vehicle seal tags not clarified",
 ]
 
-# Hard-coded FMEA scales for consistent LLM scoring (RPN = S × Scope × Detectability, range 1–125).
-_FMEA_SCORING_BLOCK = """FMEA SCORING — score each gap on three dimensions (1–5). The platform computes Risk Priority Number (RPN) = Severity × Scope × Detectability (integer 1–125). Apply the definitions below consistently; do not output RPN in JSON — only the three integers.
+# HACCP score = Severity × Likelihood × Detectability (each 1–6; detectability optional).
+_HACCP_SCORING_BLOCK = """HACCP (Hazard Analysis and Critical Control Points) — RISK PRIORITISATION FOR GAPS
+HACCP is the systematic approach to identifying, evaluating, and controlling food safety hazards. A **Critical Control Point (CCP)** is a step at which control can be applied and is essential to prevent or eliminate a food safety hazard or reduce it to an acceptable level.
+- When a gap relates to **missing HACCP plan reference**, **undefined CCP monitoring**, **corrective action at a CCP**, or **hazard control** that should be visible in the procedure, treat it as **food safety / HACCP** relevance — apply **DOMAIN SEVERITY RULES** for `food_safety_haccp` and `ccp_control` (severity floors).
+- Do not invent site-specific HACCP content; flag **document-level** absences or ambiguities (what the text does or does not say). CODEX and BRCGS references appear under applicable standards when provided.
 
-SEVERITY (consequence if the gap causes a failure)
-1 — No plausible harm: cosmetic or administrative only
-2 — Minor operational impact: rework, delay, minor non-conformance
-3 — Significant quality or compliance gap: audit finding likely, product quality affected
-4 — Food safety or legal risk: regulatory breach, allergen exposure possible, potential illness
-5 — Critical / immediate harm: CCP failure, serious injury, product recall, fatality risk
+HACCP SCORE — for **each gap**, relate it to a **hazard the SOP should manage** (quality, food safety, or regulatory). Reason through:
+- Does this SOP **prevent or control** that hazard, or is control **missing / unclear**?
+- **Severity:** if control fails, how bad is the outcome?
+- **Likelihood:** how likely is failure **under current controls** as written (or absent) in the document?
+- **Detectability (optional):** how hard is it to **notice** failure before harm? If you cannot judge, omit `detectability` or use 0 — the platform applies a neutral default for scoring only.
 
-SCOPE (how many people, batches, or sites are affected)
-1 — Single step or single operator
-2 — One shift or one production run
-3 — One product line or one site department
-4 — Whole site / multi-shift
-5 — Multi-site, Group-wide, or customer-facing
+**Formula:** HACCP Score = Severity × Likelihood × Detectability (each dimension is an integer **1–6**). The platform computes the product — do **not** output the score in JSON; output the integers only.
 
-DETECTABILITY (how likely the gap is to be caught before harm occurs)
-1 — Certain to be caught: existing controls or checks will intercept
-2 — Likely to be caught: supervisory review or downstream check probable
-3 — Uncertain: depends on operator experience or vigilance
-4 — Unlikely to be caught: no documented check exists
-5 — Undetectable by design: gap is in the final or only control step
+**Example (illustrative):** Hazard: metal contamination. Control referenced: metal detector check. Severity = 6, Likelihood = 2, Detectability = 2 → score = 6 × 2 × 2 = 24.
+
+SEVERITY (1–6) — consequence if the hazard / control fails
+1 — Negligible: no plausible food-safety impact
+2 — Minor: inconvenience, minor quality issue
+3 — Moderate: compliance concern, limited batch impact
+4 — Major: serious quality or regulatory exposure; illness unlikely but plausible in worst case
+5 — Severe: serious illness or major regulatory breach plausible
+6 — Catastrophic: life-threatening harm, recall, or widespread exposure (e.g. CCP failure, allergen cross-line)
+
+LIKELIHOOD (1–6) — probability the control fails as written or is missing, under conditions implied by the text
+1 — Very unlikely: robust, verifiable control described
+2 — Unlikely: control present but some ambiguity
+3 — Possible: partial control or reliance on vigilance
+4 — Likely: weak control, unclear frequency, or human-error path
+5 — Very likely: control missing or contradicted where required
+6 — Almost certain: no effective control where the hazard demands one
+
+DETECTABILITY (1–6) — optional — how hard is failure to detect before product moves on or reaches the customer (1 = easy to catch early, 6 = very hard to catch). Omit or 0 if not applicable.
 """
 
 _SYSTEM_PROMPT_TEMPLATE = """You are a systematic document gap analyst. Your role is to review controlled procedures, policies, and operational documents and identify — without inference or invention — gaps, unstated assumptions, and missing information that could cause a document to fail in practice, fail an audit, or be misexecuted by someone unfamiliar with the process. You are an analytical reviewer, not a subject matter expert. You report only what is observable in the text and what is absent relative to applicable standards and grounding documents. You do not speculate about intent or supply content that is not grounded in the document under review. You have access to grounding documents and organisational standards through the sources listed under "GROUNDING DOCUMENT ACCESS" below. You use these to surface requirements that should be present but are not — including gaps the document gives no indication of. Finding information in a grounding document does not resolve a gap; it confirms what is missing from the document under review. You analyse documents as they exist at the time of review. You do not assume information exists elsewhere unless it is explicitly present in the provided document context. You do not assume an operator would locate missing information through another route. Your findings will be reviewed by {primary_audience} who hold accountability for compliance and operational correctness. Your role is to surface what requires their judgement — not to exercise it yourself.
@@ -135,7 +146,7 @@ Use these sources to:
 Do NOT use grounding documents to:
 - Conclude that a gap is resolved because the information exists elsewhere — if it is required in this document and absent, flag it regardless
 - Infer that an operator would find the missing information via another route — the document must stand independently unless it explicitly cross-references the other source
-- Supply content for recommendations — grounding documents inform what is missing, not what the answer should be
+- Invent policy requirements that do not exist in the provided context
 
 ADDITIONAL REVIEW CONTEXT (this request)
 - Document layer: {doc_layer}
@@ -150,7 +161,7 @@ ADDITIONAL REVIEW CONTEXT (this request)
 DOMAIN SEVERITY RULES (apply these when scoring)
 {severity_rules}
 
-{fmea_scoring_block}
+{haccp_scoring_block}
 
 ESCALATION CONTACTS (reference in recommendations where relevant)
 {escalation_contacts}
@@ -161,6 +172,11 @@ CORE PRINCIPLES
 - Enumerate every gap independently — do not combine or summarise multiple gaps into one item.
 - When an operator is asked to make a judgement without explicit criteria (e.g. "determine if acceptable", "ensure it is clean"), flag it as an unstated assumption.
 - Distinguish between implicit assumptions (not stated anywhere) and explicit pre-requisites (stated elsewhere in the document).
+
+DIVISION OF LABOUR (Risk Assessor vs Sequencer) — STRICT
+- You own ABSENCE and OMISSION: missing steps (including safety or control steps that never appear in the text), missing information, unstated assumptions, and gaps vs grounding documents where something required is not reflected in the procedure.
+- The Sequencer owns PRESENT-BUT-WRONG-ORDER: steps that exist in the document but violate the document’s own stated or implied sequencing logic, sign-off timing, or internal contradiction about order.
+- Do not output findings that only say “reorder steps” when the issue is that a step never appears — that remains your gap. If the document names two steps and their order contradicts an explicit dependency in the same text, defer that ordering judgement to the Sequencer; your job is then only any separate content gap if applicable.
 
 YOU MUST IDENTIFY (inclusive of, but not limited to):
 1. Unstated assumptions: assumed operator skills/knowledge, assumed equipment conditions, calibration or hygiene baseline assumed, prerequisites not stated
@@ -179,11 +195,14 @@ YOU MUST IDENTIFY (inclusive of, but not limited to):
 RULES
 - Do not fill gaps. Report only what is observable.
 - Each gap must be a separate JSON object. Never merge two gaps into one object.
-- Score every gap using the FMEA dimensions above (severity, scope, detectability each 1–5). RPN is computed server-side as their product — do not add an "rpn" field.
+- Score every gap using the HACCP dimensions above (severity and likelihood each 1–6; detectability 1–6 or omit/0). HACCP Score is computed server-side as Severity × Likelihood × Detectability — do not add a "haccp_score" or "rpn" field.
+- Recommendations must be implementation-ready, not generic. Prefer concrete wording operators can paste into the SOP:
+  include trigger condition, responsible role, immediate containment action, escalation path, and required record/form where relevant.
+- Avoid vague recommendations like "define specific corrective actions". Instead propose the specific actions to add.
 
 OUTPUT FORMAT
 Return ONLY a JSON array. Each object:
-{{"location": "<section, step, or heading>", "excerpt": "<exact quote from document — the text that relates to this gap; copy-paste from source>", "issue": "<the specific missing information or unsafe assumption>", "risk": "<factual consequence if left unaddressed>", "recommendation": "<exactly what information must be added>", "severity": <1-5>, "scope": <1-5>, "detectability": <1-5>}}
+{{"location": "<section, step, or heading>", "excerpt": "<exact quote from document — the text that relates to this gap; copy-paste from source>", "issue": "<the specific missing information or unsafe assumption>", "risk": "<factual consequence if left unaddressed>", "recommendation": "<exactly what information must be added>", "severity": <1-6>, "likelihood": <1-6>, "detectability": <1-6 or 0>}}
 
 CRITICAL: "excerpt" must be the exact text from the document that relates to the gap — this is used to highlight the relevant passage in the original. If the gap concerns missing content, quote the nearest surrounding text (e.g. the step or paragraph where the gap applies).
 
@@ -212,7 +231,7 @@ def _build_grounding_sources(ctx: PipelineContext) -> str:
         "- Standard glossary: present in this system prompt when the STANDARD GLOSSARY block is included"
     )
     lines.append(
-        "- Domain severity rules, FMEA scales, and escalation contacts: defined later in this system prompt"
+        "- Domain severity rules, HACCP (Hazard Analysis and Critical Control Points) risk scoring (RPN), and escalation contacts: defined later in this system prompt"
     )
     if not ctx.parent_policy and not (ctx.higher_order_policies or []) and not ctx.sibling_docs:
         lines.insert(
@@ -353,7 +372,7 @@ def _build_system_prompt(ctx: PipelineContext) -> str:
         prior_feedback_block=prior_feedback_block,
         glossary_block=glossary_block,
         severity_rules=severity_rules,
-        fmea_scoring_block=_FMEA_SCORING_BLOCK,
+        haccp_scoring_block=_HACCP_SCORING_BLOCK,
         escalation_contacts=escalation_contacts,
         site_type_categories=site_type_note,
         cross_doc_categories=cross_doc_note,
@@ -420,21 +439,21 @@ def _build_prompt(ctx: PipelineContext) -> str:
     return "\n\n---\n\n".join(sections) if sections else "No document content available."
 
 
-def _fmea_score(severity: int, scope: int, detectability: int) -> int:
+def _rpn_score(severity: int, likelihood: int, detectability: int) -> int:
     """
-    Risk Priority Number (RPN) = Severity × Scope × Detectability.
-    Each dimension is clamped to 1–5 per the hard-coded FMEA block in the system prompt.
-    Range: 1–125. Higher detectability score = harder to detect = higher RPN.
+    HACCP score = Severity × Likelihood × Detectability.
+    Each dimension clamped 1–6. Range 1–216. Pass detectability including default (3) if omitted by LLM.
     """
-    s = max(1, min(5, severity))
-    sc = max(1, min(5, scope))
-    d = max(1, min(5, detectability))
-    return s * sc * d
+    s = max(1, min(6, severity))
+    l_ = max(1, min(6, likelihood))
+    d = max(1, min(6, detectability))
+    return s * l_ * d
 
 
-def _fmea_band(score: int) -> str:
-    """Map raw FMEA score to a band using domain_context.json thresholds if available."""
-    bands = _DOMAIN_CTX.get("fmea_scoring", {}).get("risk_bands", {})
+def _rpn_band(score: int) -> str:
+    """Map raw HACCP score to a band using domain_context.json haccp_risk_scoring.risk_bands if available."""
+    cfg = _DOMAIN_CTX.get("haccp_risk_scoring") or _DOMAIN_CTX.get("fmea_scoring")  # legacy domain_context key
+    bands = (cfg or {}).get("risk_bands", {})
     if bands:
         for band_name in ("critical", "high", "medium", "low"):
             b = bands.get(band_name, {})
@@ -442,14 +461,45 @@ def _fmea_band(score: int) -> str:
             mx = b.get("max_score", 9999)
             if mn <= score <= mx:
                 return band_name
-    # fallback thresholds for RPN = S×Scope×D (1–125)
-    if score >= 100:
+    # fallback for S×L×D (1–216)
+    if score >= 172:
         return "critical"
-    if score >= 60:
+    if score >= 104:
         return "high"
-    if score >= 28:
+    if score >= 48:
         return "medium"
     return "low"
+
+
+_GENERIC_RECOMMENDATION_PATTERNS = (
+    r"^\s*define\s+specific\b",
+    r"^\s*define\s+corrective\b",
+    r"^\s*provide\s+specific\b",
+    r"^\s*add\s+specific\b",
+    r"^\s*clarify\b",
+)
+
+
+def _recommendation_is_generic(text: str | None) -> bool:
+    t = (text or "").strip().lower()
+    if not t:
+        return True
+    return any(re.search(pat, t) for pat in _GENERIC_RECOMMENDATION_PATTERNS)
+
+
+def _make_recommendation_specific(location: str | None, issue: str | None, recommendation: str | None) -> str:
+    """Convert generic risk recommendations into concrete draft-ready wording."""
+    rec = (recommendation or "").strip()
+    if not _recommendation_is_generic(rec):
+        return rec
+    loc = (location or "relevant step").strip()
+    issue_text = (issue or "product integrity concern").strip()
+    return (
+        f'Add a corrective-action block in "{loc}" for "{issue_text}": '
+        "if product integrity is compromised, stop the line, place affected product on HOLD/QUARANTINE, "
+        "inform the Line Leader and QA immediately, record lot/batch and time in the non-conformance record, "
+        "start root-cause investigation, and only release product after QA sign-off."
+    )
 
 
 _BAND_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
@@ -480,30 +530,36 @@ class RiskAgent(BaseAgent):
                 if not isinstance(item, dict) or not item.get("issue"):
                     continue
 
-                # Parse FMEA dimensions the LLM returned
+                # Parse HACCP dimensions (likelihood accepts legacy key "scope")
                 sev = _safe_int(item.get("severity"), 0)
-                sco = _safe_int(item.get("scope"), 0)
-                det = _safe_int(item.get("detectability"), 0)
+                lik = _safe_int(item.get("likelihood"), 0) or _safe_int(item.get("scope"), 0)
+                det_raw = _safe_int(item.get("detectability"), 0)
+                det_for_score = det_raw if det_raw > 0 else 3  # optional D: neutral default
 
-                # Only compute a score when all three dimensions were provided
-                if sev and sco and det:
-                    score = _fmea_score(sev, sco, det)
-                    band = _fmea_band(score)
+                # Score when severity and likelihood are present (required); detectability may be defaulted
+                if sev and lik:
+                    score = _rpn_score(sev, lik, det_for_score)
+                    band = _rpn_band(score)
                 else:
                     score = 0
                     band = ""
 
                 excerpt = (item.get("excerpt") or "").strip() or None
+                recommendation = _make_recommendation_specific(
+                    item.get("location", ""),
+                    item.get("issue", ""),
+                    item.get("recommendation", ""),
+                )
                 gaps.append(
                     RiskGap(
                         location=item.get("location", ""),
                         excerpt=excerpt,
                         issue=item.get("issue", ""),
                         risk=item.get("risk", ""),
-                        recommendation=item.get("recommendation", ""),
+                        recommendation=recommendation,
                         severity=sev,
-                        scope=sco,
-                        detectability=det,
+                        likelihood=lik,
+                        detectability=det_raw,
                         fmea_score=score,
                         fmea_band=band,
                     )
@@ -511,7 +567,7 @@ class RiskAgent(BaseAgent):
 
             ctx.risk_gaps = gaps
 
-            # Derive overall_risk from the highest FMEA band across all gaps
+            # Derive overall_risk from the highest RPN band across all gaps
             if gaps:
                 highest_band = max(
                     (g.fmea_band for g in gaps if g.fmea_band),

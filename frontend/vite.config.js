@@ -16,6 +16,7 @@ export default defineConfig(({ mode }) => {
           target: `http://127.0.0.1:${backendPort}`,
           changeOrigin: true,
           rewrite: (path) => path.replace(/^\/api/, ''),
+          timeout: 120000,
         },
       },
     },

@@ -6,17 +6,28 @@ import os
 from openai import OpenAI
 
 LLM_MODEL = os.environ.get("OPENAI_LLM_MODEL", "gpt-4o")
+DRAFT_LLM_MODEL = os.environ.get("OPENAI_DRAFT_LLM_MODEL", LLM_MODEL)
 
 
-def _completion_sync(prompt: str, system: str | None, client: OpenAI) -> str:
+def default_llm_temperature() -> float:
+    """Temperature for general pipeline completions (when not overridden per call)."""
+    return float(os.environ.get("OPENAI_LLM_TEMPERATURE", "0.2"))
+
+
+def compliance_llm_temperature() -> float:
+    """Temperature for compliance flags, clause mapping, and finding verification (harmonisation path). Default 0 for repeatability."""
+    return float(os.environ.get("OPENAI_COMPLIANCE_TEMPERATURE", "0"))
+
+
+def _completion_sync(prompt: str, system: str | None, client: OpenAI, model: str, temperature: float) -> str:
     messages = []
     if system:
         messages.append({"role": "system", "content": system})
     messages.append({"role": "user", "content": prompt})
     response = client.chat.completions.create(
-        model=LLM_MODEL,
+        model=model,
         messages=messages,
-        temperature=0.2,
+        temperature=temperature,
     )
     return response.choices[0].message.content or ""
 
@@ -33,10 +44,23 @@ async def completion(
     prompt: str,
     system: str | None = None,
     client: OpenAI | None = None,
+    model: str | None = None,
+    temperature: float | None = None,
 ) -> str:
     """Call LLM and return the assistant message content."""
     client = client or get_llm_client()
-    return await asyncio.to_thread(_completion_sync, prompt, system, client)
+    chosen_model = (model or LLM_MODEL).strip() or LLM_MODEL
+    t = default_llm_temperature() if temperature is None else temperature
+    return await asyncio.to_thread(_completion_sync, prompt, system, client, chosen_model, t)
+
+
+async def completion_for_draft(
+    prompt: str,
+    system: str | None = None,
+    client: OpenAI | None = None,
+) -> str:
+    """Call LLM using the draft-generation model."""
+    return await completion(prompt, system=system, client=client, model=DRAFT_LLM_MODEL)
 
 
 def parse_json_array(text: str, max_items: int | None = None) -> list[dict]:

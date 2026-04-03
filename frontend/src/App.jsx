@@ -4,6 +4,7 @@ import DashboardPage from './pages/DashboardPage'
 import LibraryPage from './pages/LibraryPage'
 import SettingsPage from './pages/SettingsPage'
 import LogsPage from './pages/LogsPage'
+import HarmonisationPage from './pages/HarmonisationPage'
 import LibraryUploadPage from './pages/LibraryUploadPage'
 import ConfigurePage from './pages/ConfigurePage'
 import AnalysePage from './pages/AnalysePage'
@@ -23,6 +24,7 @@ function App() {
 
         <Route path="settings" element={<SettingsPage />} />
         <Route path="logs" element={<LogsPage />} />
+        <Route path="harmonisation" element={<HarmonisationPage />} />
 
         {/* Review workflow: review an existing document */}
         <Route path="review">

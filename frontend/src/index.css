@@ -1,8 +1,10 @@
 /* Yorkshire Baker / Cranswick brand palette + spacing */
 :root {
-  --yb-blue: #324157;
-  --cranswick-di-serria: #D29F50;
-  --cranswick-spanish-white: #E6D3B5;
+  --yb-blue: #1f3556;
+  --cranswick-di-serria: #4f46e5;
+  --cranswick-spanish-white: #eef2ff;
+  --accent-cyan: #06b6d4;
+  --accent-violet: #8b5cf6;
   --cranswick-black-bean: #030909;
   --surface: #fefefe;
   --surface-elevated: #ffffff;
@@ -74,15 +76,15 @@ body {
 .dash-action-btn.primary.next-action,
 .configure-next-btn.next-action,
 .doc-btn.primary.next-action {
-  background: var(--cranswick-di-serria);
-  border-color: var(--cranswick-di-serria);
+  background: linear-gradient(135deg, var(--cranswick-di-serria), var(--accent-cyan));
+  border-color: transparent;
   color: #fff;
 }
 .dash-action-btn.primary.next-action:hover:not(:disabled),
 .configure-next-btn.next-action:hover:not(:disabled),
 .doc-btn.primary.next-action:hover:not(:disabled) {
   opacity: 0.95;
-  box-shadow: 0 4px 12px rgba(210, 159, 80, 0.35);
+  box-shadow: 0 8px 22px rgba(79, 70, 229, 0.32);
 }
 .dash-action-btn.primary.next-action:disabled,
 .configure-next-btn.next-action:disabled,

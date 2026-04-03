@@ -10,13 +10,15 @@ import logging
 import os
 import re
 
-from src.pipeline.llm import completion, parse_json_object
+from src.pipeline.llm import completion, compliance_llm_temperature, parse_json_object
 from src.pipeline.models import ComplianceFlag, DocLayer, PipelineContext, PolicyClauseMapping
 from src.rag.document_registry import (
     distinct_policy_document_ids_for_standard_names,
+    get_friendly_standard_name_for_document,
     get_site_scope_for_standard,
     query_policy_clauses_for_documents,
 )
+from src.rag.policy_clauses import _canonical_citation
 
 log = logging.getLogger(__name__)
 
@@ -70,6 +72,26 @@ def _norm_ws(s: str) -> str:
     ):
         t = t.replace(a, b)
     return re.sub(r"\s+", " ", t.strip().lower())
+
+
+def _resolve_standard_for_display(row: dict) -> tuple[str | None, str | None]:
+    """
+    Resolve standard_name and canonical_citation for display.
+    Uses site_standard_links when policy_clause_records has a raw filename as standard_name.
+    """
+    doc_id = (row.get("document_id") or "").strip()
+    raw_std = (row.get("standard_name") or "").strip()
+    clause_id = (row.get("clause_id") or "").strip()
+    try:
+        friendly = get_friendly_standard_name_for_document(doc_id) if doc_id else None
+    except Exception:
+        friendly = None
+    display_std = friendly or raw_std or None
+    if display_std and clause_id:
+        cite = _canonical_citation(display_std, clause_id)
+    else:
+        cite = (row.get("canonical_citation") or "").strip() or None
+    return display_std, cite
 
 
 def _quote_verified(quote: str, requirement_text: str) -> bool:
@@ -152,7 +174,7 @@ CANDIDATE CLAUSES (choose one id C1, C2, … or NONE):
 {block}
 """
     try:
-        raw = await completion(user, system=CLAUSE_PICK_SYSTEM)
+        raw = await completion(user, system=CLAUSE_PICK_SYSTEM, temperature=compliance_llm_temperature())
         data = parse_json_object(raw) or {}
     except Exception as e:
         log.warning("Clause mapping LLM failed: %s", e)
@@ -179,14 +201,15 @@ CANDIDATE CLAUSES (choose one id C1, C2, … or NONE):
         return PolicyClauseMapping(status="unmapped", unmapped_reason="verify_failed")
 
     req_text = (row.get("requirement_text") or "").strip()
+    display_std, display_cite = _resolve_standard_for_display(row)
     if not _quote_verified(quote, req_text):
         return PolicyClauseMapping(
             status="unmapped",
             unmapped_reason="verify_failed",
             policy_document_id=row.get("document_id"),
             clause_id=row.get("clause_id"),
-            canonical_citation=row.get("canonical_citation"),
-            standard_name=row.get("standard_name"),
+            canonical_citation=display_cite or row.get("canonical_citation"),
+            standard_name=display_std or row.get("standard_name"),
         )
 
     preview_limit = int(os.environ.get("CLAUSE_PREVIEW_CHARS", "1200"))
@@ -195,8 +218,8 @@ CANDIDATE CLAUSES (choose one id C1, C2, … or NONE):
         status="linked",
         policy_document_id=row.get("document_id"),
         clause_id=row.get("clause_id"),
-        canonical_citation=row.get("canonical_citation"),
-        standard_name=row.get("standard_name"),
+        canonical_citation=display_cite or row.get("canonical_citation"),
+        standard_name=display_std or row.get("standard_name"),
         supporting_quote=quote[:2000] if len(quote) > 2000 else quote,
         requirement_preview=preview,
         unmapped_reason=None,

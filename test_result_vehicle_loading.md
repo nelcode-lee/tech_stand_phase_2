@@ -112,72 +112,72 @@
 
 **Count:** 14
 
-- **Despatch Manifest Sheet** — FMEA CRITICAL — Score:  `█████████████░░░░░░░` 64  (S=4 × Sc=4 × D=2)
+- **Despatch Manifest Sheet** — HACCP RPN CRITICAL — Score:  `█████████████░░░░░░░` 64  (S=4 × L=4 × D=2)
   - *Issue:* Missing corrective action for when vehicle temperature is out of range.
   - *Risk:* Products may be loaded onto vehicles that are not at the correct temperature, compromising product safety.
   - *Recommendation:* Specify corrective actions to take if vehicle temperature is out of range, beyond just not loading the vehicle.
 
-- **Despatch Manifest Sheet** — FMEA CRITICAL — Score:  `█████████████░░░░░░░` 64  (S=4 × Sc=4 × D=2)
+- **Despatch Manifest Sheet** — HACCP RPN CRITICAL — Score:  `█████████████░░░░░░░` 64  (S=4 × L=4 × D=2)
   - *Issue:* No reference to HACCP plan or CCP monitoring requirements.
   - *Risk:* Potential gaps in critical control point monitoring could compromise food safety.
   - *Recommendation:* Include references to the HACCP plan and specify CCP monitoring requirements.
 
-- **Despatch Manifest Sheet** — FMEA CRITICAL — Score:  `█████████████░░░░░░░` 64  (S=4 × Sc=4 × D=2)
+- **Despatch Manifest Sheet** — HACCP RPN CRITICAL — Score:  `█████████████░░░░░░░` 64  (S=4 × L=4 × D=2)
   - *Issue:* Regulatory reference absent (e.g. Food Safety Act, BRC/BRCGS standard, CODEX).
   - *Risk:* Non-compliance with regulatory standards could lead to legal issues and product recalls.
   - *Recommendation:* Include references to relevant regulatory standards and guidelines.
 
-- **Despatch Manifest Sheet** — FMEA CRITICAL — Score:  `█████████████░░░░░░░` 64  (S=4 × Sc=4 × D=2)
+- **Despatch Manifest Sheet** — HACCP RPN CRITICAL — Score:  `█████████████░░░░░░░` 64  (S=4 × L=4 × D=2)
   - *Issue:* No reference to procedures for handling vehicle breakdowns, accidents, or refrigeration failures.
   - *Risk:* Lack of procedures could lead to inadequate response to incidents, compromising product safety.
   - *Recommendation:* Include procedures for handling vehicle breakdowns, accidents, or refrigeration failures.
 
-- **Despatch Manifest Sheet** — FMEA CRITICAL — Score:  `██████████░░░░░░░░░░` 48  (S=3 × Sc=4 × D=2)
+- **Despatch Manifest Sheet** — HACCP RPN CRITICAL — Score:  `██████████░░░░░░░░░░` 48  (S=3 × L=4 × D=2)
   - *Issue:* Frequency of vehicle temperature checks not aligned with Test document for RAG.
   - *Risk:* Inconsistent temperature monitoring could lead to non-compliance with safety standards.
   - *Recommendation:* Align the frequency of vehicle temperature checks with the Test document for RAG or clarify the discrepancy.
 
-- **Despatch Manifest Sheet** — FMEA CRITICAL — Score:  `███████░░░░░░░░░░░░░` 36  (S=4 × Sc=3 × D=3)
+- **Despatch Manifest Sheet** — HACCP RPN CRITICAL — Score:  `███████░░░░░░░░░░░░░` 36  (S=4 × L=3 × D=3)
   - *Issue:* Unstated assumption about operator's ability to determine if load is free of debris, glass, insects, rodent droppings, and signs of damp.
   - *Risk:* Inconsistent checks could lead to contamination of products.
   - *Recommendation:* Provide explicit criteria or a checklist for assessing the load for debris and contamination.
 
-- **Despatch Manifest Sheet** — FMEA CRITICAL — Score:  `█████░░░░░░░░░░░░░░░` 27  (S=3 × Sc=3 × D=3)
+- **Despatch Manifest Sheet** — HACCP RPN CRITICAL — Score:  `█████░░░░░░░░░░░░░░░` 27  (S=3 × L=3 × D=3)
   - *Issue:* Unstated assumption about operator's ability to use a calibrated temperature probe.
   - *Risk:* Incorrect temperature readings could lead to loading products at unsafe temperatures.
   - *Recommendation:* Include detailed instructions or training requirements for using a calibrated temperature probe.
 
-- **Despatch Manifest Sheet** — FMEA CRITICAL — Score:  `█████░░░░░░░░░░░░░░░` 27  (S=3 × Sc=3 × D=3)
+- **Despatch Manifest Sheet** — HACCP RPN CRITICAL — Score:  `█████░░░░░░░░░░░░░░░` 27  (S=3 × L=3 × D=3)
   - *Issue:* No escalation procedure defined for when a trailer cannot reach the required temperature.
   - *Risk:* Lack of clear escalation could delay resolution and impact product safety.
   - *Recommendation:* Define an escalation procedure including who to contact and how to escalate if a trailer cannot reach the required temperature.
 
-- **Despatch Manifest Sheet** — FMEA CRITICAL — Score:  `█████░░░░░░░░░░░░░░░` 27  (S=3 × Sc=3 × D=3)
+- **Despatch Manifest Sheet** — HACCP RPN CRITICAL — Score:  `█████░░░░░░░░░░░░░░░` 27  (S=3 × L=3 × D=3)
   - *Issue:* Unstated assumption that vehicle cleanliness and odour checks are subjective.
   - *Risk:* Inconsistent checks could lead to products being loaded onto unsuitable vehicles.
   - *Recommendation:* Provide explicit criteria or a checklist for assessing vehicle cleanliness and odour.
 
-- **Despatch Manifest Sheet** — FMEA CRITICAL — Score:  `█████░░░░░░░░░░░░░░░` 27  (S=3 × Sc=3 × D=3)
+- **Despatch Manifest Sheet** — HACCP RPN CRITICAL — Score:  `█████░░░░░░░░░░░░░░░` 27  (S=3 × L=3 × D=3)
   - *Issue:* No verification method or record-keeping requirement for vehicle cleanliness and odour checks.
   - *Risk:* Lack of records could lead to disputes or inability to verify compliance.
   - *Recommendation:* Specify how vehicle cleanliness and odour checks should be recorded and retained.
 
-- **Despatch Manifest Sheet** — FMEA CRITICAL — Score:  `█████░░░░░░░░░░░░░░░` 27  (S=3 × Sc=3 × D=3)
+- **Despatch Manifest Sheet** — HACCP RPN CRITICAL — Score:  `█████░░░░░░░░░░░░░░░` 27  (S=3 × L=3 × D=3)
   - *Issue:* No link to relevant customer specification or retailer code of practice.
   - *Risk:* Non-compliance with customer or retailer requirements could lead to rejected deliveries.
   - *Recommendation:* Include references to relevant customer specifications or retailer codes of practice.
 
-- **Despatch Manifest Sheet** — FMEA CRITICAL — Score:  `█████░░░░░░░░░░░░░░░` 27  (S=3 × Sc=3 × D=3)
+- **Despatch Manifest Sheet** — HACCP RPN CRITICAL — Score:  `█████░░░░░░░░░░░░░░░` 27  (S=3 × L=3 × D=3)
   - *Issue:* No reference to related site technical documentation such as cleaning schedule or pest control log.
   - *Risk:* Lack of reference could lead to oversight of critical site maintenance activities.
   - *Recommendation:* Include references to related site technical documentation.
 
-- **Despatch Manifest Sheet** — FMEA CRITICAL — Score:  `█████░░░░░░░░░░░░░░░` 27  (S=3 × Sc=3 × D=3)
+- **Despatch Manifest Sheet** — HACCP RPN CRITICAL — Score:  `█████░░░░░░░░░░░░░░░` 27  (S=3 × L=3 × D=3)
   - *Issue:* No specific instructions for securing loads on pallets to prevent movement during transit.
   - *Risk:* Improperly secured loads could lead to product damage during transit.
   - *Recommendation:* Include detailed instructions for securing loads on pallets.
 
-- **Despatch Manifest Sheet** — FMEA CRITICAL — Score:  `█████░░░░░░░░░░░░░░░` 27  (S=3 × Sc=3 × D=3)
+- **Despatch Manifest Sheet** — HACCP RPN CRITICAL — Score:  `█████░░░░░░░░░░░░░░░` 27  (S=3 × L=3 × D=3)
   - *Issue:* No explicit criteria for determining if a vehicle is suitably maintained to prevent damage to products during transit.
   - *Risk:* Inconsistent assessments could lead to product damage.
   - *Recommendation:* Provide explicit criteria or a checklist for assessing vehicle maintenance.

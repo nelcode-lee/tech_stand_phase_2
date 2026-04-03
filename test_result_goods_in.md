@@ -13,8 +13,8 @@
 
 > **Risk:** Non-conforming materials may be used, leading to product quality issues or safety hazards.
 
-**FMEA:** `||||||||||||||  CRITICAL` (score 48)  
-Severity=4 x Scope=4 x Detectability=3  
+**HACCP RPN:** `||||||||||||||  CRITICAL` (score 48)  
+Severity=4 x Likelihood=4 x Detectability=3  
 **Recommendation:** Include specific corrective actions to be taken when raw materials do not meet specifications.  
 
 ### Gap 2 - [CRITICAL] **CRITICAL** - GOODS IN CHECKS
@@ -22,8 +22,8 @@ Severity=4 x Scope=4 x Detectability=3
 
 > **Risk:** Lack of documentation could lead to untraceable quality issues and non-compliance with audits.
 
-**FMEA:** `||||||||||||||  CRITICAL` (score 48)  
-Severity=3 x Scope=4 x Detectability=2  
+**HACCP RPN:** `||||||||||||||  CRITICAL` (score 48)  
+Severity=3 x Likelihood=4 x Detectability=2  
 **Recommendation:** Specify what records must be kept for goods in checks, where they should be stored, and for how long.  
 
 ### Gap 3 - [CRITICAL] **CRITICAL** - GOODS IN CHECKS
@@ -31,7 +31,7 @@ Severity=3 x Scope=4 x Detectability=2
 
 > **Risk:** Issues may not be addressed promptly, leading to potential quality or safety risks.
 
-**FMEA:** `||||||||||||||  CRITICAL` (score 36)  
+**HACCP RPN:** `||||||||||||||  CRITICAL` (score 36)  
 Severity=4 x Scope=3 x Detectability=3  
 **Recommendation:** Define an escalation procedure, including who to contact and how, when issues are identified during goods in checks.  
 
@@ -40,8 +40,8 @@ Severity=4 x Scope=3 x Detectability=3
 
 > **Risk:** Unclear responsibility could lead to checks being missed or improperly conducted.
 
-**FMEA:** `||||||||||||||  CRITICAL` (score 36)  
-Severity=3 x Scope=3 x Detectability=2  
+**HACCP RPN:** `||||||||||||||  CRITICAL` (score 36)  
+Severity=3 x Likelihood=3 x Detectability=2  
 **Recommendation:** Clearly specify the role or person responsible for conducting goods in checks.  
 
 ### Gap 5 - [CRITICAL] **CRITICAL** - GOODS IN CHECKS
@@ -49,8 +49,8 @@ Severity=3 x Scope=3 x Detectability=2
 
 > **Risk:** Inconsistent checks could lead to missed quality or safety issues.
 
-**FMEA:** `||||||||||||||  CRITICAL` (score 27)  
-Severity=3 x Scope=3 x Detectability=3  
+**HACCP RPN:** `||||||||||||||  CRITICAL` (score 27)  
+Severity=3 x Likelihood=3 x Detectability=3  
 **Recommendation:** Define the frequency at which goods in checks should be conducted (e.g., every delivery, daily).  
 
 ### Gap 6 - [CRITICAL] **CRITICAL** - GOODS IN CHECKS
@@ -58,8 +58,8 @@ Severity=3 x Scope=3 x Detectability=3
 
 > **Risk:** Ambiguity could lead to inconsistent assessments and overlooked issues.
 
-**FMEA:** `||||||||||||||  CRITICAL` (score 27)  
-Severity=3 x Scope=3 x Detectability=3  
+**HACCP RPN:** `||||||||||||||  CRITICAL` (score 27)  
+Severity=3 x Likelihood=3 x Detectability=3  
 **Recommendation:** Provide explicit criteria or a checklist for assessing the integrity of vehicles and product pallets.  
 
 ### Gap 7 - [CRITICAL] **CRITICAL** - RAW MATERIALS & RAW MATERIAL SUPPLIERS
@@ -67,8 +67,8 @@ Severity=3 x Scope=3 x Detectability=3
 
 > **Risk:** Lack of communication could lead to the use of unapproved suppliers or materials.
 
-**FMEA:** `||||||||||||||  CRITICAL` (score 27)  
-Severity=3 x Scope=3 x Detectability=3  
+**HACCP RPN:** `||||||||||||||  CRITICAL` (score 27)  
+Severity=3 x Likelihood=3 x Detectability=3  
 **Recommendation:** Detail the process and method for communicating supplier approvals to relevant departments.  
 
 ---

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
-import { analyseWithProgress, saveAnalysisSession, getAnalysisSession, getDocumentContent, getDocumentFile, addFindingNote, addInteractionLog, validateSolution, docLayerForApi } from '../api';
+import { analyseWithProgress, saveAnalysisSession, getAnalysisSession, getDocumentContent, getDocumentFile, addFindingNote, addInteractionLog, validateSolution, docLayerForApi, downloadAuditPack, downloadAuditPackDocx } from '../api';
 import mammoth from 'mammoth';
 import { useAnalysis } from '../context/AnalysisContext';
 import { resolveSitesForApi } from '../constants/sites';
@@ -11,11 +11,11 @@ import './AnalysePage.css';
 // Helpers
 // ---------------------------------------------------------------------------
 
-const FMEA_BAND_CLASS = {
-  critical: 'fmea-critical',
-  high:     'fmea-high',
-  medium:   'fmea-medium',
-  low:      'fmea-low',
+const HACCP_RPN_BAND_CLASS = {
+  critical: 'haccp-rpn-critical',
+  high:     'haccp-rpn-high',
+  medium:   'haccp-rpn-medium',
+  low:      'haccp-rpn-low',
 };
 
 const SEV_CLASS = {
@@ -32,6 +32,116 @@ const INTEGRITY_TYPE_LABELS = {
   us_spelling:         'US spelling',
   encoding_anomaly:    'Encoding anomaly',
 };
+
+/** NBSP / smart quotes — keep same string length so offsets stay valid on concatenated text */
+function normalizeForDocSearch(s) {
+  if (!s) return '';
+  return s
+    .replace(/\u00a0/g, ' ')
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/[\u201c\u201d]/g, '"');
+}
+
+/** Build concatenated text + find best match span for highlight (cross-node safe offsets). */
+function findExcerptMatchSpan(full, needle) {
+  if (!needle || needle.length < 2) return null;
+  const n = needle.trim();
+  if (n.length < 2) return null;
+
+  const attempts = [
+    () => {
+      const i = full.indexOf(n);
+      return i >= 0 ? { start: i, length: n.length } : null;
+    },
+    () => {
+      const f = normalizeForDocSearch(full);
+      const ne = normalizeForDocSearch(n);
+      const i = f.indexOf(ne);
+      return i >= 0 ? { start: i, length: ne.length } : null;
+    },
+    () => {
+      const i = full.toLowerCase().indexOf(n.toLowerCase());
+      return i >= 0 ? { start: i, length: n.length } : null;
+    },
+    () => {
+      const f = normalizeForDocSearch(full);
+      const ne = normalizeForDocSearch(n);
+      const i = f.toLowerCase().indexOf(ne.toLowerCase());
+      return i >= 0 ? { start: i, length: ne.length } : null;
+    },
+  ];
+  for (const run of attempts) {
+    const r = run();
+    if (r) return r;
+  }
+  for (let len = Math.min(n.length, 200); len >= 20; len -= 6) {
+    const sub = n.slice(0, len);
+    const i = full.indexOf(sub);
+    if (i >= 0) return { start: i, length: len };
+    const f = normalizeForDocSearch(full);
+    const ne = normalizeForDocSearch(sub);
+    const j = f.indexOf(ne);
+    if (j >= 0) return { start: j, length: len };
+  }
+  return null;
+}
+
+function collectTextNodesUnder(root) {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const p = node.parentElement;
+      if (p && (p.tagName === 'SCRIPT' || p.tagName === 'STYLE')) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    },
+  });
+  const out = [];
+  let node;
+  while ((node = walker.nextNode())) {
+    if (node.textContent && node.textContent.length) out.push(node);
+  }
+  return out;
+}
+
+/** Map character offsets in concatenated text to a DOM Range across text nodes. */
+function rangeFromTextOffsets(nodes, start, length) {
+  if (length < 1 || !nodes.length) return null;
+  const end = start + length;
+  let pos = 0;
+  let startNode = null;
+  let startOff = 0;
+  let endNode = null;
+  let endOff = 0;
+  for (const n of nodes) {
+    const len = n.textContent.length;
+    if (startNode == null && start < pos + len) {
+      startNode = n;
+      startOff = start - pos;
+    }
+    if (startNode != null && end <= pos + len) {
+      endNode = n;
+      endOff = end - pos;
+      break;
+    }
+    pos += len;
+  }
+  if (!startNode || !endNode) return null;
+  const range = document.createRange();
+  range.setStart(startNode, startOff);
+  range.setEnd(endNode, endOff);
+  return range;
+}
+
+function surroundRangeWithHighlightMark(range) {
+  const mark = document.createElement('mark');
+  mark.className = 'original-doc-highlight';
+  try {
+    range.surroundContents(mark);
+  } catch {
+    const contents = range.extractContents();
+    mark.appendChild(contents);
+    range.insertNode(mark);
+  }
+}
 
 // Group an array of objects by a key value
 function groupBy(arr, key) {
@@ -97,8 +207,8 @@ const ANALYSIS_LOADING_STEPS = [
     label: 'Risk-Assessor',
     flowSlot: 'output',
     title: 'Risk-Assessor: operational risk',
-    message: 'Scoring severity, scope, and detectability to rank the most important issues.',
-    detail: 'FMEA-style scoring is building the risk picture for each finding',
+    message: 'Scoring severity, likelihood, and detectability to rank the most important issues.',
+    detail: 'HACCP score (Severity × Likelihood × Detectability) ranks gaps; food-safety and CCP issues use higher severity floors from domain rules',
   },
   {
     key: 'conflictor',
@@ -139,14 +249,6 @@ const ANALYSIS_LOADING_STEPS = [
     title: 'Formatter: presentation and structure',
     message: 'Checking tables, lists, numbering, and visual structure for readability.',
     detail: 'Formatter is validating how the content is laid out on the page',
-  },
-  {
-    key: 'finding-verifier',
-    label: 'Finding verifier',
-    flowSlot: 'output',
-    title: 'Finding verifier: document cross-check',
-    message: 'Checking whether flagged gaps are already covered later in the procedure (or in following sub-steps).',
-    detail: 'Removing false positives when the full document already states the requirement',
   },
   {
     key: 'validator',
@@ -343,34 +445,6 @@ const AGENT_KEY_TO_FLAG = {
   'conflict': 'conflicts',
 };
 
-// Flag count key -> agent display name (for Proposed Solutions filter)
-const FLAG_KEY_TO_AGENT = {
-  'risk gaps': 'Risk',
-  'cleanser': 'Cleanser',
-  'structure': 'Structure',
-  'content integrity': 'Content Integrity',
-  'specifying': 'Specifying',
-  'sequencing': 'Sequencing',
-  'formatting': 'Formatting',
-  'compliance': 'Compliance',
-  'terminology': 'Terminology',
-  'conflicts': 'Conflict',
-};
-
-// Agent display name -> section id for scroll target (Proposed Solutions table)
-const AGENT_SECTION_IDS = {
-  'Risk': 'agent-card-risk',
-  'Cleanser': 'agent-card-cleanser',
-  'Structure': 'agent-card-structure',
-  'Content Integrity': 'agent-card-content-integrity',
-  'Specifying': 'agent-card-specifying',
-  'Sequencing': 'agent-card-sequencing',
-  'Formatting': 'agent-card-formatting',
-  'Compliance': 'agent-card-compliance',
-  'Terminology': 'agent-card-terminology',
-  'Conflict': 'agent-card-conflict',
-};
-
 function scrollToSection(sectionId) {
   const el = document.getElementById(sectionId);
   if (el) {
@@ -446,51 +520,82 @@ function getSearchAndReplacement(agentKey, item, replacementOverride = undefined
   return { search, replacement: rec };
 }
 
-// Apply a single finding to draft content (first occurrence, case-sensitive)
+// Apply a single finding to draft content by inserting a proposed update near matching text.
+// This preserves original document integrity instead of replacing source content.
 function applyFindingToDraft(draft, search, replacement) {
-  if (!draft || !search) return draft;
-  const idx = draft.indexOf(search);
-  if (idx === -1) return draft;
-  return draft.slice(0, idx) + replacement + draft.slice(idx + search.length);
-}
+  if (!draft || !search || !replacement) {
+    return { draft, applied: false, reason: 'invalid_input', range: null };
+  }
+  if (draft.includes(replacement)) {
+    return { draft, applied: false, reason: 'already_present', range: null };
+  }
 
-// Flatten all findings into a unified Proposed Solutions list
-// searchText: best string to search for in original doc (excerpt > current_text > location)
-function buildProposedSolutions(result) {
-  const solutions = [];
-  const push = (agent, current, proposal, searchText) => {
-    if (proposal) solutions.push({
-      agent,
-      current: current || '—',
-      proposal,
-      sectionId: AGENT_SECTION_IDS[agent],
-      searchText: searchText || current || '',
-    });
+  const locateMatch = (text, needle) => {
+    const rawNeedle = String(needle || '').trim();
+    if (!rawNeedle) return null;
+    // 1) Exact (fast path)
+    const exactIdx = text.indexOf(rawNeedle);
+    if (exactIdx >= 0) return { idx: exactIdx, len: rawNeedle.length };
+    // 2) Case-insensitive literal
+    const lowerIdx = text.toLowerCase().indexOf(rawNeedle.toLowerCase());
+    if (lowerIdx >= 0) return { idx: lowerIdx, len: rawNeedle.length };
+    // 3) Flexible whitespace, case-insensitive regex
+    const escaped = rawNeedle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = escaped.replace(/\s+/g, '\\s+');
+    try {
+      const re = new RegExp(pattern, 'i');
+      const match = re.exec(text);
+      if (match && typeof match.index === 'number') {
+        return { idx: match.index, len: match[0].length || rawNeedle.length };
+      }
+    } catch {
+      // Ignore invalid regex fallback
+    }
+    return null;
   };
 
-  (result.risk_gaps || []).forEach(g => push('Risk', [g.location, g.issue].filter(Boolean).join(' · '), g.recommendation, g.excerpt || g.location));
-  (result.cleanser_flags || []).forEach(f => push('Cleanser', [f.location, f.current_text, f.issue].filter(Boolean).join(' · '), f.recommendation, f.current_text || f.location));
-  (result.structure_flags || []).forEach(f => push('Structure', [f.section, f.detail].filter(Boolean).join(' — '), f.recommendation, f.section));
-  (result.content_integrity_flags || []).forEach(f => push('Content Integrity', [f.location, f.detail].filter(Boolean).join(' · ') || f.excerpt, f.recommendation, f.excerpt || f.location));
-  (result.specifying_flags || []).forEach(f => push('Specifying', [f.location, f.current_text, f.issue].filter(Boolean).join(' · '), f.recommendation, f.current_text || f.location));
-  (result.sequencing_flags || []).forEach(f => push('Sequencing', [f.location, f.issue, f.impact].filter(Boolean).join(' · '), f.recommendation, f.excerpt || f.location));
-  (result.formatting_flags || []).forEach(f => push('Formatting', [f.location, f.issue].filter(Boolean).join(' · '), f.recommendation, f.excerpt || f.location));
-  (result.compliance_flags || []).forEach(f => push('Compliance', [f.location, f.issue].filter(Boolean).join(' · '), f.recommendation, f.excerpt || f.location));
-  (result.terminology_flags || []).forEach(f => push('Terminology', [f.term, f.location, f.issue].filter(Boolean).join(' · '), f.recommendation, f.location || f.term));
-  (result.conflicts || []).forEach(c => push('Conflict', [c.conflict_type, c.description].filter(Boolean).join(' — '), c.recommendation, c.description));
-
-  return solutions;
+  const match = locateMatch(draft, search);
+  if (!match) {
+    return { draft, applied: false, reason: 'search_not_found', range: null };
+  }
+  const insertionPoint = match.idx + match.len;
+  const lineStart = draft.lastIndexOf('\n', match.idx) + 1;
+  const linePrefix = draft.slice(lineStart, match.idx);
+  const indentMatch = linePrefix.match(/^\s*/);
+  const indent = indentMatch ? indentMatch[0] : '';
+  const prefixNeedsNewline = insertionPoint > 0 && draft[insertionPoint - 1] !== '\n';
+  const suffixNeedsNewline = insertionPoint < draft.length && draft[insertionPoint] !== '\n';
+  const insertedText =
+    `${prefixNeedsNewline ? '\n' : ''}${indent}  - Amendment: ${replacement}${suffixNeedsNewline ? '\n' : ''}`;
+  const nextDraft = draft.slice(0, insertionPoint) + insertedText + draft.slice(insertionPoint);
+  return {
+    draft: nextDraft,
+    applied: true,
+    reason: 'applied',
+    range: { start: insertionPoint + (prefixNeedsNewline ? 1 : 0), end: insertionPoint + (prefixNeedsNewline ? 1 : 0) + insertedText.length },
+  };
 }
 
-// Render a single FMEA score bar (score 0–125, displayed as 20-segment bar)
-function FmeaBar({ score, band }) {
+function htmlToPlainText(html) {
+  if (!html || typeof html !== 'string') return '';
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    return (doc.body?.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
+  } catch {
+    return '';
+  }
+}
+
+// Render HACCP score bar (max S×L×D = 6×6×6 = 216, 20-segment)
+function HaccpRpnBar({ score, band }) {
   if (!score || !band) return null;
-  const filled = Math.min(20, Math.round(score / 6.25));
+  const filled = Math.min(20, Math.round(score / 10.8));
   const empty = 20 - filled;
   return (
-    <span className={`fmea-bar ${FMEA_BAND_CLASS[band] || ''}`} title={`FMEA ${band} — score ${score}`}>
+    <span className={`haccp-rpn-bar ${HACCP_RPN_BAND_CLASS[band] || ''}`} title={`HACCP score ${band} — ${score} (S×L×D)`}>
       {'█'.repeat(filled)}{'░'.repeat(empty)}
-      <span className="fmea-band-label">{band.toUpperCase()} {score}</span>
+      <span className="haccp-rpn-band-label">{band.toUpperCase()} {score}</span>
     </span>
   );
 }
@@ -506,23 +611,18 @@ function SevPill({ severity }) {
 }
 
 // Apply / Add note buttons for findings — used when building updated procedure doc
-function FindingActions({ id, agentKey, item, onApplyChange, onAddNote, isApplied, customSolution, onCustomSolutionChange, onCheckWithAgent, validateFeedback, isChecking }) {
+function FindingActions({ id, agentKey, item, onApplyChange, onAddNote, isApplied, customSolution, onCustomSolutionChange, validateFeedback }) {
   const [noteModalOpen, setNoteModalOpen] = useState(false);
   const [noteText, setNoteText] = useState('');
   const [noteAttachments, setNoteAttachments] = useState([]); // [{ name, contentType, dataBase64 }]
   const [noteSubmitting, setNoteSubmitting] = useState(false);
   const [modalPos, setModalPos] = useState(null); // { left, top } or null = centered
+  const [isEditingSolution, setIsEditingSolution] = useState(false);
   const fileInputRef = useRef(null);
   const modalRef = useRef(null);
   const dragRef = useRef(null);
 
   if (!onApplyChange || !onAddNote) return null;
-  const handleOpenNote = () => {
-    setNoteText('');
-    setNoteAttachments([]);
-    setModalPos(null);
-    setNoteModalOpen(true);
-  };
   const handleHeaderMouseDown = (e) => {
     if (e.button !== 0 || !modalRef.current) return;
     const rect = modalRef.current.getBoundingClientRect();
@@ -578,21 +678,25 @@ function FindingActions({ id, agentKey, item, onApplyChange, onAddNote, isApplie
     }
   };
 
-  const solutionValue = (customSolution != null && customSolution !== '') ? customSolution : (item.recommendation || '');
-  const displayValue = customSolution ?? '';
+  const proposedSolution = item.recommendation || '';
+  const hasCustomSolution = customSolution != null && customSolution !== '';
+  const displayValue = hasCustomSolution ? customSolution : proposedSolution;
+  const solutionValue = displayValue;
+  const isConfirmDisabled = !solutionValue.trim();
 
   return (
     <div className="finding-actions" onClick={e => e.stopPropagation()}>
       {onCustomSolutionChange && (
         <div className="finding-solution-edit">
-          <label className="finding-solution-label">Solution (editable)</label>
+          <label className="finding-solution-label">Proposed solution (agent)</label>
           <textarea
-            className="finding-solution-textarea"
+            className={`finding-solution-textarea ${isEditingSolution ? 'is-editing' : 'is-readonly'}`}
             value={displayValue}
             onChange={e => onCustomSolutionChange(id, e.target.value)}
             onKeyDown={e => e.stopPropagation()}
-            placeholder={item.recommendation || 'Type or edit the solution to apply…'}
+            placeholder={proposedSolution || 'No proposed solution available for this finding.'}
             rows={2}
+            readOnly={!isEditingSolution}
           />
           {validateFeedback != null && (
             <div className="finding-validate-feedback">{validateFeedback}</div>
@@ -600,32 +704,29 @@ function FindingActions({ id, agentKey, item, onApplyChange, onAddNote, isApplie
         </div>
       )}
       <div className="finding-action-buttons-row">
-        {onCheckWithAgent && (
+        {onCustomSolutionChange && (
           <button
             type="button"
-            className="finding-action-btn check-agent"
-            onClick={() => onCheckWithAgent(id, agentKey, item, solutionValue)}
-            disabled={isChecking}
-            title="Re-validate this solution with the agent"
+            className={`finding-action-btn edit ${isEditingSolution ? 'editing' : ''}`}
+            onClick={() => {
+              if (!isEditingSolution && !hasCustomSolution) {
+                onCustomSolutionChange(id, proposedSolution);
+              }
+              setIsEditingSolution(v => !v);
+            }}
+            title={isEditingSolution ? 'Lock this text and confirm it' : 'Edit the proposed solution'}
           >
-            {isChecking ? 'Checking…' : 'Check with agent'}
+            {isEditingSolution ? 'Done editing' : 'Edit solution'}
           </button>
         )}
         <button
           type="button"
           className={`finding-action-btn apply ${isApplied ? 'applied' : ''}`}
           onClick={() => onApplyChange(id)}
+          disabled={isConfirmDisabled}
           title="Add this change to the updated procedure"
         >
-          {isApplied ? 'Update Applied ✓' : 'Apply Update'}
-        </button>
-        <button
-          type="button"
-          className="finding-action-btn add-note"
-          onClick={handleOpenNote}
-title="Log feedback for agents (used in future runs)"
-      >
-        Agent Feedback
+          {isApplied ? 'Confirmed ✓' : 'Confirm to draft'}
         </button>
       </div>
       {noteModalOpen && (
@@ -705,10 +806,12 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
   const workflowMode = ctx?.workflowMode ?? mode;
   const base = `/${mode}`;
 
-  const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [loadingStored, setLoadingStored] = useState(!!trackingIdFromUrl);
   const [saving, setSaving] = useState(false);
+  const [auditPackDownloading, setAuditPackDownloading] = useState(false);
+  const [auditPackDocxDownloading, setAuditPackDocxDownloading] = useState(false);
+  const [auditPackError, setAuditPackError] = useState(null);
   const [saveStatus, setSaveStatus] = useState(null);
   const [error, setError] = useState(null);
   const [sessionNotPersisted, setSessionNotPersisted] = useState(false);
@@ -722,10 +825,12 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
   const [loadingContent, setLoadingContent] = useState(false);
   const [highlightSearch, setHighlightSearch] = useState('');
   const originalDocRef = useRef(null);
+  const [isDraftUserEdited, setIsDraftUserEdited] = useState(false);
   const [appliedFindings, setAppliedFindings] = useState(new Set());
   const [customSolutionByFindingId, setCustomSolutionByFindingId] = useState({}); // { [findingId]: "user typed solution" }
   const [notesAddedByFlag, setNotesAddedByFlag] = useState({}); // { 'risk gaps': 2, ... } — session count
   const [lastAppliedRange, setLastAppliedRange] = useState(null); // { start, end } for highlighting in draft
+  const [draftConfirmationItems, setDraftConfirmationItems] = useState([]); // [{ id, label, status, detail }]
   const [selectedMetricFilter, setSelectedMetricFilter] = useState(null); // null = show placeholder, else e.g. 'risk gaps'
   const [validateSolutionResult, setValidateSolutionResult] = useState(null); // { findingId, feedback } or null
   const [validatingFindingId, setValidatingFindingId] = useState(null); // id while request in flight
@@ -771,7 +876,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
 
   function handleProcessChanges() {
     if (!result || appliedFindings.size === 0) return;
-    let currentDraft = draftContent || result?.draft_content || '';
+    let currentDraft = draftContent || documentContent || result?.draft_content || '';
     if (!currentDraft) return;
     const agentOrder = ['risk', 'cleanser', 'structure', 'specifying', 'sequencing', 'formatting', 'compliance', 'terminology', 'conflict', 'content-integrity'];
     const collected = [];
@@ -781,24 +886,48 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
     }
     collected.sort((a, b) => agentOrder.indexOf(a.agentKey) - agentOrder.indexOf(b.agentKey));
     let lastRange = null;
+    const confirmations = [];
     for (const { id, agentKey, item } of collected) {
       const replacementOverride = customSolutionByFindingId[id];
-      const { search, replacement } = getSearchAndReplacement(agentKey, item, replacementOverride);
-      if (!search || !replacement) continue;
-      const idx = currentDraft.indexOf(search);
-      if (idx === -1) continue;
-      currentDraft = applyFindingToDraft(currentDraft, search, replacement);
-      lastRange = { start: idx, end: idx + replacement.length };
+      const solutionText = (replacementOverride != null && String(replacementOverride).trim() !== '')
+        ? String(replacementOverride).trim()
+        : (item.recommendation || '');
+      const label = item.issue || item.detail || item.location || item.term || item.description || 'Finding';
+      const parsed = getSearchAndReplacement(agentKey, item, replacementOverride);
+      if (!parsed || !parsed.search || !parsed.replacement) {
+        confirmations.push({ id, label, status: 'not_applied', detail: 'No valid replacement text found for this finding.' });
+        continue;
+      }
+      const { search, replacement } = parsed;
+      const appliedResult = applyFindingToDraft(currentDraft, search, replacement);
+      if (!appliedResult.applied) {
+        const detail =
+          appliedResult.reason === 'already_present'
+            ? 'Suggested text is already present in the draft.'
+            : 'Matching source text was not found in the current draft.';
+        confirmations.push({ id, label, status: 'not_applied', detail });
+        continue;
+      }
+      currentDraft = appliedResult.draft;
+      lastRange = appliedResult.range;
+      confirmations.push({ id, label, status: 'applied', detail: solutionText });
     }
-    if (currentDraft !== (draftContent || result?.draft_content || '')) {
+    const appliedCount = confirmations.filter(c => c.status === 'applied').length;
+    const changed = currentDraft !== (draftContent || result?.draft_content || '');
+    setDraftConfirmationItems(confirmations);
+    if (changed) {
       setDraftContent(currentDraft);
       setLastAppliedRange(lastRange);
-      logInteraction('process_changes_to_draft', {
-        applied_count: collected.length,
-        last_applied_start: lastRange?.start ?? null,
-      });
-      navigate(`${base}/analyse/draft`);
+    } else {
+      setLastAppliedRange(null);
     }
+    logInteraction('process_changes_to_draft', {
+      confirmed_count: collected.length,
+      applied_count: appliedCount,
+      not_applied_count: confirmations.length - appliedCount,
+      last_applied_start: lastRange?.start ?? null,
+    });
+    navigate(`${base}/analyse/draft`);
   }
 
   async function handleCheckWithAgent(id, agentKey, item, solutionValue) {
@@ -843,6 +972,8 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
     setCustomSolutionByFindingId({});
     setNotesAddedByFlag({});
     setLastAppliedRange(null);
+    setIsDraftUserEdited(false);
+    setDraftConfirmationItems([]);
     setSelectedMetricFilter(null);
     setValidateSolutionResult(null);
     setValidatingFindingId(null);
@@ -872,16 +1003,25 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
 
   // If the user navigates to Analyse for a different document, clear any prior result
   // so findings from the previous document cannot be shown for the new one.
+  // Target doc can come from URL, location state (from Ingest or Create), or config.
   useEffect(() => {
-    if (!documentIdFromUrl || trackingIdFromUrl) return;
+    if (trackingIdFromUrl) return; // Viewing a stored session – don't clear based on doc mismatch
+    const targetDocId = (
+      documentIdFromUrl ||
+      (location.state?.fromIngest && location.state?.documentId) ||
+      (location.state?.generatedContent && location.state?.documentId) ||
+      config.documentId ||
+      ''
+    ).trim();
+    if (!targetDocId) return;
     const resultDocId = (result?.document_id || '').trim();
     if (!resultDocId) return;
-    if (resultDocId !== documentIdFromUrl.trim()) {
+    if (normaliseDocId(resultDocId) !== normaliseDocId(targetDocId)) {
       setResult(null);
       setDraftContent('');
       setHighlightSearch('');
     }
-  }, [documentIdFromUrl, trackingIdFromUrl, result?.document_id, setResult]);
+  }, [trackingIdFromUrl, documentIdFromUrl, location.state?.fromIngest, location.state?.documentId, location.state?.generatedContent, config.documentId, result?.document_id, setResult]);
 
   // When arriving from Ingest (state or URL), sync config so it matches the document we're analysing
   useEffect(() => {
@@ -1050,6 +1190,8 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
             const arrayBuffer = await blob.arrayBuffer();
             const { value: html } = await mammoth.convertToHtml({ arrayBuffer });
             setDocumentHtml(html || null);
+            const plain = htmlToPlainText(html || '');
+            if (plain) setDocumentContent(plain);
             setDocumentSourceType('html');
             setLoadingContent(false);
             return;
@@ -1070,6 +1212,19 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
     }
     load();
   }, [result, effectiveDocId, effectiveDocLayer, generatedContent]);
+
+  // Keep review draft anchored to original document once it becomes available.
+  // This prevents apply-to-draft misses caused by summarised draft_content baselines.
+  useEffect(() => {
+    if (mode !== 'review') return;
+    if (!documentContent || !documentContent.trim()) return;
+    if (isDraftUserEdited) return;
+    setDraftContent(prev => {
+      const current = (prev || '').trim();
+      const source = documentContent.trim();
+      return current === source ? prev : source;
+    });
+  }, [mode, documentContent, isDraftUserEdited]);
 
   // Scroll to specific section or highlight when user clicks a finding
   useEffect(() => {
@@ -1120,9 +1275,13 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
       if (highlightEl) highlightEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
     };
 
-    // Defer scroll until after React has rendered the highlights
-    const t = requestAnimationFrame(() => requestAnimationFrame(doScroll));
-    return () => cancelAnimationFrame(t);
+    // Defer until after paint; HTML highlights run in child useEffect — retry for mammoth DOM
+    const id1 = setTimeout(doScroll, 0);
+    const id2 = setTimeout(doScroll, 100);
+    return () => {
+      clearTimeout(id1);
+      clearTimeout(id2);
+    };
   }, [highlightSearch, documentSections]);
 
   // Scroll to section when navigating from Overview (clicked a metric)
@@ -1153,7 +1312,6 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         document_id: effectiveDocId || null,
         title: effectiveTitle || effectiveDocId || null,
         requester: config.requester || null,
-        query: query || undefined,
         agents: config?.mode && config.mode !== 'full' ? config.agents : undefined,
         additional_doc_ids: (config.additionalDocIds || []).length > 0 ? config.additionalDocIds : undefined,
         agent_instructions: (config.agentInstructions || '').trim() || undefined,
@@ -1186,7 +1344,9 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         prev.total > 0 ? { ...prev, done: prev.total } : prev,
       );
       setResult(res);
-      setDraftContent(res.draft_content || '');
+      // In review mode, preserve source document integrity as the draft baseline.
+      if (mode === 'review' && documentContent) setDraftContent(documentContent);
+      else setDraftContent(res.draft_content || '');
       recordSession(res, { ...config, documentId: effectiveDocId, title: effectiveTitle }, workflowMode);
       logInteraction('analysis_run_completed', {
         tracking_id: res.tracking_id,
@@ -1270,10 +1430,13 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
 
   const totalFindings = flagCounts ? Object.values(flagCounts).reduce((a, b) => a + b, 0) : 0;
   const totalApplied = Object.values(appliedCountByFlag).reduce((a, b) => a + b, 0);
+  const visibleFlagKeys = flagCounts ? Object.keys(flagCounts).filter((k) => k !== 'content integrity') : [];
+  const totalVisibleFindings = visibleFlagKeys.reduce((sum, key) => sum + (flagCounts?.[key] || 0), 0);
+  const totalVisibleApplied = visibleFlagKeys.reduce((sum, key) => sum + (appliedCountByFlag?.[key] || 0), 0);
 
   const isCreate = mode === 'create';
   const hasDraft = !!result; // Show draft in both modes when analysis has run — apply changes update it
-  const displayDraft = draftContent || result?.draft_content || '';
+  const displayDraft = draftContent || documentContent || result?.draft_content || '';
 
   async function handleSave() {
     if (!result) return;
@@ -1321,6 +1484,91 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
       setTimeout(() => setSaveStatus(null), 2500);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function handleDownloadAuditPack() {
+    if (!result) return;
+    setAuditPackDownloading(true);
+    setAuditPackError(null);
+    try {
+      const sitesArr = resolveSitesForApi(Array.isArray(effectiveSites) ? effectiveSites : []);
+      const payload = {
+        ...effectiveResultJson,
+        document_id: effectiveDocId || effectiveResultJson.document_id || '',
+        title: effectiveTitle || effectiveResultJson.title || '',
+        doc_layer: docLayerForApi(effectiveDocLayer),
+        sites: sitesArr,
+        ...(effectiveRequester ? { requester: effectiveRequester } : {}),
+      };
+      const { blob, filename } = await downloadAuditPack(payload);
+      const safeName = String(filename || 'audit-pack.md').replace(/[/\\?%*:|"<>]/g, '-').trim() || 'audit-pack.md';
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = safeName;
+      a.rel = 'noopener';
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      // Revoking immediately can abort the download in some browsers; defer cleanup.
+      window.setTimeout(() => {
+        URL.revokeObjectURL(url);
+        a.remove();
+      }, 2000);
+      logInteraction('audit_pack_download', { tracking_id: result.tracking_id });
+    } catch (err) {
+      const msg = err?.message || 'Download failed';
+      setAuditPackError(msg);
+      window.setTimeout(() => setAuditPackError(null), 8000);
+      logInteraction('audit_pack_download_failed', {
+        tracking_id: result.tracking_id,
+        error: msg,
+      });
+    } finally {
+      setAuditPackDownloading(false);
+    }
+  }
+
+  async function handleDownloadAuditPackDocx() {
+    if (!result) return;
+    setAuditPackDocxDownloading(true);
+    setAuditPackError(null);
+    try {
+      const sitesArr = resolveSitesForApi(Array.isArray(effectiveSites) ? effectiveSites : []);
+      const payload = {
+        ...effectiveResultJson,
+        document_id: effectiveDocId || effectiveResultJson.document_id || '',
+        title: effectiveTitle || effectiveResultJson.title || '',
+        doc_layer: docLayerForApi(effectiveDocLayer),
+        sites: sitesArr,
+        ...(effectiveRequester ? { requester: effectiveRequester } : {}),
+      };
+      const { blob, filename } = await downloadAuditPackDocx(payload);
+      const safeName = String(filename || 'audit-pack.docx').replace(/[/\\?%*:|"<>]/g, '-').trim() || 'audit-pack.docx';
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = safeName;
+      a.rel = 'noopener';
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      window.setTimeout(() => {
+        URL.revokeObjectURL(url);
+        a.remove();
+      }, 2000);
+      logInteraction('audit_pack_docx_download', { tracking_id: result.tracking_id });
+    } catch (err) {
+      const msg = err?.message || 'Download failed';
+      setAuditPackError(msg);
+      window.setTimeout(() => setAuditPackError(null), 8000);
+      logInteraction('audit_pack_docx_download_failed', {
+        tracking_id: result.tracking_id,
+        error: msg,
+      });
+    } finally {
+      setAuditPackDocxDownloading(false);
     }
   }
 
@@ -1420,15 +1668,6 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
             No document selected — analysis will use unfiltered chunks from all documents. Go to Ingest and upload a document, or use Configure to set a document ID.
           </div>
         )}
-        <div className="form-row">
-          <label>Search query (optional — used for vector retrieval)</label>
-          <input
-            type="text"
-            placeholder="e.g. vehicle loading procedure"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-        </div>
       </form>
 
       {loadingStored && (
@@ -1585,7 +1824,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         <section className="analyse-results docuguard-review">
           <div className="review-header">
             <h3>Findings</h3>
-            <div className="resolved-counter">0 of {totalFindings} resolved</div>
+            <div className="resolved-counter">{totalVisibleApplied} of {totalVisibleFindings} resolved</div>
             <div className="review-header-actions">
               <button
                 type="button"
@@ -1597,11 +1836,31 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 <Save size={14} />
                 {saving ? 'Saving…' : saveStatus === 'saved' ? 'Saved' : saveStatus === 'error' ? 'Save failed' : 'Save'}
               </button>
+              <button
+                type="button"
+                className="doc-btn"
+                onClick={handleDownloadAuditPack}
+                disabled={!result || auditPackDownloading}
+                title="Download Markdown audit pack (includes compliance clause mapping)"
+              >
+                {auditPackDownloading ? 'Preparing pack…' : 'Download audit pack'}
+              </button>
+              <button
+                type="button"
+                className="doc-btn"
+                onClick={handleDownloadAuditPackDocx}
+                disabled={!result || auditPackDocxDownloading}
+                title="Download structured DOCX audit pack"
+              >
+                {auditPackDocxDownloading ? 'Preparing DOCX…' : 'Download audit pack (DOCX)'}
+              </button>
+              {auditPackError && (
+                <span className="audit-pack-error" role="alert" title={auditPackError}>
+                  {auditPackError}
+                </span>
+              )}
               <button type="button" className="doc-btn" onClick={() => navigate(`${base}/analyse/draft`)}>
                 Go to Draft →
-              </button>
-              <button type="button" className="resolve-btn" onClick={() => navigate(`${base}/finalize`)}>
-                {isCreate ? 'Continue to Draft →' : 'Submit to Library →'}
               </button>
             </div>
           </div>
@@ -1627,7 +1886,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
             )}
             {result.cleanser_flags?.length > 0 && selectedMetricFilter === 'cleanser' && (
               <div id="agent-card-cleanser"><AgentCard title="Cleanser" items={result.cleanser_flags} agentKey="cleanser"
-                keys={['location', 'current_text', 'issue', 'recommendation']} searchTextKeys={['current_text', 'location']}
+                keys={['location', 'issue_category', 'current_text', 'issue', 'recommendation']} searchTextKeys={['current_text', 'location']}
                 onFindingClick={effectiveDocId ? setHighlightSearch : undefined}
                 onApplyChange={handleApplyFinding} onAddNote={handleAddNote}
                 appliedFindings={appliedFindings} findingId={findingId}
@@ -1706,20 +1965,6 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
             )}
           </div>
 
-          {/* Proposed Solutions — under findings, only when a metric is selected */}
-          {totalFindings > 0 && selectedMetricFilter && (() => {
-            const allSolutions = buildProposedSolutions(result);
-            const solutions = FLAG_KEY_TO_AGENT[selectedMetricFilter]
-              ? allSolutions.filter(s => s.agent === FLAG_KEY_TO_AGENT[selectedMetricFilter])
-              : [];
-            if (solutions.length === 0) return null;
-            return (
-              <ProposedSolutionsSummary
-                solutions={solutions}
-                onFindingClick={effectiveDocId ? (searchText) => setHighlightSearch(searchText || '') : undefined}
-              />
-            );
-          })()}
         </section>
             </div>
           </div>
@@ -1757,13 +2002,32 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
               <p className="draft-disclaimer">
                 Draft for internal review only. Does not replace technical specialists (HITL). SharePoint remains the source of truth.
               </p>
+              {draftConfirmationItems.length > 0 && (
+                <div className="draft-confirmation-panel" role="status">
+                  <p className="draft-confirmation-summary">
+                    {draftConfirmationItems.filter(i => i.status === 'applied').length} of {draftConfirmationItems.length} confirmed changes applied to draft.
+                  </p>
+                  <ul className="draft-confirmation-list">
+                    {draftConfirmationItems.map((item) => (
+                      <li key={item.id} className={`draft-confirmation-item ${item.status}`}>
+                        <span className="draft-confirmation-icon" aria-hidden="true">{item.status === 'applied' ? '✓' : '✗'}</span>
+                        <span className="draft-confirmation-text">{item.label}</span>
+                        {item.detail && <span className="draft-confirmation-detail"> — {item.detail}</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
             {draftEditMode ? (
               <DraftEditor
                 value={displayDraft}
                 onChange={setDraftContent}
                 lastAppliedRange={lastAppliedRange}
-                onEdit={() => setLastAppliedRange(null)}
+                onEdit={() => {
+                  setLastAppliedRange(null);
+                  setIsDraftUserEdited(true);
+                }}
                 placeholder="Draft content will appear here after analysis…"
               />
             ) : (
@@ -1870,32 +2134,98 @@ function DraftStructuredView({ value, lastAppliedRange }) {
       </div>
     );
   }
+  const SECTION_ALIASES = {
+    scope: ['scope'],
+    references: ['reference documents', 'references', 'related documents'],
+    responsibility: ['responsibility', 'responsibilities'],
+    frequency: ['frequency'],
+    procedure: ['procedure', 'procedures', 'method', 'methods'],
+  };
+
+  const sectionModel = {
+    scope: [],
+    references: [],
+    responsibility: [],
+    frequency: [],
+    procedure: [],
+  };
+
+  const matchSectionKey = (heading) => {
+    const t = String(heading || '').trim().toLowerCase();
+    if (!t) return null;
+    for (const [key, aliases] of Object.entries(SECTION_ALIASES)) {
+      if (aliases.some((a) => t === a || t.startsWith(`${a}:`))) return key;
+    }
+    return null;
+  };
+
+  let currentKey = 'procedure';
+  for (const block of blocks) {
+    if (block.type === 'section') {
+      const key = matchSectionKey(block.content);
+      if (key) {
+        currentKey = key;
+      } else {
+        currentKey = 'procedure';
+        sectionModel.procedure.push({ type: 'paragraph', content: String(block.content || '').trim() });
+      }
+      continue;
+    }
+    sectionModel[currentKey].push(block);
+  }
+
+  const isAmendment = (text) => /^\s*amendment\s*:/i.test(String(text || '').trim());
+  const renderBlocks = (sectionKey, blocksToRender) => {
+    if (!blocksToRender || blocksToRender.length === 0) {
+      return <p className="draft-template-empty">No content captured.</p>;
+    }
+    return blocksToRender.map((b, idx) => {
+      const blockKey = `${sectionKey}-${idx}`;
+      if (b.type === 'numbered') {
+        return (
+          <ol key={blockKey} className="draft-structured-list draft-structured-list--numbered">
+            {b.items.map((item, i) => (
+              <li key={i} className={isAmendment(item) ? 'draft-amendment-line' : ''}>
+                {isAmendment(item) ? <span className="draft-amendment-badge">Amendment</span> : null}
+                {item.replace(/^\s*amendment\s*:\s*/i, '')}
+              </li>
+            ))}
+          </ol>
+        );
+      }
+      if (b.type === 'bullet') {
+        return (
+          <ul key={blockKey} className="draft-structured-list draft-structured-list--bullet">
+            {b.items.map((item, i) => (
+              <li key={i} className={isAmendment(item) ? 'draft-amendment-line' : ''}>
+                {isAmendment(item) ? <span className="draft-amendment-badge">Amendment</span> : null}
+                {item.replace(/^\s*amendment\s*:\s*/i, '')}
+              </li>
+            ))}
+          </ul>
+        );
+      }
+      return (
+        <p key={blockKey} className={`draft-structured-para ${isAmendment(b.content) ? 'draft-amendment-line' : ''}`}>
+          {isAmendment(b.content) ? <span className="draft-amendment-badge">Amendment</span> : null}
+          {String(b.content || '').replace(/^\s*amendment\s*:\s*/i, '')}
+        </p>
+      );
+    });
+  };
+
   return (
     <div className="draft-structured-view">
-      {blocks.map((b, idx) => {
-        if (b.type === 'section') {
-          return <h3 key={idx} className="draft-structured-section">{b.content}</h3>;
-        }
-        if (b.type === 'numbered') {
-          return (
-            <ol key={idx} className="draft-structured-list draft-structured-list--numbered">
-              {b.items.map((item, i) => (
-                <li key={i}>{item}</li>
-              ))}
-            </ol>
-          );
-        }
-        if (b.type === 'bullet') {
-          return (
-            <ul key={idx} className="draft-structured-list draft-structured-list--bullet">
-              {b.items.map((item, i) => (
-                <li key={i}>{item}</li>
-              ))}
-            </ul>
-          );
-        }
-        return <p key={idx} className="draft-structured-para">{b.content}</p>;
-      })}
+      <section className="draft-section-card"><h3 className="draft-structured-section">Title</h3><p className="draft-template-empty">Preserved from source document metadata.</p></section>
+      <section className="draft-section-card"><h3 className="draft-structured-section">Scope</h3>{renderBlocks('scope', sectionModel.scope)}</section>
+      <section className="draft-section-card"><h3 className="draft-structured-section">Reference Documents</h3>{renderBlocks('references', sectionModel.references)}</section>
+      <section className="draft-section-card"><h3 className="draft-structured-section">Responsibility</h3>{renderBlocks('responsibility', sectionModel.responsibility)}</section>
+      <section className="draft-section-card"><h3 className="draft-structured-section">Frequency</h3>{renderBlocks('frequency', sectionModel.frequency)}</section>
+      <section className="draft-section-card"><h3 className="draft-structured-section">Procedure</h3>{renderBlocks('procedure', sectionModel.procedure)}</section>
+      <section className="draft-section-card">
+        <h3 className="draft-structured-section">History of document change</h3>
+        <p className="draft-template-empty">Populate change log at approval stage (date, issue number, reason, training required, authorised by).</p>
+      </section>
     </div>
   );
 }
@@ -1966,7 +2296,7 @@ function DraftEditor({ value, onChange, lastAppliedRange, onEdit, placeholder })
 function OriginalDocumentPanel({ htmlContent, content, sections = [], sourceType, highlightSearch }) {
   const htmlContainerRef = useRef(null);
 
-  // Apply highlights in HTML DOM when highlightSearch changes
+  // Apply highlights in HTML DOM when highlightSearch changes (cross-node + per-node fallback)
   useEffect(() => {
     if (sourceType !== 'html' || !htmlContainerRef.current || !htmlContent) return;
     const container = htmlContainerRef.current;
@@ -1975,14 +2305,22 @@ function OriginalDocumentPanel({ htmlContent, content, sections = [], sourceType
     const search = highlightSearch?.trim();
     if (!search || search.length < 2) return;
 
+    const textNodes = collectTextNodesUnder(container);
+    const full = textNodes.map((n) => n.textContent).join('');
+    const span = findExcerptMatchSpan(full, search);
+    if (span) {
+      const range = rangeFromTextOffsets(textNodes, span.start, span.length);
+      if (range) {
+        surroundRangeWithHighlightMark(range);
+        return;
+      }
+    }
+
+    // Fallback: excerpt split across elements sometimes still fails — try per-text-node regex
     const escapeRegex = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const re = new RegExp(`(${escapeRegex(search)})`, 'gi');
-
-    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
-    const textNodes = [];
-    while (walker.nextNode()) textNodes.push(walker.currentNode);
-
     textNodes.forEach((node) => {
+      re.lastIndex = 0;
       const text = node.textContent;
       if (!re.test(text)) return;
       re.lastIndex = 0;
@@ -2027,18 +2365,45 @@ function OriginalDocumentPanel({ htmlContent, content, sections = [], sourceType
   function highlightInText(text) {
     if (!highlightSearch || highlightSearch.trim().length < 2) return text;
     const search = highlightSearch.trim();
-    try {
-      const re = new RegExp(`(${escapeRegex(search)})`, 'gi');
-      const parts = text.split(re);
-      if (parts.length <= 1) return text;
-      return parts.map((part, j) =>
-        j % 2 === 1 ? (
-          <mark key={j} className="original-doc-highlight" data-highlight>{part}</mark>
-        ) : part
-      );
-    } catch (_) {
-      return text;
+    const tryHighlight = (needle) => {
+      try {
+        const re = new RegExp(`(${escapeRegex(needle)})`, 'gi');
+        const parts = text.split(re);
+        if (parts.length <= 1) return null;
+        return parts.map((part, j) =>
+          j % 2 === 1 ? (
+            <mark key={`${needle.length}-${j}`} className="original-doc-highlight" data-highlight>{part}</mark>
+          ) : part
+        );
+      } catch {
+        return null;
+      }
+    };
+    const full = tryHighlight(search);
+    if (full) return full;
+    for (let len = Math.min(search.length, 160); len >= 20; len -= 8) {
+      const sub = search.slice(0, len);
+      const partial = tryHighlight(sub);
+      if (partial) return partial;
     }
+    const n = normalizeForDocSearch(text);
+    const ns = normalizeForDocSearch(search);
+    if (ns.length >= 2) {
+      const idx = n.toLowerCase().indexOf(ns.toLowerCase());
+      if (idx >= 0) {
+        const before = text.slice(0, idx);
+        const mid = text.slice(idx, idx + ns.length);
+        const after = text.slice(idx + ns.length);
+        return (
+          <>
+            {before}
+            <mark className="original-doc-highlight" data-highlight>{mid}</mark>
+            {after}
+          </>
+        );
+      }
+    }
+    return text;
   }
 
   if (sections.length > 0) {
@@ -2071,60 +2436,7 @@ function OriginalDocumentPanel({ htmlContent, content, sections = [], sourceType
 }
 
 // ---------------------------------------------------------------------------
-// Proposed Solutions summary — consolidated view of all recommendations
-// ---------------------------------------------------------------------------
-function ProposedSolutionsSummary({ solutions, onFindingClick }) {
-  const [expanded, setExpanded] = useState(true);
-  if (!solutions?.length) return null;
-
-  function handleRowClick(row) {
-    if (row.sectionId) scrollToSection(row.sectionId);
-    if (onFindingClick && row.searchText) onFindingClick(row.searchText);
-  }
-
-  return (
-    <div className="proposed-solutions-summary">
-      <button type="button" className="proposed-solutions-header" onClick={() => setExpanded(!expanded)}>
-        <h4>Proposed Solutions</h4>
-        <span className="proposed-solutions-count">{solutions.length} recommendation{solutions.length !== 1 ? 's' : ''}</span>
-        <span className="proposed-solutions-toggle">{expanded ? '▲' : '▼'}</span>
-      </button>
-      {expanded && (
-        <div className="proposed-solutions-table-wrap">
-          <table className="proposed-solutions-table">
-            <thead>
-              <tr>
-                <th>Agent</th>
-                <th>Current / Issue</th>
-                <th>Proposed solution</th>
-              </tr>
-            </thead>
-            <tbody>
-              {solutions.map((row, i) => (
-                <tr
-                  key={i}
-                  className="proposed-solutions-row-clickable"
-                  onClick={() => handleRowClick(row)}
-                  role="button"
-                  tabIndex={0}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleRowClick(row); } }}
-                  title={onFindingClick ? 'Click to jump to finding and highlight in original' : 'Click to jump to this finding'}
-                >
-                  <td className="proposed-agent">{row.agent}</td>
-                  <td className="proposed-current">{row.current}</td>
-                  <td className="proposed-proposal">{row.proposal}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Risk Gap card — sorted by FMEA score, shows score bar inline
+// Risk Gap card — sorted by HACCP RPN score, shows score bar inline
 // ---------------------------------------------------------------------------
 function RiskGapCard({ items, agentKey, onFindingClick, onApplyChange, onAddNote, appliedFindings, findingId, customSolutionByFindingId, onCustomSolutionChange, onCheckWithAgent, validateSolutionResult, validatingFindingId }) {
   const [expanded, setExpanded] = useState(false);
@@ -2158,11 +2470,16 @@ function RiskGapCard({ items, agentKey, onFindingClick, onApplyChange, onAddNote
             )}
             <div className="risk-gap-top">
               <span className="agent-field-label">{gap.location || '—'}</span>
-              <FmeaBar score={gap.fmea_score} band={gap.fmea_band} />
+              <HaccpRpnBar score={gap.fmea_score} band={gap.fmea_band} />
             </div>
             {gap.fmea_score > 0 && (
-              <div className="fmea-dimensions">
-                S={gap.severity} · Sc={gap.scope} · D={gap.detectability}
+              <div
+                className="haccp-rpn-dimensions"
+                title={!(gap.detectability > 0) ? 'Detectability omitted; 3 used in HACCP score' : undefined}
+              >
+                Severity={gap.severity} · Likelihood={gap.likelihood ?? gap.scope}
+                {' · '}
+                Detectability={gap.detectability > 0 ? gap.detectability : '3 (default)'}
               </div>
             )}
             <div className="agent-field">

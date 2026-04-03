@@ -66,7 +66,7 @@
       "risk": "Incorrect temperature readings could lead to loading products at unsafe temperatures.",
       "recommendation": "Include detailed instructions or training requirements for using a calibrated temperature probe.",
       "severity": 3,
-      "scope": 3,
+      "likelihood": 3,
       "detectability": 3,
       "fmea_score": 27,
       "fmea_band": "critical"
@@ -77,7 +77,7 @@
       "risk": "Products may be loaded onto vehicles that are not at the correct temperature, compromising product safety.",
       "recommendation": "Specify corrective actions to take if vehicle temperature is out of range, beyond just not loading the vehicle.",
       "severity": 4,
-      "scope": 4,
+      "likelihood": 4,
       "detectability": 2,
       "fmea_score": 64,
       "fmea_band": "critical"
@@ -88,7 +88,7 @@
       "risk": "Lack of clear escalation could delay resolution and impact product safety.",
       "recommendation": "Define an escalation procedure including who to contact and how to escalate if a trailer cannot reach the required temperature.",
       "severity": 3,
-      "scope": 3,
+      "likelihood": 3,
       "detectability": 3,
       "fmea_score": 27,
       "fmea_band": "critical"
@@ -99,7 +99,7 @@
       "risk": "Inconsistent checks could lead to products being loaded onto unsuitable vehicles.",
       "recommendation": "Provide explicit criteria or a checklist for assessing vehicle cleanliness and odour.",
       "severity": 3,
-      "scope": 3,
+      "likelihood": 3,
       "detectability": 3,
       "fmea_score": 27,
       "fmea_band": "critical"
@@ -110,7 +110,7 @@
       "risk": "Lack of records could lead to disputes or inability to verify compliance.",
       "recommendation": "Specify how vehicle cleanliness and odour checks should be recorded and retained.",
       "severity": 3,
-      "scope": 3,
+      "likelihood": 3,
       "detectability": 3,
       "fmea_score": 27,
       "fmea_band": "critical"
@@ -121,7 +121,7 @@
       "risk": "Inconsistent temperature monitoring could lead to non-compliance with safety standards.",
       "recommendation": "Align the frequency of vehicle temperature checks with the Test document for RAG or clarify the discrepancy.",
       "severity": 3,
-      "scope": 4,
+      "likelihood": 4,
       "detectability": 2,
       "fmea_score": 48,
       "fmea_band": "critical"
@@ -132,7 +132,7 @@
       "risk": "Potential gaps in critical control point monitoring could compromise food safety.",
       "recommendation": "Include references to the HACCP plan and specify CCP monitoring requirements.",
       "severity": 4,
-      "scope": 4,
+      "likelihood": 4,
       "detectability": 2,
       "fmea_score": 64,
       "fmea_band": "critical"
@@ -143,7 +143,7 @@
       "risk": "Non-compliance with customer or retailer requirements could lead to rejected deliveries.",
       "recommendation": "Include references to relevant customer specifications or retailer codes of practice.",
       "severity": 3,
-      "scope": 3,
+      "likelihood": 3,
       "detectability": 3,
       "fmea_score": 27,
       "fmea_band": "critical"
@@ -154,7 +154,7 @@
       "risk": "Lack of reference could lead to oversight of critical site maintenance activities.",
       "recommendation": "Include references to related site technical documentation.",
       "severity": 3,
-      "scope": 3,
+      "likelihood": 3,
       "detectability": 3,
       "fmea_score": 27,
       "fmea_band": "critical"
@@ -165,7 +165,7 @@
       "risk": "Non-compliance with regulatory standards could lead to legal issues and product recalls.",
       "recommendation": "Include references to relevant regulatory standards and guidelines.",
       "severity": 4,
-      "scope": 4,
+      "likelihood": 4,
       "detectability": 2,
       "fmea_score": 64,
       "fmea_band": "critical"
@@ -176,7 +176,7 @@
       "risk": "Inconsistent checks could lead to contamination of products.",
       "recommendation": "Provide explicit criteria or a checklist for assessing the load for debris and contamination.",
       "severity": 4,
-      "scope": 3,
+      "likelihood": 3,
       "detectability": 3,
       "fmea_score": 36,
       "fmea_band": "critical"
@@ -187,7 +187,7 @@
       "risk": "Improperly secured loads could lead to product damage during transit.",
       "recommendation": "Include detailed instructions for securing loads on pallets.",
       "severity": 3,
-      "scope": 3,
+      "likelihood": 3,
       "detectability": 3,
       "fmea_score": 27,
       "fmea_band": "critical"
@@ -198,7 +198,7 @@
       "risk": "Inconsistent assessments could lead to product damage.",
       "recommendation": "Provide explicit criteria or a checklist for assessing vehicle maintenance.",
       "severity": 3,
-      "scope": 3,
+      "likelihood": 3,
       "detectability": 3,
       "fmea_score": 27,
       "fmea_band": "critical"
@@ -209,7 +209,7 @@
       "risk": "Lack of procedures could lead to inadequate response to incidents, compromising product safety.",
       "recommendation": "Include procedures for handling vehicle breakdowns, accidents, or refrigeration failures.",
       "severity": 4,
-      "scope": 4,
+      "likelihood": 4,
       "detectability": 2,
       "fmea_score": 64,
       "fmea_band": "critical"

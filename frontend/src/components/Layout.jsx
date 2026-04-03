@@ -12,6 +12,7 @@ import {
   FlaskConical,
   Info,
   ScrollText,
+  Target,
 } from 'lucide-react';
 import { AnalysisProvider, useAnalysis } from '../context/AnalysisContext';
 import { SITES_OPTIONS } from '../constants/sites';
@@ -81,6 +82,10 @@ function Sidebar() {
         <NavLink to="/logs" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
           <ScrollText size={16} />
           Governance Logs
+        </NavLink>
+        <NavLink to="/harmonisation" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
+          <Target size={16} />
+          Harmonisation
         </NavLink>
 
         <span className="sidebar-section-label">Workflows</span>

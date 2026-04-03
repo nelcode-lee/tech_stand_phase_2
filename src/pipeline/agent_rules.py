@@ -1,19 +1,23 @@
 """Shared rules applied across all pipeline agents."""
 
-# Document reference rule — when procedures mention forms, logs, SOPs, schedules, or related documents:
-# - If a child/supporting document is already referenced → allow for non-specificity (do not flag)
-# - If no document reference is given → flag and ask for one (recommend adding the reference)
+# Document reference rule (v2.1) — operator reference usability only; not document-control / QMS auditing.
 DOCUMENT_REFERENCE_RULE = """
-DOCUMENT REFERENCE RULE (apply across all findings)
-When procedures mention forms, logs, schedules, SOPs, summaries, or related documents:
-- If a child/supporting document is already referred to (by name, code, or reference) → allow for non-specificity; do not flag.
-- If no document reference is given → flag it and ask for one. Recommend adding the specific document name, code, or reference.
+DOCUMENT REFERENCE HANDLING (v2.1 — RE-SCOPED)
+Retain **reference usability only** at point of use. This is **not** a document-control audit, **not** a QMS or records-management audit, and **not** a test of whether every cross-reference in a quality system is perfect.
 
-CONTROLLED CHILD / SUPPORTING DOCUMENTS
-If a measurable parameter, limit, tolerance, or acceptance criterion is held in a linked controlled document, record form, setup sheet, or work instruction:
-- Do NOT require the value to be repeated in the SOP when the SOP explicitly identifies the source document and makes clear when it must be consulted.
-- Accept this only when the dependency is unambiguous at point of use (e.g. the document or record is named or coded, and the operator can tell what it is for).
-- Flag only when the reference is generic, unnamed, inaccessible, or leaves the user guessing where the criterion comes from or when to check it.
+Use only these checks:
+1. Can the operator tell **which** document, form, record, or procedure to use when the step depends on it (name, code, or other clear pointer)?
+2. Can they tell **where to find it** or how to retrieve it in normal work — or is the pointer so generic that they would not know what to open?
+
+When procedures mention forms, logs, schedules, SOPs, summaries, or related documents:
+- If (1) and (2) are satisfied for the operative → **do not** flag for “more” referencing or document-control completeness.
+- If a step depends on another document but **no** usable reference is given (e.g. “as per the procedure”, “the form”, “complete the check” with no identifier) → flag; recommend the **minimum** the operator needs to identify and find the item. Do **not** prescribe a full document-management workflow.
+
+LINKED LIMITS IN OTHER DOCUMENTS (usability — not auditing)
+If a measurable parameter, limit, tolerance, or acceptance criterion is held in a linked document, record, setup sheet, or work instruction:
+- Do **not** require the numeric value to be copied into this document when the **source is named** and it is clear **when** the operator must consult it — provided the operator can tell **which** document to open.
+- Flag only when the operator **cannot** tell which linked document applies, **when** to use it, or what to open — not to enforce document-control matrices or revision rules.
+- Missing **numbers** or pass/fail criteria (tolerance gaps) are handled under the tolerance / Specifier rules; do not treat them as “missing reference” unless the issue is truly “no pointer to any source”.
 """
 
 # Job title vs named individual — controlled procedures must use roles, not person names

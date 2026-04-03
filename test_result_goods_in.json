@@ -14,7 +14,7 @@
       "risk": "Non-conforming materials may be used, leading to product quality issues or safety hazards.",
       "recommendation": "Include specific corrective actions to be taken when raw materials do not meet specifications.",
       "severity": 4,
-      "scope": 4,
+      "likelihood": 4,
       "detectability": 3,
       "fmea_score": 48,
       "fmea_band": "critical"
@@ -25,7 +25,7 @@
       "risk": "Issues may not be addressed promptly, leading to potential quality or safety risks.",
       "recommendation": "Define an escalation procedure, including who to contact and how, when issues are identified during goods in checks.",
       "severity": 4,
-      "scope": 3,
+      "likelihood": 3,
       "detectability": 3,
       "fmea_score": 36,
       "fmea_band": "critical"
@@ -36,7 +36,7 @@
       "risk": "Lack of documentation could lead to untraceable quality issues and non-compliance with audits.",
       "recommendation": "Specify what records must be kept for goods in checks, where they should be stored, and for how long.",
       "severity": 3,
-      "scope": 4,
+      "likelihood": 4,
       "detectability": 2,
       "fmea_score": 48,
       "fmea_band": "critical"
@@ -47,7 +47,7 @@
       "risk": "Inconsistent checks could lead to missed quality or safety issues.",
       "recommendation": "Define the frequency at which goods in checks should be conducted (e.g., every delivery, daily).",
       "severity": 3,
-      "scope": 3,
+      "likelihood": 3,
       "detectability": 3,
       "fmea_score": 27,
       "fmea_band": "critical"
@@ -58,7 +58,7 @@
       "risk": "Ambiguity could lead to inconsistent assessments and overlooked issues.",
       "recommendation": "Provide explicit criteria or a checklist for assessing the integrity of vehicles and product pallets.",
       "severity": 3,
-      "scope": 3,
+      "likelihood": 3,
       "detectability": 3,
       "fmea_score": 27,
       "fmea_band": "critical"
@@ -69,7 +69,7 @@
       "risk": "Unclear responsibility could lead to checks being missed or improperly conducted.",
       "recommendation": "Clearly specify the role or person responsible for conducting goods in checks.",
       "severity": 3,
-      "scope": 3,
+      "likelihood": 3,
       "detectability": 2,
       "fmea_score": 36,
       "fmea_band": "critical"
@@ -80,7 +80,7 @@
       "risk": "Lack of communication could lead to the use of unapproved suppliers or materials.",
       "recommendation": "Detail the process and method for communicating supplier approvals to relevant departments.",
       "severity": 3,
-      "scope": 3,
+      "likelihood": 3,
       "detectability": 3,
       "fmea_score": 27,
       "fmea_band": "critical"
