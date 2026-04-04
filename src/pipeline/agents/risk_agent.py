@@ -196,13 +196,14 @@ RULES
 - Do not fill gaps. Report only what is observable.
 - Each gap must be a separate JSON object. Never merge two gaps into one object.
 - Score every gap using the HACCP dimensions above (severity and likelihood each 1–6; detectability 1–6 or omit/0). HACCP Score is computed server-side as Severity × Likelihood × Detectability — do not add a "haccp_score" or "rpn" field.
+- Optional **hazard_control_type** (per gap): if the gap clearly relates to a documented or implied **CCP** (critical control point), **oPRP** (operational prerequisite programme / significant hazard control that is not a CCP), or **PRP** (basic prerequisite programme / GMP-hygiene foundation), set exactly one of `"ccp"`, `"oprp"`, `"prp"`. Use `""` when the text does not support a classification. Do not guess: only tag when the excerpt or issue explicitly concerns CCP monitoring/limits, oPRP-style operational controls, or PRP/GMP programmes.
 - Recommendations must be implementation-ready, not generic. Prefer concrete wording operators can paste into the SOP:
   include trigger condition, responsible role, immediate containment action, escalation path, and required record/form where relevant.
 - Avoid vague recommendations like "define specific corrective actions". Instead propose the specific actions to add.
 
 OUTPUT FORMAT
 Return ONLY a JSON array. Each object:
-{{"location": "<section, step, or heading>", "excerpt": "<exact quote from document — the text that relates to this gap; copy-paste from source>", "issue": "<the specific missing information or unsafe assumption>", "risk": "<factual consequence if left unaddressed>", "recommendation": "<exactly what information must be added>", "severity": <1-6>, "likelihood": <1-6>, "detectability": <1-6 or 0>}}
+{{"location": "<section, step, or heading>", "excerpt": "<exact quote from document — the text that relates to this gap; copy-paste from source>", "issue": "<the specific missing information or unsafe assumption>", "risk": "<factual consequence if left unaddressed>", "recommendation": "<exactly what information must be added>", "severity": <1-6>, "likelihood": <1-6>, "detectability": <1-6 or 0>, "hazard_control_type": "" | "ccp" | "oprp" | "prp"}}
 
 CRITICAL: "excerpt" must be the exact text from the document that relates to the gap — this is used to highlight the relevant passage in the original. If the gap concerns missing content, quote the nearest surrounding text (e.g. the step or paragraph where the gap applies).
 
@@ -487,6 +488,18 @@ def _recommendation_is_generic(text: str | None) -> bool:
     return any(re.search(pat, t) for pat in _GENERIC_RECOMMENDATION_PATTERNS)
 
 
+def _normalize_hazard_control_type(raw) -> str:
+    """Map LLM output to ccp | oprp | prp | ''."""
+    s = str(raw or "").strip().lower().replace(" ", "").replace("-", "")
+    if s in ("ccp",):
+        return "ccp"
+    if s in ("oprp", "opr"):
+        return "oprp"
+    if s in ("prp",):
+        return "prp"
+    return ""
+
+
 def _make_recommendation_specific(location: str | None, issue: str | None, recommendation: str | None) -> str:
     """Convert generic risk recommendations into concrete draft-ready wording."""
     rec = (recommendation or "").strip()
@@ -550,6 +563,7 @@ class RiskAgent(BaseAgent):
                     item.get("issue", ""),
                     item.get("recommendation", ""),
                 )
+                hz = _normalize_hazard_control_type(item.get("hazard_control_type"))
                 gaps.append(
                     RiskGap(
                         location=item.get("location", ""),
@@ -562,6 +576,7 @@ class RiskAgent(BaseAgent):
                         detectability=det_raw,
                         fmea_score=score,
                         fmea_band=band,
+                        hazard_control_type=hz,
                     )
                 )
 

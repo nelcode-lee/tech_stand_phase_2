@@ -11,13 +11,19 @@ import {
   Database,
   FlaskConical,
   Info,
-  ScrollText,
   Target,
+  ClipboardCheck,
 } from 'lucide-react';
 import { AnalysisProvider, useAnalysis } from '../context/AnalysisContext';
 import { SITES_OPTIONS } from '../constants/sites';
 import { addInteractionLog } from '../api';
 import ChatBotWidget from './ChatBotWidget';
+import {
+  draftNavLabel,
+  isDraftMinimal,
+  draftSessionStepLabel,
+  DRAFT_STEP_TITLE_ATTR,
+} from '../config/productPhase';
 import './Layout.css';
 
 function Sidebar() {
@@ -79,13 +85,15 @@ function Sidebar() {
           <LayoutGrid size={16} />
           Document Library
         </NavLink>
-        <NavLink to="/logs" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
-          <ScrollText size={16} />
-          Governance Logs
-        </NavLink>
         <NavLink to="/harmonisation" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
           <Target size={16} />
           Harmonisation
+        </NavLink>
+
+        <span className="sidebar-section-label">Demo</span>
+        <NavLink to="/demo/hitl" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
+          <ClipboardCheck size={16} />
+          HITL review (demo)
         </NavLink>
 
         <span className="sidebar-section-label">Workflows</span>
@@ -97,14 +105,16 @@ function Sidebar() {
           <FileSearch size={16} />
           Review a Document
         </NavLink>
-        <div className="sidebar-link-with-info">
+        <div className={`sidebar-link-with-info ${isDraftMinimal ? 'sidebar-create-minimal' : ''}`}>
           <NavLink
             to="/create/configure"
-            className={({ isActive }) => `sidebar-link ${isActive || path.startsWith('/create') ? 'active' : ''}`}
+            className={({ isActive }) =>
+              `sidebar-link ${isActive || path.startsWith('/create') ? 'active' : ''} ${isDraftMinimal ? 'sidebar-create-deemphasized' : ''}`
+            }
             onClick={() => setWorkflowMode('create')}
           >
             <FilePlus2 size={16} />
-            Create a Document
+            {draftNavLabel('Create a Document')}
           </NavLink>
           <span
             ref={createInfoTriggerRef}
@@ -127,7 +137,7 @@ function Sidebar() {
               onMouseEnter={showCreateInfo}
               onMouseLeave={hideCreateInfo}
             >
-              For new documents only. Use to build brand-new SOPs from ingested policies and standards — not for reviewing existing documents.
+              Experimental / assistive — not for issuing controlled documents without governance. Builds new content from ingested material; use Review a Document for compliance checks on existing SOPs.
             </div>,
             document.body
           )}
@@ -151,32 +161,52 @@ function Sidebar() {
   );
 }
 
+function sessionStepPathname(to) {
+  const s = String(to);
+  const q = s.indexOf('?');
+  return q === -1 ? s : s.slice(0, q);
+}
+
 function SessionSteps({ mode, path }) {
+  const { result } = useAnalysis();
   const base = mode === 'create' ? '/create' : '/review';
-  // Core usability flow: locate/upload → analyse → review findings → draft for HITL → submit to Library
+  const draftLabel = draftSessionStepLabel();
+  const tid = (result?.tracking_id || '').trim();
+  const govSearch = tid ? `?trackingId=${encodeURIComponent(tid)}` : '';
+  const govTo = `${base}/analyse/governance-summary${govSearch}`;
+
+  // Core flow: configure → analyse → governance & sign-off → assistive draft (HITL) → submit to library
   const steps = mode === 'create'
     ? [
-        { to: `${base}/configure`, label: 'Configure', icon: Database },
-        { to: `${base}/analyse/overview`, label: 'Analyse', icon: FlaskConical },
-        { to: `${base}/analyse/draft`, label: 'Draft for HITL', icon: FilePlus2 },
-        { to: `${base}/finalize`, label: 'Submit to Library', icon: CheckCircle2 },
+        { to: `${base}/configure`, label: 'Configure', icon: Database, title: null },
+        { to: `${base}/analyse/overview`, label: 'Analyse', icon: FlaskConical, title: null },
+        { to: govTo, label: 'Governance & sign-off', icon: ClipboardCheck, title: 'Dispositions, hazard tags, notes, and formal sign-off for this session.' },
+        { to: `${base}/analyse/draft`, label: draftLabel, icon: FilePlus2, title: DRAFT_STEP_TITLE_ATTR },
+        { to: `${base}/finalize`, label: 'Submit to Library', icon: CheckCircle2, title: 'Staging area — not a controlled release without local process.' },
       ]
     : [
-        { to: `${base}/configure`, label: 'Configure', icon: Database },
-        { to: `${base}/analyse/overview`, label: 'Analyse', icon: FlaskConical },
-        { to: `${base}/analyse/draft`, label: 'Draft for HITL', icon: FilePlus2 },
-        { to: `${base}/finalize`, label: 'Submit to Library', icon: CheckCircle2 },
+        { to: `${base}/configure`, label: 'Configure', icon: Database, title: null },
+        { to: `${base}/analyse/overview`, label: 'Analyse', icon: FlaskConical, title: null },
+        { to: govTo, label: 'Governance & sign-off', icon: ClipboardCheck, title: 'Dispositions, hazard tags, notes, and formal sign-off for this session.' },
+        { to: `${base}/analyse/draft`, label: draftLabel, icon: FilePlus2, title: DRAFT_STEP_TITLE_ATTR },
+        { to: `${base}/finalize`, label: 'Submit to Library', icon: CheckCircle2, title: 'Staging area — not a controlled release without local process.' },
       ];
+
+  const activeIndex = steps.findIndex((s) => {
+    const p = sessionStepPathname(s.to);
+    return path === p || path.startsWith(`${p}/`);
+  });
 
   return (
     <ol className="session-steps">
-      {steps.map(({ to, label, icon: Icon }, i) => {
-        const isActive = path === to || path.startsWith(to);
-        const isDone = steps.findIndex(s => path === s.to || path.startsWith(s.to)) > i;
+      {steps.map(({ to, label, icon: Icon, title: stepTitle }, i) => {
+        const stepPath = sessionStepPathname(to);
+        const isActive = path === stepPath || path.startsWith(`${stepPath}/`);
+        const isDone = activeIndex > i;
         return (
-          <li key={to} className={`session-step ${isActive ? 'active' : ''} ${isDone ? 'done' : ''}`}>
+          <li key={stepPath} className={`session-step ${isActive ? 'active' : ''} ${isDone ? 'done' : ''}`}>
             <span className="session-step-num">{isDone ? '✓' : i + 1}</span>
-            <NavLink to={to} className="session-step-label">
+            <NavLink to={to} className="session-step-label" title={stepTitle || undefined}>
               <Icon size={14} />
               {label}
             </NavLink>

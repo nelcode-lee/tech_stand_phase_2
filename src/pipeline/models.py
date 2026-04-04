@@ -76,6 +76,8 @@ class RiskGap(BaseModel):
     detectability: int = 0    # 1–6, or 0 = omitted (server uses neutral default for product)
     fmea_score: int = 0       # HACCP score = S×L×D (1–216); field name legacy
     fmea_band: str = ""       # low | medium | high | critical; field name legacy
+    # Food safety plan layer (ISO 22000 / HACCP): optional model hint; UI may override via finding_hazard_control_tags.
+    hazard_control_type: str = ""  # ccp | oprp | prp | ""
 
     @model_validator(mode="before")
     @classmethod

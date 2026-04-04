@@ -1,4 +1,6 @@
 """FastAPI routes for RAG ingest (called by Workato) and document listing."""
+import os
+
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
@@ -52,7 +54,16 @@ def list_documents() -> list[DocumentSummary]:
     If registry is empty but vector store has chunks, backfill from vector store and return.
     """
     import logging
+
     log = logging.getLogger(__name__)
+    if not (os.environ.get("SUPABASE_DB_URL") or "").strip():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Document library requires SUPABASE_DB_URL in the API environment (.env). "
+                "Restart the server after setting it."
+            ),
+        )
     try:
         from src.rag.document_registry import list_documents as registry_list, fetch_all_from_vector_store, upsert_document
         rows = registry_list()
@@ -76,17 +87,21 @@ def list_documents() -> list[DocumentSummary]:
                         log.warning("Backfill upsert failed for %s: %s", d.get("document_id"), ex)
                 rows = registry_list()
         return [DocumentSummary(**r) for r in rows]
+    except HTTPException:
+        raise
     except Exception as e:
         log.warning("list_documents failed: %s", e)
-        # Last resort: try returning directly from vector store
         try:
             from src.rag.document_registry import fetch_all_from_vector_store
             from_vec = fetch_all_from_vector_store()
             if from_vec:
                 return [DocumentSummary(**r) for r in from_vec]
-        except Exception:
-            pass
-        return []
+        except Exception as e2:
+            log.warning("vector fallback failed: %s", e2)
+        raise HTTPException(
+            status_code=503,
+            detail=f"Document library unavailable: {e!s}",
+        ) from e
 
 
 class DocumentUpdateBody(BaseModel):

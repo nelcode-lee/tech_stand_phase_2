@@ -172,7 +172,7 @@
 .sidebar-info-popup {
   padding: 0.5rem 0.75rem;
   min-width: 200px;
-  max-width: 260px;
+  max-width: 280px;
   font-size: 0.75rem;
   font-weight: 400;
   line-height: 1.4;
@@ -182,6 +182,17 @@
   border-radius: 6px;
   box-shadow: 0 4px 12px rgba(0,0,0,0.15);
   white-space: normal;
+}
+
+/* Epic D — VITE_DRAFT_OUTPUT_MODE=minimal de-emphasises create flow */
+.sidebar-create-deemphasized:not(.active) {
+  opacity: 0.78;
+  font-size: 0.78rem;
+  font-weight: 450;
+}
+
+.sidebar-create-minimal .sidebar-info-trigger {
+  opacity: 0.6;
 }
 
 /* Portal-rendered popup: above main content */

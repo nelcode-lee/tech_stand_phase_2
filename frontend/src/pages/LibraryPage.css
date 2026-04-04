@@ -78,6 +78,14 @@
   border-color: var(--yb-blue);
 }
 
+@keyframes library-refresh-spin {
+  to { transform: rotate(360deg); }
+}
+
+.library-refresh-spin {
+  animation: library-refresh-spin 0.75s linear infinite;
+}
+
 .library-header-btn.primary {
   background: var(--yb-blue);
   color: white;

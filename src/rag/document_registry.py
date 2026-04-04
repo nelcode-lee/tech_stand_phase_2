@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+from collections import defaultdict
 from contextlib import contextmanager
 from typing import Any
 
@@ -584,7 +585,56 @@ def query_policy_clauses_for_documents(
     if best >= 4:
         thresh = max(2, int(best * 0.45))
         rescored = [(s, r) for s, r in rescored if s >= thresh]
-    return [row for _, row in rescored[:limit]]
+    if not rescored:
+        return []
+
+    # Round-robin across policy documents so one standard (e.g. Cranswick MS) cannot crowd out
+    # BRCGS clauses before the LLM sees them — critical for multi-standard harmonisation.
+    by_doc: dict[str, list[tuple[int, dict]]] = defaultdict(list)
+    for s, r in rescored:
+        did = str(r.get("document_id") or "").strip()
+        if did:
+            by_doc[did].append((s, r))
+
+    order_ids = [d for d in ids if d in by_doc]
+    if len(order_ids) <= 1:
+        return [row for _, row in rescored[:limit]]
+
+    out: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    ptr = {d: 0 for d in order_ids}
+
+    while len(out) < limit:
+        progressed = False
+        for did in order_ids:
+            if len(out) >= limit:
+                break
+            lst = by_doc[did]
+            i = ptr[did]
+            if i >= len(lst):
+                continue
+            _, row = lst[i]
+            ptr[did] = i + 1
+            key = (str(row.get("document_id") or ""), str(row.get("clause_id") or ""))
+            if key in seen or not key[0] or not key[1]:
+                continue
+            seen.add(key)
+            out.append(row)
+            progressed = True
+        if not progressed:
+            break
+
+    if len(out) < limit:
+        for _, r in rescored:
+            if len(out) >= limit:
+                break
+            key = (str(r.get("document_id") or ""), str(r.get("clause_id") or ""))
+            if key in seen or not key[0] or not key[1]:
+                continue
+            seen.add(key)
+            out.append(r)
+
+    return out[:limit]
 
 
 def get_policy_citation_set(*, document_id: str | None = None, standard_name: str | None = None) -> set[str]:

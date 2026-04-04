@@ -3,6 +3,8 @@ import { useNavigate } from 'react-router-dom';
 import { Upload, X, MessageSquare } from 'lucide-react';
 import { addInteractionLog, ingestFile, listDocuments, generateWorkInstruction } from '../api';
 import PolicyRefSelect from '../components/PolicyRefSelect';
+import { PhasePositioningBanner } from '../components/PhasePositioningBanner';
+import { isDraftBeta } from '../config/productPhase';
 import { useAnalysis } from '../context/AnalysisContext';
 import { resolveSitesForApi, SITES_OPTIONS } from '../constants/sites';
 import { filterPolicyDocumentsForRef } from '../utils/policyDocuments';
@@ -181,10 +183,6 @@ export default function ConfigurePage({ mode = 'review' }) {
       setPendingFiles(prev => [...prev, ...Array.from(selected)]);
     }
     e.target.value = '';
-  }
-
-  function triggerFileInput() {
-    fileInputRef.current?.click();
   }
 
   function removeFile(index) {
@@ -418,18 +416,23 @@ export default function ConfigurePage({ mode = 'review' }) {
           )}
         </div>
       </div>
+      {mode === 'create' ? (
+        <PhasePositioningBanner variant="banner" className="configure-phase-banner" />
+      ) : (
+        <PhasePositioningBanner variant="compact" className="configure-phase-banner" />
+      )}
       <div className="configure-header">
         <div className="workflow-hint workflow-hint-inline" role="status">
           <span className="workflow-hint-label">Workflow</span>
           <span className="workflow-hint-text">
             {mode === 'create'
-              ? <>You are here: <strong>Configure</strong>. The pipeline will use ingested elements and the <strong>policy layer</strong> (principle layer in time) to build your new document. Next: <strong>Analyse</strong> (top-right or sidebar) → <strong>Draft for HITL</strong> → <strong>Submit to Library</strong>.</>
-              : <>You are here: <strong>Configure</strong>. Next: go to <strong>Analyse</strong> (top-right or sidebar) and run analysis, then <strong>Draft for HITL</strong> → <strong>Submit to Library</strong>.</>}
+              ? <>You are here: <strong>Configure</strong>. Next: <strong>Analyse</strong> → <strong>Governance &amp; sign-off</strong> → optional <strong>Draft for HITL</strong> (assistive text only) → <strong>Submit to Library</strong> as a staging step. {isDraftBeta && <em> Create flow is labelled beta.</em>}</>
+              : <>You are here: <strong>Configure</strong>. Primary path: <strong>Analyse</strong> for findings, then <strong>Governance &amp; sign-off</strong> for dispositions and formal review. Draft and submit remain optional assistive steps — not a controlled document release.</>}
           </span>
         </div>
         <p className="configure-subtitle">
           {mode === 'create'
-            ? 'Build brand-new SOPs (and in time, principle-layer docs) using ingested standards, the policy layer, and project logic. Choose document type and upload reference materials; the pipeline drafts from your policies and ingested content.'
+            ? 'Experimental assistive authoring: proposed structure and text from ingested standards and policies — not an approved template and not for publication without local governance.'
             : '1. Pick a document from Library (or upload to add it). 2. Set options below. 3. Run analysis. Documents come from your ingested store until SharePoint is connected.'}
         </p>
       </div>
@@ -777,15 +780,13 @@ export default function ConfigurePage({ mode = 'review' }) {
               ? 'Add policies, standards, or example documents to inform the draft.'
               : 'Upload the document to review. First file is the main document; additional files are reference docs for guardrails.'}
           </p>
-          <div
+          <label
             className={`upload-zone ${dragOver ? 'drag-over' : ''} ${pendingFiles?.length ? 'has-file' : ''}`}
+            htmlFor="config-upload-input"
             onDrop={handleDrop}
             onDragOver={e => { e.preventDefault(); e.stopPropagation(); setDragOver(true); }}
             onDragLeave={() => setDragOver(false)}
-            onClick={triggerFileInput}
-            role="button"
-            tabIndex={0}
-            onKeyDown={e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); triggerFileInput(); } }}
+            tabIndex={-1}
           >
             <Upload className="upload-icon" size={36} />
             <p>Drag and drop, or click to browse</p>
@@ -795,7 +796,6 @@ export default function ConfigurePage({ mode = 'review' }) {
               type="file"
               accept=".docx,.pdf,.doc,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,text/plain"
               multiple
-              onClick={e => e.stopPropagation()}
               onChange={handleFileSelect}
               className="upload-input"
               id="config-upload-input"
@@ -810,7 +810,7 @@ export default function ConfigurePage({ mode = 'review' }) {
                 ))}
               </div>
             )}
-          </div>
+          </label>
         </section>
         )}
 

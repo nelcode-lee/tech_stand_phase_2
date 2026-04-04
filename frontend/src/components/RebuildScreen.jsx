@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import { Settings, CheckCircle } from 'lucide-react';
 import './RebuildScreen.css';
 
-export function RebuildScreen({ onComplete }) {
+export function RebuildScreen({ onComplete, mode = 'review' }) {
   const [step, setStep] = useState(0);
 
   useEffect(() => {
@@ -34,6 +34,11 @@ export function RebuildScreen({ onComplete }) {
         </div>
         <h2 className="rebuild-title">Submitting to Library</h2>
         <p className="rebuild-subtitle">Applying your decisions and preparing for SharePoint...</p>
+        {mode === 'create' && (
+          <p className="rebuild-disclaimer" role="note">
+            Assistive output only — staging in the library does not approve a controlled document for live use.
+          </p>
+        )}
         <div className="rebuild-checklist">
           <div className="rebuild-item">
             <div className={`rebuild-check ${step >= 0 ? 'done' : ''}`}>

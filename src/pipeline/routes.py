@@ -589,11 +589,13 @@ async def _execute_analyse(body: AnalyseRequest, progress_emit: ProgressEmit | N
         analysis_date = datetime.now(timezone.utc).isoformat()
         requester = (body.requester or "").strip()
 
+        policy_ref_val = (body.policy_ref or "").strip()
         response = {
             "tracking_id": ctx.tracking_id,
             "document_id": doc_id,
             "title": title,
             "doc_layer": ctx.doc_layer.value,
+            "policy_ref": policy_ref_val or None,
             "requester": requester,
             "analysis_date": analysis_date,
             "draft_ready": ctx.draft_ready,
@@ -620,7 +622,7 @@ async def _execute_analyse(body: AnalyseRequest, progress_emit: ProgressEmit | N
         }
         session_saved = False
         try:
-            record_session(
+            session_saved = record_session(
                 tracking_id=ctx.tracking_id,
                 document_id=doc_id,
                 title=title,
@@ -633,8 +635,9 @@ async def _execute_analyse(body: AnalyseRequest, progress_emit: ProgressEmit | N
                 agent_findings=agent_findings,
                 workflow_type="review",
                 result_json=response,
+                policy_ref=policy_ref_val,
+                update_governance=False,
             )
-            session_saved = True
         except Exception as e:
             log.warning("Failed to persist analysis session for dashboard: %s", e)
 
@@ -935,12 +938,21 @@ class SaveAnalysisRequest(BaseModel):
     requester: str = ""
     doc_layer: str = "sop"
     sites: str = ""
+    policy_ref: str = ""
     overall_risk: str | None = None
     total_findings: int = 0
     agents_run: list[str] = []
     agent_findings: dict = {}
     corrections_implemented: int = 0
     result_json: dict = {}
+    sign_off_user: str = ""
+    sign_off_statement: str = ""
+    sign_off_at: str | None = None
+    finding_dispositions: dict | None = None
+    finding_governance_notes: dict | None = None
+    finding_hazard_control_tags: dict | None = None
+    governance_save_mode: str = "dispositions_only"
+    """dispositions_only: update findings/policy/dispositions; preserve sign-off. full: also update sign-off."""
 
 
 class FindingNoteAttachment(BaseModel):
@@ -1039,7 +1051,12 @@ async def save_analysis_session(body: SaveAnalysisRequest):
     """Persist analysis session (captures user changes / ensures state is saved)."""
     from src.rag.analysis_sessions import record_session
     try:
-        record_session(
+        fd = body.finding_dispositions if isinstance(body.finding_dispositions, dict) else {}
+        fgn = body.finding_governance_notes if isinstance(body.finding_governance_notes, dict) else {}
+        fht = body.finding_hazard_control_tags if isinstance(body.finding_hazard_control_tags, dict) else {}
+        gsm = (body.governance_save_mode or "dispositions_only").strip().lower()
+        gov_mode = "full" if gsm == "full" else "dispositions_only"
+        ok = record_session(
             tracking_id=body.tracking_id,
             document_id=body.document_id or "",
             title=body.title or body.document_id or "Unnamed",
@@ -1053,8 +1070,22 @@ async def save_analysis_session(body: SaveAnalysisRequest):
             workflow_type="review",
             corrections_implemented=body.corrections_implemented or 0,
             result_json=body.result_json or {},
+            policy_ref=(body.policy_ref or "").strip(),
+            sign_off_user=(body.sign_off_user or "").strip(),
+            sign_off_statement=(body.sign_off_statement or "").strip(),
+            sign_off_at=body.sign_off_at,
+            finding_dispositions=fd,
+            finding_governance_notes=fgn,
+            finding_hazard_control_tags=fht,
+            update_governance=True,
+            governance_mode=gov_mode,
         )
-        return {"ok": True, "message": "Changes saved"}
+        if ok:
+            return {"ok": True, "message": "Changes saved"}
+        return {
+            "ok": False,
+            "message": "Session not persisted — set SUPABASE_DB_URL for the API server, or ensure tracking_id is present.",
+        }
     except Exception as e:
         return {"ok": False, "message": str(e)}
 

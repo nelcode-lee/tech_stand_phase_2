@@ -6,8 +6,48 @@
 .harmonisation-header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-end;
-  gap: 12px;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.harmonisation-header-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  min-width: min(100%, 280px);
+}
+
+.harmonisation-configure-btn {
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--yb-blue, #324157);
+  background: var(--yb-blue, #324157);
+  color: #fff;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.harmonisation-configure-btn:hover:not(:disabled) {
+  opacity: 0.94;
+}
+
+.harmonisation-configure-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.harmonisation-empty-procedures {
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: rgba(50, 65, 87, 0.06);
+  border: 1px solid rgba(50, 65, 87, 0.12);
+  color: #4b5563;
+  font-size: 0.875rem;
+  line-height: 1.45;
 }
 
 .harmonisation-header h1 {

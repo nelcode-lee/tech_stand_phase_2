@@ -8,6 +8,22 @@
   gap: var(--space-lg);
 }
 
+.analyse-draft-disclaimer {
+  font-size: 0.8125rem;
+  line-height: 1.45;
+  color: var(--text-secondary, #4b5563);
+  margin: 0 0 var(--space-lg);
+  padding: 0.5rem 0.75rem;
+  background: rgba(50, 65, 87, 0.06);
+  border-radius: 6px;
+  border-left: 3px solid var(--yb-blue);
+  max-width: var(--content-max, 1100px);
+}
+
+.analyse-phase-banner {
+  margin-bottom: var(--space-md);
+}
+
 .analyse-page {
   width: 100%;
   background: #ffffff;
@@ -2391,6 +2407,8 @@
   gap: var(--space-sm);
   margin-top: var(--space-sm);
   flex-wrap: wrap;
+  width: 100%;
+  min-width: 0;
 }
 
 .finding-action-buttons-row {
@@ -2412,9 +2430,35 @@
   flex-direction: column;
   gap: var(--space-xs);
 }
+.finding-solution-label-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+}
+
 .finding-solution-label {
   font-size: 0.8125rem;
   font-weight: 500;
+  color: var(--yb-blue);
+  margin: 0;
+}
+
+.finding-solution-insert-agent {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  border: 1px solid var(--border-card);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.finding-solution-insert-agent:hover {
+  border-color: var(--yb-blue);
   color: var(--yb-blue);
 }
 .finding-solution-textarea {
@@ -2613,3 +2657,216 @@
   gap: var(--space-md);
   justify-content: flex-end;
 }
+
+/* Epic B — scope strip + governance */
+.governance-summary-link-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+  padding: var(--space-md) var(--space-lg);
+  background: rgba(30, 77, 139, 0.06);
+  border: 1px solid rgba(30, 77, 139, 0.2);
+  border-radius: 8px;
+}
+
+.governance-summary-link-hint {
+  font-size: 0.8125rem;
+  color: var(--text-secondary);
+  max-width: 520px;
+  line-height: 1.4;
+}
+
+.disposition-autosave-pill {
+  font-size: 0.75rem;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(50, 65, 87, 0.08);
+  color: var(--text-secondary);
+}
+
+.disposition-autosave-saved {
+  background: rgba(22, 101, 52, 0.12);
+  color: #166534;
+}
+
+.disposition-autosave-error {
+  background: rgba(185, 28, 28, 0.1);
+  color: #b91c1c;
+}
+
+.finding-disposition-row {
+  display: flex;
+  flex-wrap: wrap;
+  flex-direction: column;
+  align-items: stretch;
+  width: 100%;
+  gap: var(--space-xs);
+  margin-bottom: var(--space-md);
+}
+
+/*
+ * Disposition + hazard: label above control; equal flex columns use full width
+ * (grid auto-fit can shrink-wrap and leave dead space on the right).
+ */
+.finding-disposition-controls-row {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  width: 100%;
+  gap: var(--space-md);
+  align-items: stretch;
+}
+
+.finding-disposition-field-group,
+.finding-hazard-control-field-group {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 0;
+}
+
+/* Single field (no hazard): one full-width column */
+.finding-disposition-controls-row > .finding-disposition-field-group:only-child {
+  flex: 1 1 100%;
+}
+
+/* Stack on narrow finding panels */
+@media (max-width: 28rem) {
+  .finding-disposition-controls-row {
+    flex-direction: column;
+  }
+  .finding-disposition-controls-row .finding-disposition-field-group,
+  .finding-disposition-controls-row .finding-hazard-control-field-group {
+    flex: 1 1 100%;
+  }
+}
+
+.finding-disposition-field-group .finding-disposition-label,
+.finding-hazard-control-field-group .finding-disposition-label {
+  line-height: 1.2;
+}
+
+.finding-disposition-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.finding-disposition-select-inline {
+  width: 100%;
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-card);
+  font-size: 0.8125rem;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.finding-hazard-model-hint {
+  display: block;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  line-height: 1.35;
+  margin-top: 2px;
+}
+
+.finding-governance-note-wrap {
+  flex: 1 1 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  margin-top: 0;
+}
+
+.finding-governance-note-inline {
+  width: 100%;
+  min-height: 52px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-card);
+  font-size: 0.8125rem;
+  font-family: inherit;
+  resize: vertical;
+}
+
+.analysis-scope-strip {
+  margin-bottom: var(--space-lg);
+  padding: var(--space-md) var(--space-lg);
+  background: rgba(50, 65, 87, 0.05);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+}
+
+.analysis-scope-strip-inner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md) var(--space-xl);
+  align-items: flex-end;
+}
+
+.analysis-scope-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.analysis-scope-field-grow {
+  flex: 1 1 220px;
+}
+
+.analysis-scope-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+}
+
+.analysis-scope-value {
+  font-size: 0.875rem;
+  color: var(--text-primary, #111);
+  word-break: break-word;
+}
+
+.analysis-scope-title {
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.analysis-scope-policy-input {
+  width: 100%;
+  max-width: 420px;
+  padding: 6px 10px;
+  border: 1px solid var(--border-card);
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-family: inherit;
+}
+
+.analysis-scope-policy-input:focus {
+  outline: none;
+  border-color: var(--yb-blue);
+}
+
+.analysis-scope-tracking {
+  flex-shrink: 0;
+}
+
+.analysis-scope-tracking-id {
+  font-size: 0.75rem;
+  padding: 4px 8px;
+  background: #fff;
+  border: 1px solid var(--border-card);
+  border-radius: 4px;
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+

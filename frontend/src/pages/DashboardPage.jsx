@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import {
   FileSearch,
   FilePlus2,
@@ -12,14 +12,26 @@ import {
   ShieldAlert,
   RefreshCw,
   Target,
+  Table2,
+  Building2,
+  UserCircle,
+  Info,
 } from 'lucide-react';
 import { useAnalysis } from '../context/AnalysisContext';
 import { addInteractionLog, getHarmonisationScorecard, listDocuments, listAnalysisSessions } from '../api';
 import { computeRiskMetrics } from '../utils/riskMetrics';
+import {
+  buildDocumentHealthRows,
+  aggregateBySiteLabel,
+  aggregateByRequester,
+} from '../utils/operationalMetrics';
+import { PhasePositioningBanner } from '../components/PhasePositioningBanner';
+import { draftNavLabel } from '../config/productPhase';
 import './DashboardPage.css';
 
 const SEVERITY_CLASS = { critical: 'alert-critical', high: 'alert-high', medium: 'alert-medium', low: 'alert-low' };
 
+const DASH_TAB_KEY = 'tech-standards-dashboard-tab';
 const DISMISSED_ALERTS_KEY = 'tech-standards-dismissed-alerts';
 function loadDismissedAlerts() {
   try {
@@ -190,12 +202,142 @@ function SessionsLineChart({ data }) {
   );
 }
 
+function AttentionRequiredSection({
+  liveAlerts,
+  selectedSite,
+  startReview,
+  removeSessionFromLog,
+  setDismissedAlerts,
+  saveDismissedAlerts,
+  addInteractionLog,
+}) {
+  return (
+    <section className="dash-card dash-alerts">
+      <h2 className="dash-card-title">
+        <AlertTriangle size={15} />
+        Attention Required
+        {selectedSite !== 'all' && (
+          <span className="dash-card-title-context"> — {selectedSite}</span>
+        )}
+      </h2>
+      {liveAlerts.length === 0 ? (
+        <p className="dash-empty">No alerts. Run an analysis — sessions with medium, high, or critical risk will appear here.</p>
+      ) : (
+        <div className="alert-list">
+          {liveAlerts.map((a) => (
+            <div key={a.id} className={`dash-alert ${SEVERITY_CLASS[a.severity] || 'alert-medium'}`}>
+              <div className="dash-alert-body">
+                <span className="dash-alert-doc">{a.doc}</span>
+                <span className="dash-alert-msg">{a.msg}</span>
+              </div>
+              <div className="dash-alert-actions">
+                <button type="button" className="dash-alert-action" onClick={() => startReview(a.session || null)}>
+                  {a.action}
+                </button>
+                <button
+                  type="button"
+                  className="dash-alert-action dash-alert-delete"
+                  onClick={() => {
+                    removeSessionFromLog(a.id);
+                    setDismissedAlerts((prev) => {
+                      const next = new Set(prev);
+                      next.add(a.id);
+                      saveDismissedAlerts(next);
+                      return next;
+                    });
+                    addInteractionLog({
+                      user_name: '',
+                      action_type: 'delete_alert',
+                      route: '/dashboard',
+                      workflow_mode: '',
+                      document_id: a.documentId || '',
+                      tracking_id: a.id || '',
+                      doc_layer: a.session?.docLayer || '',
+                      metadata: {
+                        title: a.doc || '',
+                        severity: a.severity || '',
+                      },
+                    }).catch(() => {});
+                  }}
+                  title="Remove from Attention Required"
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function HarmonisationSnapshotCard({ loadingHarmonisation, harmonisationSnapshot, navigate, qaView }) {
+  return (
+    <section className="dash-card dash-harmonisation-snapshot">
+      <h2 className="dash-card-title">
+        <Target size={15} />
+        {qaView ? 'Standards alignment' : 'Harmonisation snapshot'}
+      </h2>
+      <p className="dash-chart-hint">
+        {qaView
+          ? 'How recent analyses align with mapped policy clauses (per document).'
+          : 'Latest saved analysis per document — alignment score from compliance flags and clause mapping.'}
+      </p>
+      {loadingHarmonisation && harmonisationSnapshot.length === 0 ? (
+        <p className="dash-empty">Loading harmonisation metrics…</p>
+      ) : harmonisationSnapshot.length === 0 ? (
+        <p className="dash-empty">
+          No scorecard data for recent sessions. Run an analysis (with a saved session) or open the full scorecard.
+        </p>
+      ) : (
+        <ul className="harmon-snap-list">
+          {harmonisationSnapshot.map((row) => (
+            <li key={row.documentId} className="harmon-snap-item">
+              <span className="harmon-snap-title" title={row.title}>{row.title}</span>
+              <div className="harmon-snap-metrics">
+                <span className={`harmon-snap-score ${row.gatePassed ? 'harmon-snap-gate-ok' : ''}`} title="Harmonisation score">
+                  {row.score}%
+                </span>
+                <span className="harmon-snap-detail" title="Missing and conflict clause gaps">
+                  Missing {row.missing} · Conflict {row.conflict}
+                  {row.partial > 0 ? ` · Partial ${row.partial}` : ''}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="harmon-snap-action"
+                onClick={() => navigate('/harmonisation', { state: { documentId: row.documentId } })}
+              >
+                Scorecard
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 // ---------------------------------------------------------------------------
+
+function readInitialDashTab(searchParams) {
+  const q = searchParams.get('view');
+  if (q === 'qa' || q === 'advanced') return q;
+  try {
+    const s = sessionStorage.getItem(DASH_TAB_KEY);
+    if (s === 'qa' || s === 'advanced') return s;
+  } catch (_) { /* ignore */ }
+  return 'qa';
+}
 
 export default function DashboardPage() {
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { setWorkflowMode, setConfig, sessionLog, reloadSessionLog, removeSessionFromLog, selectedSite } = useAnalysis();
+
+  const [dashTab, setDashTab] = useState(() => readInitialDashTab(searchParams));
 
   const [backendDocs, setBackendDocs] = useState([]);
   const [backendSessions, setBackendSessions] = useState([]);
@@ -225,7 +367,7 @@ export default function DashboardPage() {
     setLoadingSessions(true);
     setSessionsError(null);
     try {
-      const data = await listAnalysisSessions(50);
+      const data = await listAnalysisSessions(120);
       setBackendSessions(data || []);
     } catch (err) {
       setSessionsError(err.message || 'Could not load sessions');
@@ -542,6 +684,47 @@ export default function DashboardPage() {
       }));
   }, [sessionsForMetrics, dismissedAlerts]);
 
+  const belowGateCount = useMemo(
+    () => harmonisationSnapshot.filter((r) => !r.gatePassed).length,
+    [harmonisationSnapshot],
+  );
+
+  /** Epic C — per-document rollup, site/requester aggregates (sessions already library-scoped). */
+  const documentHealthRows = useMemo(
+    () => buildDocumentHealthRows(sessionsForMetrics, computeRiskMetrics),
+    [sessionsForMetrics],
+  );
+  const siteAggregates = useMemo(
+    () => aggregateBySiteLabel(sessionsForMetrics),
+    [sessionsForMetrics],
+  );
+  const requesterAggregates = useMemo(
+    () => aggregateByRequester(sessionsForMetrics),
+    [sessionsForMetrics],
+  );
+  const multiRunDocs = useMemo(
+    () => documentHealthRows.filter((r) => r.runCount > 1),
+    [documentHealthRows],
+  );
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(DASH_TAB_KEY, dashTab);
+    } catch (_) { /* ignore */ }
+  }, [dashTab]);
+
+  function selectDashTab(next) {
+    setDashTab(next);
+    setSearchParams(
+      (prev) => {
+        const p = new URLSearchParams(prev);
+        p.set('view', next);
+        return p;
+      },
+      { replace: true },
+    );
+  }
+
   // ---- Navigation helpers ---------------------------------------------------
 
   function startReview(session) {
@@ -585,15 +768,7 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* Workflow hint — start here for new users */}
-      <div className="workflow-hint" role="status">
-        <span className="workflow-hint-label">Start here</span>
-        <span className="workflow-hint-text">
-          <strong>Review a Document</strong> — analyse and draft existing docs. <strong>Create a Document</strong> — build brand-new SOPs using ingested content, the policy layer, and project logic (principle layer in time). Then: Configure → Analyse → Draft for HITL → Submit to Library. Main actions are in the top-right on each step.
-        </span>
-      </div>
-
-      {/* Page title */}
+      {/* Page title + QA / Advanced */}
       <div className="dash-header">
         <div>
           <h1 className="dash-title">Dashboard</h1>
@@ -601,128 +776,215 @@ export default function DashboardPage() {
             Technical standards overview{selectedSite !== 'all' ? ` — ${selectedSite}` : ' — all sites'}
           </p>
         </div>
-        <div className="dash-quick-actions">
-          <button type="button" className="dash-action-btn secondary" title="Refresh document list and sessions" onClick={() => { fetchDocs(); fetchSessions(); }}>
-            <RefreshCw size={14} style={(loadingDocs || loadingSessions) ? { animation: 'spin 1s linear infinite' } : {}} />
-          </button>
-          <button type="button" className="dash-action-btn secondary" onClick={() => navigate('/library')}>
-            <FileText size={15} />
-            Library
-          </button>
-          <button type="button" className="dash-action-btn secondary" onClick={startReview}>
-            <FileSearch size={15} />
-            Review Doc
-          </button>
-          <button type="button" className="dash-action-btn primary next-action" onClick={startCreate}>
-            <FilePlus2 size={15} />
-            New Doc
-          </button>
+        <div className="dash-header-actions">
+          <div className="dash-tabs" role="tablist" aria-label="Dashboard view">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={dashTab === 'qa'}
+              className={`dash-tab ${dashTab === 'qa' ? 'dash-tab-active' : ''}`}
+              onClick={() => selectDashTab('qa')}
+            >
+              QA
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={dashTab === 'advanced'}
+              className={`dash-tab ${dashTab === 'advanced' ? 'dash-tab-active' : ''}`}
+              onClick={() => selectDashTab('advanced')}
+            >
+              Advanced
+            </button>
+          </div>
+          <div className="dash-quick-actions">
+            <button type="button" className="dash-action-btn secondary" title="Refresh document list and sessions" onClick={() => { fetchDocs(); fetchSessions(); }}>
+              <RefreshCw size={14} style={(loadingDocs || loadingSessions) ? { animation: 'spin 1s linear infinite' } : {}} />
+            </button>
+            <button type="button" className="dash-action-btn secondary" onClick={() => navigate('/library')}>
+              <FileText size={15} />
+              Library
+            </button>
+            <button type="button" className="dash-action-btn secondary" onClick={startReview}>
+              <FileSearch size={15} />
+              Review Doc
+            </button>
+            <button
+              type="button"
+              className="dash-action-btn primary next-action"
+              onClick={startCreate}
+              title="Assistive / experimental — not for issuing controlled documents without governance"
+            >
+              <FilePlus2 size={15} />
+              {draftNavLabel('New Doc')}
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* KPI row */}
-      <div className="dash-kpi-row">
-        <div className="kpi-card">
-          <span className="kpi-icon kpi-icon-blue"><FileText size={18} /></span>
-          <div>
-            <span className="kpi-value">{kpi.totalDocs}</span>
-            <span className="kpi-label">Docs in Store</span>
-          </div>
-        </div>
-        <div className="kpi-card">
-          <span className="kpi-icon kpi-icon-red"><AlertTriangle size={18} /></span>
-          <div>
-            <span className="kpi-value">{kpi.criticalHaccpGaps}</span>
-            <span className="kpi-label">Critical HACCP (RPN) gaps</span>
-          </div>
-        </div>
-        <div className="kpi-card">
-          <span className="kpi-icon kpi-icon-amber"><Clock size={18} /></span>
-          <div>
-            <span className="kpi-value">{kpi.reviewsDue}</span>
-            <span className="kpi-label">Reviews Due</span>
-          </div>
-        </div>
-        <div className="kpi-card">
-          <span className="kpi-icon kpi-icon-gold"><ShieldAlert size={18} /></span>
-          <div>
-            <span className="kpi-value">{kpi.openFindings}</span>
-            <span className="kpi-label">Total Findings</span>
-          </div>
-        </div>
-        <div className="kpi-card">
-          <span className="kpi-icon kpi-icon-green"><CheckCircle2 size={18} /></span>
-          <div>
-            <span className="kpi-value">
-              {sessionsForMetrics.filter(s => !s.overallRisk || s.overallRisk === 'low').length}
+      {dashTab === 'qa' && (
+        <p className="dash-qa-blurb">
+          Company documents and alignment with standards at a glance. Switch to <strong>Advanced</strong> for session trends, agent activity, and full HACCP risk detail.
+        </p>
+      )}
+
+      {dashTab === 'advanced' && (
+        <>
+          <PhasePositioningBanner variant="compact" className="dash-phase-banner" />
+          <div className="workflow-hint" role="status">
+            <span className="workflow-hint-label">Start here</span>
+            <span className="workflow-hint-text">
+              <strong>Review a Document</strong> — primary path: run analysis for gaps, compliance, and metrics; then Governance &amp; sign-off; optional assistive draft. <strong>Create a Document</strong> — experimental authoring from ingested policies (not an issued SOP). Flow: Configure → Analyse → Governance &amp; sign-off → optional Draft for HITL → Submit to Library (staging). Actions: top-right on each step.
             </span>
-            <span className="kpi-label">Low-Risk Sessions</span>
           </div>
-        </div>
-        <div className="kpi-card">
-          <span className="kpi-icon kpi-icon-blue"><Activity size={18} /></span>
-          <div>
-            <span className="kpi-value">{kpi.totalSessions}</span>
-            <span className="kpi-label">Sessions</span>
-          </div>
-        </div>
-      </div>
+        </>
+      )}
 
-      <div className="dash-grid">
-
-        {/* Alerts — real-time from analysis sessions */}
-        <section className="dash-card dash-alerts">
-          <h2 className="dash-card-title">
-            <AlertTriangle size={15} />
-            Attention Required
-            {selectedSite !== 'all' && (
-              <span className="dash-card-title-context"> — {selectedSite}</span>
-            )}
-          </h2>
-          {liveAlerts.length === 0 ? (
-            <p className="dash-empty">No alerts. Run an analysis — sessions with medium, high, or critical risk will appear here.</p>
-          ) : (
-            <div className="alert-list">
-              {liveAlerts.map(a => (
-                <div key={a.id} className={`dash-alert ${SEVERITY_CLASS[a.severity] || 'alert-medium'}`}>
-                  <div className="dash-alert-body">
-                    <span className="dash-alert-doc">{a.doc}</span>
-                    <span className="dash-alert-msg">{a.msg}</span>
-                  </div>
-                  <div className="dash-alert-actions">
-                    <button type="button" className="dash-alert-action" onClick={() => startReview(a.session || null)}>
-                      {a.action}
-                    </button>
-                    <button type="button" className="dash-alert-action dash-alert-delete" onClick={() => {
-                      removeSessionFromLog(a.id);
-                      setDismissedAlerts(prev => {
-                        const next = new Set(prev);
-                        next.add(a.id);
-                        saveDismissedAlerts(next);
-                        return next;
-                      });
-                      addInteractionLog({
-                        user_name: '',
-                        action_type: 'delete_alert',
-                        route: '/dashboard',
-                        workflow_mode: '',
-                        document_id: a.documentId || '',
-                        tracking_id: a.id || '',
-                        doc_layer: a.session?.docLayer || '',
-                        metadata: {
-                          title: a.doc || '',
-                          severity: a.severity || '',
-                        },
-                      }).catch(() => {});
-                    }} title="Remove from Attention Required">
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              ))}
+      {/* KPI row — QA: four focused cards; Advanced: full six */}
+      {dashTab === 'qa' ? (
+        <div className="dash-kpi-row dash-kpi-row-qa">
+          <div className="kpi-card">
+            <span className="kpi-icon kpi-icon-blue"><FileText size={18} /></span>
+            <div>
+              <span className="kpi-value">{kpi.totalDocs}</span>
+              <span className="kpi-label">Docs in library</span>
             </div>
+          </div>
+          <div className="kpi-card">
+            <span className="kpi-icon kpi-icon-red"><AlertTriangle size={18} /></span>
+            <div>
+              <span className="kpi-value">{liveAlerts.length}</span>
+              <span className="kpi-label">Needs attention</span>
+            </div>
+          </div>
+          <div className="kpi-card">
+            <span className="kpi-icon kpi-icon-gold"><ShieldAlert size={18} /></span>
+            <div>
+              <span className="kpi-value">{kpi.openFindings}</span>
+              <span className="kpi-label">Open findings</span>
+            </div>
+          </div>
+          <div className="kpi-card">
+            <span className="kpi-icon kpi-icon-amber"><Target size={18} /></span>
+            <div>
+              <span className="kpi-value">
+                {harmonisationSnapshot.length > 0 ? belowGateCount : kpi.totalSessions}
+              </span>
+              <span className="kpi-label">
+                {harmonisationSnapshot.length > 0 ? 'Below standards gate' : 'Analysis sessions'}
+              </span>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="dash-kpi-row">
+          <div className="kpi-card">
+            <span className="kpi-icon kpi-icon-blue"><FileText size={18} /></span>
+            <div>
+              <span className="kpi-value">{kpi.totalDocs}</span>
+              <span className="kpi-label">Docs in Store</span>
+            </div>
+          </div>
+          <div className="kpi-card">
+            <span className="kpi-icon kpi-icon-red"><AlertTriangle size={18} /></span>
+            <div>
+              <span className="kpi-value">{kpi.criticalHaccpGaps}</span>
+              <span className="kpi-label">Critical HACCP (RPN) gaps</span>
+            </div>
+          </div>
+          <div className="kpi-card">
+            <span className="kpi-icon kpi-icon-amber"><Clock size={18} /></span>
+            <div>
+              <span className="kpi-value">{kpi.reviewsDue}</span>
+              <span className="kpi-label">Reviews Due</span>
+            </div>
+          </div>
+          <div className="kpi-card">
+            <span className="kpi-icon kpi-icon-gold"><ShieldAlert size={18} /></span>
+            <div>
+              <span className="kpi-value">{kpi.openFindings}</span>
+              <span className="kpi-label">Total Findings</span>
+            </div>
+          </div>
+          <div className="kpi-card">
+            <span className="kpi-icon kpi-icon-green"><CheckCircle2 size={18} /></span>
+            <div>
+              <span className="kpi-value">
+                {sessionsForMetrics.filter(s => !s.overallRisk || s.overallRisk === 'low').length}
+              </span>
+              <span className="kpi-label">Low-Risk Sessions</span>
+            </div>
+          </div>
+          <div className="kpi-card">
+            <span className="kpi-icon kpi-icon-blue"><Activity size={18} /></span>
+            <div>
+              <span className="kpi-value">{kpi.totalSessions}</span>
+              <span className="kpi-label">Sessions</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {dashTab === 'qa' && (
+      <div className="dash-grid dash-grid-qa">
+        <HarmonisationSnapshotCard
+          loadingHarmonisation={loadingHarmonisation}
+          harmonisationSnapshot={harmonisationSnapshot}
+          navigate={navigate}
+          qaView
+        />
+        <AttentionRequiredSection
+          liveAlerts={liveAlerts}
+          selectedSite={selectedSite}
+          startReview={startReview}
+          removeSessionFromLog={removeSessionFromLog}
+          setDismissedAlerts={setDismissedAlerts}
+          saveDismissedAlerts={saveDismissedAlerts}
+          addInteractionLog={addInteractionLog}
+        />
+        <section className="dash-card dash-recent-qa">
+          <h2 className="dash-card-title">
+            <Clock size={15} />
+            Recent analyses
+          </h2>
+          <p className="dash-chart-hint">Latest analysis runs for documents in the library (filtered by site).</p>
+          {sessionsForMetrics.length === 0 ? (
+            <p className="dash-empty">
+              No sessions yet. Use Review Doc to run an analysis.
+            </p>
+          ) : (
+            <ul className="activity-list activity-list-compact activity-list-qa">
+              {sessionsForMetrics.slice(0, 8).map((s) => (
+                <li key={s.trackingId || s.documentId} className="activity-item dash-recent-qa-item">
+                  <span className={`activity-type-dot type-${s.workflowType || 'review'}`} />
+                  <span className="activity-doc">{s.title || s.documentId || 'Unnamed'}</span>
+                  <span className="activity-meta">{timeAgo(s.completedAt)}</span>
+                  {(s.totalFindings || 0) > 0 && (
+                    <span className="activity-findings">{s.totalFindings} findings</span>
+                  )}
+                  <button type="button" className="dash-recent-qa-view" onClick={() => startReview(s)}>
+                    View
+                  </button>
+                </li>
+              ))}
+            </ul>
           )}
         </section>
+      </div>
+      )}
+
+      {dashTab === 'advanced' && (
+      <div className="dash-grid">
+
+        <AttentionRequiredSection
+          liveAlerts={liveAlerts}
+          selectedSite={selectedSite}
+          startReview={startReview}
+          removeSessionFromLog={removeSessionFromLog}
+          setDismissedAlerts={setDismissedAlerts}
+          saveDismissedAlerts={saveDismissedAlerts}
+          addInteractionLog={addInteractionLog}
+        />
 
         {/* Recent activity — line graph */}
         <section className="dash-card dash-activity">
@@ -878,49 +1140,202 @@ export default function DashboardPage() {
           )}
         </section>
 
-        {/* Latest harmonisation scores (policy alignment from saved sessions) */}
-        <section className="dash-card dash-harmonisation-snapshot">
+        <HarmonisationSnapshotCard
+          loadingHarmonisation={loadingHarmonisation}
+          harmonisationSnapshot={harmonisationSnapshot}
+          navigate={navigate}
+          qaView={false}
+        />
+
+        <section className="dash-card dash-governance-note">
           <h2 className="dash-card-title">
-            <Target size={15} />
-            Harmonisation snapshot
+            <Info size={15} />
+            Governance &amp; ratings
           </h2>
           <p className="dash-chart-hint">
-            Latest saved analysis per document — alignment score from compliance flags and clause mapping.
+            Operational metrics here are <strong>indicative</strong> — sourced from stored analysis sessions. They support prioritisation and audit prep, not certification.
+            Any future &quot;site rating&quot; must use a <strong>published formula</strong>, minimum sample rules, and human oversight; composite scores are supplementary to evidence, not a substitute.
           </p>
-          {loadingHarmonisation && harmonisationSnapshot.length === 0 ? (
-            <p className="dash-empty">Loading harmonisation metrics…</p>
-          ) : harmonisationSnapshot.length === 0 ? (
-            <p className="dash-empty">
-              No scorecard data for recent sessions. Run an analysis (with a saved session) or open the full scorecard.
-            </p>
+        </section>
+
+        <section className="dash-card dash-doc-health">
+          <h2 className="dash-card-title">
+            <Table2 size={15} />
+            Document health (latest run per document)
+          </h2>
+          <p className="dash-chart-hint">
+            Findings and HACCP gap bands reflect the <strong>most recent</strong> analysis for each document. Re-runs update this row. Risk metrics are stored with new sessions (and persist server-side).
+          </p>
+          {documentHealthRows.length === 0 ? (
+            <p className="dash-empty">No per-document data yet. Run analyses with documents that remain in the Library.</p>
           ) : (
-            <ul className="harmon-snap-list">
-              {harmonisationSnapshot.map((row) => (
-                <li key={row.documentId} className="harmon-snap-item">
-                  <span className="harmon-snap-title" title={row.title}>{row.title}</span>
-                  <div className="harmon-snap-metrics">
-                    <span className={`harmon-snap-score ${row.gatePassed ? 'harmon-snap-gate-ok' : ''}`} title="Harmonisation score">
-                      {row.score}%
-                    </span>
-                    <span className="harmon-snap-detail" title="Missing and conflict clause gaps">
-                      Missing {row.missing} · Conflict {row.conflict}
-                      {row.partial > 0 ? ` · Partial ${row.partial}` : ''}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    className="harmon-snap-action"
-                    onClick={() => navigate('/harmonisation', { state: { documentId: row.documentId } })}
-                  >
-                    Scorecard
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <div className="dash-metrics-table-wrap">
+              <table className="dash-metrics-table">
+                <thead>
+                  <tr>
+                    <th scope="col">Document</th>
+                    <th scope="col">Last analysed</th>
+                    <th scope="col">Runs</th>
+                    <th scope="col">Findings</th>
+                    <th scope="col">Δ vs prior</th>
+                    <th scope="col">Risk gaps (C/H/M/L)</th>
+                    <th scope="col">Overall</th>
+                    <th scope="col" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {documentHealthRows.map((row) => {
+                    const delta =
+                      row.prevFindings != null ? row.totalFindings - row.prevFindings : null;
+                    const rsk = (row.overallRisk || 'medium').toLowerCase();
+                    const pillClass = SEVERITY_CLASS[rsk] || 'alert-medium';
+                    return (
+                      <tr key={row.documentId}>
+                        <td>
+                          <span className="dash-metric-doc-title" title={row.documentId}>
+                            {row.title}
+                          </span>
+                          {row.sites && (
+                            <span className="dash-metric-doc-sites">{row.sites}</span>
+                          )}
+                        </td>
+                        <td>{timeAgo(row.lastAt)}</td>
+                        <td>{row.runCount}</td>
+                        <td>{row.totalFindings}</td>
+                        <td>
+                          {delta == null ? (
+                            <span className="dash-metric-na">—</span>
+                          ) : (
+                            <span
+                              className={
+                                delta > 0
+                                  ? 'dash-metric-delta dash-metric-delta-up'
+                                  : delta < 0
+                                    ? 'dash-metric-delta dash-metric-delta-down'
+                                    : 'dash-metric-delta'
+                              }
+                            >
+                              {delta > 0 ? `+${delta}` : delta}
+                            </span>
+                          )}
+                        </td>
+                        <td className="dash-metric-gaps">
+                          <span title="Critical">{row.gapsCritical}</span>
+                          {' / '}
+                          <span title="High">{row.gapsHigh}</span>
+                          {' / '}
+                          <span title="Medium">{row.gapsMedium}</span>
+                          {' / '}
+                          <span title="Low">{row.gapsLow}</span>
+                        </td>
+                        <td>
+                          <span className={`dash-risk-pill ${pillClass}`}>{rsk}</span>
+                        </td>
+                        <td>
+                          <button
+                            type="button"
+                            className="dash-recent-qa-view"
+                            onClick={() => startReview(row.latestSession)}
+                          >
+                            View
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </section>
 
+        {multiRunDocs.length > 0 && (
+          <section className="dash-card dash-rerun-trend">
+            <h2 className="dash-card-title">
+              <TrendingUp size={15} />
+              Re-analysis trend (findings count)
+            </h2>
+            <p className="dash-chart-hint">
+              Compares the <strong>latest</strong> vs <strong>previous</strong> run only. For harmonisation % over time, use the Harmonisation page after each run.
+            </p>
+            <ul className="dash-rerun-list">
+              {multiRunDocs.map((row) => {
+                const delta =
+                  row.prevFindings != null ? row.totalFindings - row.prevFindings : null;
+                return (
+                  <li key={row.documentId} className="dash-rerun-item">
+                    <span className="dash-rerun-title">{row.title}</span>
+                    <span className="dash-rerun-meta">
+                      {row.runCount} runs · latest {row.totalFindings} findings
+                      {delta != null && (
+                        <>
+                          {' '}
+                          (
+                          {delta > 0 ? `+${delta}` : delta}
+                          {' vs prior'}
+                          )
+                        </>
+                      )}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
+
+        <div className="dash-ops-grid">
+          <section className="dash-card dash-site-agg">
+            <h2 className="dash-card-title">
+              <Building2 size={15} />
+              By site label (session scope)
+            </h2>
+            <p className="dash-chart-hint">
+              Uses the <strong>sites</strong> string saved on each session. Multiple labels split on commas; counts can overlap across rows.
+            </p>
+            {siteAggregates.length === 0 ? (
+              <p className="dash-empty">No site-scoped sessions.</p>
+            ) : (
+              <ul className="dash-agg-list">
+                {siteAggregates.map((row) => (
+                  <li key={row.label} className="dash-agg-row">
+                    <span className="dash-agg-label">{row.label}</span>
+                    <span className="dash-agg-stats">
+                      {row.sessions} session{row.sessions !== 1 ? 's' : ''} · {row.findings} findings (sum)
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section className="dash-card dash-requester-agg">
+            <h2 className="dash-card-title">
+              <UserCircle size={15} />
+              By requester
+            </h2>
+            <p className="dash-chart-hint">
+              From the <strong>requester</strong> field on analysis runs (when configured). Useful for coaching volume — not author attribution of document content.
+            </p>
+            {requesterAggregates.length === 0 ? (
+              <p className="dash-empty">No requester recorded on sessions.</p>
+            ) : (
+              <ul className="dash-agg-list">
+                {requesterAggregates.map((row) => (
+                  <li key={row.requester} className="dash-agg-row">
+                    <span className="dash-agg-label">{row.requester}</span>
+                    <span className="dash-agg-stats">
+                      {row.sessions} run{row.sessions !== 1 ? 's' : ''} · {row.findings} findings (sum)
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </div>
+
       </div>
+      )}
     </div>
   );
 }

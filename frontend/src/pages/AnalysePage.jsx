@@ -1,11 +1,17 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
-import { analyseWithProgress, saveAnalysisSession, getAnalysisSession, getDocumentContent, getDocumentFile, addFindingNote, addInteractionLog, validateSolution, docLayerForApi, downloadAuditPack, downloadAuditPackDocx } from '../api';
+import { analyseWithProgress, saveAnalysisSession, getAnalysisSession, getDocumentContent, getDocumentFile, addFindingNote, addInteractionLog, validateSolution, docLayerForApi, downloadAuditPackDocx } from '../api';
 import mammoth from 'mammoth';
 import { useAnalysis } from '../context/AnalysisContext';
 import { resolveSitesForApi } from '../constants/sites';
 import { Save, ChevronDown, ChevronUp } from 'lucide-react';
+import { draftSessionStepLabel, DRAFT_ASSISTIVE_LINE } from '../config/productPhase';
+import { PhasePositioningBanner } from '../components/PhasePositioningBanner';
+import { AnalysisScopeStrip } from '../components/AnalysisScopeStrip';
+import { stableFindingId, DISPOSITION_OPTIONS, HAZARD_CONTROL_OPTIONS } from '../utils/findingGovernance';
 import './AnalysePage.css';
+
+const findingId = stableFindingId;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -168,13 +174,6 @@ function normaliseSessionSites(sites) {
   return String(sites || '').split(',').map((site) => site.trim()).filter(Boolean);
 }
 
-/** Strip legacy fields from stored findings so finding IDs stay stable across runs. */
-function itemForFindingIdHash(item) {
-  if (!item || typeof item !== 'object') return item;
-  const { policy_evidence: _pe, policyEvidence: _pE, citations: _c, requirement_reference: _rr, clause_mapping: _cm, ...rest } = item;
-  return rest;
-}
-
 function buildSessionMetadata(session, fallbackResult = null) {
   if (!session && !fallbackResult) return null;
   const documentId = fallbackResult?.document_id || session?.documentId || session?.document_id || '';
@@ -182,12 +181,14 @@ function buildSessionMetadata(session, fallbackResult = null) {
   const docLayer = fallbackResult?.doc_layer || session?.docLayer || session?.doc_layer || 'sop';
   const requester = fallbackResult?.requester || session?.requester || '';
   const trackingId = fallbackResult?.tracking_id || session?.trackingId || session?.tracking_id || '';
+  const policyRef = String(session?.policyRef ?? session?.policy_ref ?? '').trim();
   return {
     trackingId,
     documentId,
     title,
     docLayer,
     requester,
+    policyRef,
     sites: normaliseSessionSites(session?.sites),
   };
 }
@@ -401,8 +402,8 @@ function AnalysisLoadingPanel({ activeIndex, progressPercent }) {
           </div>
           <div className={`analyse-loading-node ${currentStep.flowSlot === 'output' ? 'is-active' : ''}`}>
             <span className="analyse-loading-node-kicker">Output</span>
-            <strong>Findings + Draft</strong>
-            <span>Risk scoring and validation before results return to the page.</span>
+            <strong>Findings + assistive draft</strong>
+            <span>Gaps, scores, and optional draft text for human review — not an issued document.</span>
           </div>
         </div>
       </div>
@@ -611,13 +612,29 @@ function SevPill({ severity }) {
 }
 
 // Apply / Add note buttons for findings — used when building updated procedure doc
-function FindingActions({ id, agentKey, item, onApplyChange, onAddNote, isApplied, customSolution, onCustomSolutionChange, validateFeedback }) {
+function FindingActions({
+  id,
+  agentKey,
+  item,
+  onApplyChange,
+  onAddNote,
+  isApplied,
+  customSolution,
+  onCustomSolutionChange,
+  validateFeedback,
+  dispositionValue,
+  onDispositionChange,
+  governanceNoteValue,
+  onGovernanceNoteChange,
+  hazardControlValue,
+  onHazardControlChange,
+  modelHazardHint,
+}) {
   const [noteModalOpen, setNoteModalOpen] = useState(false);
   const [noteText, setNoteText] = useState('');
   const [noteAttachments, setNoteAttachments] = useState([]); // [{ name, contentType, dataBase64 }]
   const [noteSubmitting, setNoteSubmitting] = useState(false);
   const [modalPos, setModalPos] = useState(null); // { left, top } or null = centered
-  const [isEditingSolution, setIsEditingSolution] = useState(false);
   const fileInputRef = useRef(null);
   const modalRef = useRef(null);
   const dragRef = useRef(null);
@@ -679,24 +696,90 @@ function FindingActions({ id, agentKey, item, onApplyChange, onAddNote, isApplie
   };
 
   const proposedSolution = item.recommendation || '';
-  const hasCustomSolution = customSolution != null && customSolution !== '';
-  const displayValue = hasCustomSolution ? customSolution : proposedSolution;
-  const solutionValue = displayValue;
-  const isConfirmDisabled = !solutionValue.trim();
+  /* Textarea starts blank; typed text overrides agent recommendation for apply/validate. */
+  const textareaValue = customSolution ?? '';
+  const userTyped = String(textareaValue).trim() !== '';
+  const effectiveSolutionForApply = userTyped ? String(textareaValue).trim() : String(proposedSolution || '').trim();
+  const isConfirmDisabled = !effectiveSolutionForApply;
 
   return (
     <div className="finding-actions" onClick={e => e.stopPropagation()}>
+      {onDispositionChange && (
+        <div className="finding-disposition-row" onKeyDown={e => e.stopPropagation()}>
+          <div className="finding-disposition-controls-row">
+            <div className="finding-disposition-field-group">
+              <label htmlFor={`finding-disp-${id}`} className="finding-disposition-label">Disposition</label>
+              <select
+                id={`finding-disp-${id}`}
+                className="finding-disposition-select-inline"
+                value={dispositionValue || ''}
+                onChange={(e) => onDispositionChange(id, e.target.value)}
+              >
+                {DISPOSITION_OPTIONS.map((opt) => (
+                  <option key={opt.value || 'unset'} value={opt.value}>{opt.label}</option>
+                ))}
+              </select>
+            </div>
+            {onHazardControlChange && (
+              <div className="finding-hazard-control-field-group">
+                <label htmlFor={`finding-hazard-${id}`} className="finding-disposition-label">Hazard control</label>
+                <select
+                  id={`finding-hazard-${id}`}
+                  className="finding-disposition-select-inline"
+                  value={hazardControlValue || ''}
+                  onChange={(e) => onHazardControlChange(id, e.target.value)}
+                >
+                  {HAZARD_CONTROL_OPTIONS.map((opt) => (
+                    <option key={opt.value || 'hz-unset'} value={opt.value}>{opt.label}</option>
+                  ))}
+                </select>
+                {modelHazardHint ? (
+                  <span className="finding-hazard-model-hint" title="Model classification for this gap (stored in analysis result)">
+                    Model: {HAZARD_CONTROL_OPTIONS.find((o) => o.value === modelHazardHint)?.label || modelHazardHint}
+                  </span>
+                ) : null}
+              </div>
+            )}
+          </div>
+          {onGovernanceNoteChange && (
+            <label className="finding-governance-note-wrap">
+              <span className="finding-disposition-label">Governance note</span>
+              <textarea
+                className="finding-governance-note-inline"
+                id={`finding-gov-note-${id}`}
+                value={governanceNoteValue || ''}
+                onChange={(e) => onGovernanceNoteChange(id, e.target.value)}
+                onKeyDown={(e) => e.stopPropagation()}
+                rows={2}
+                placeholder="Optional text for the governance report (audit pack) on this finding."
+              />
+            </label>
+          )}
+        </div>
+      )}
       {onCustomSolutionChange && (
         <div className="finding-solution-edit">
-          <label className="finding-solution-label">Proposed solution (agent)</label>
+          <div className="finding-solution-label-row">
+            <label className="finding-solution-label" htmlFor={`finding-solution-${id}`}>Your proposed wording</label>
+            {proposedSolution ? (
+              <button
+                type="button"
+                className="finding-solution-insert-agent"
+                onClick={() => onCustomSolutionChange(id, proposedSolution)}
+                title="Copy the agent recommendation into this field"
+              >
+                Use agent recommendation
+              </button>
+            ) : null}
+          </div>
           <textarea
-            className={`finding-solution-textarea ${isEditingSolution ? 'is-editing' : 'is-readonly'}`}
-            value={displayValue}
+            id={`finding-solution-${id}`}
+            className="finding-solution-textarea is-editing"
+            value={textareaValue}
             onChange={e => onCustomSolutionChange(id, e.target.value)}
             onKeyDown={e => e.stopPropagation()}
-            placeholder={proposedSolution || 'No proposed solution available for this finding.'}
+            placeholder="Type wording to apply to the draft. The agent recommendation is shown above; use the button to copy it."
             rows={2}
-            readOnly={!isEditingSolution}
           />
           {validateFeedback != null && (
             <div className="finding-validate-feedback">{validateFeedback}</div>
@@ -704,21 +787,6 @@ function FindingActions({ id, agentKey, item, onApplyChange, onAddNote, isApplie
         </div>
       )}
       <div className="finding-action-buttons-row">
-        {onCustomSolutionChange && (
-          <button
-            type="button"
-            className={`finding-action-btn edit ${isEditingSolution ? 'editing' : ''}`}
-            onClick={() => {
-              if (!isEditingSolution && !hasCustomSolution) {
-                onCustomSolutionChange(id, proposedSolution);
-              }
-              setIsEditingSolution(v => !v);
-            }}
-            title={isEditingSolution ? 'Lock this text and confirm it' : 'Edit the proposed solution'}
-          >
-            {isEditingSolution ? 'Done editing' : 'Edit solution'}
-          </button>
-        )}
         <button
           type="button"
           className={`finding-action-btn apply ${isApplied ? 'applied' : ''}`}
@@ -799,6 +867,8 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
   const sessionFromState = location.state?.session;
   const ctx = useAnalysis();
   const result = ctx?.result ?? null;
+  const resultRef = useRef(result);
+  resultRef.current = result;
   const setResult = ctx?.setResult ?? (() => {});
   const setConfig = ctx?.setConfig ?? (() => {});
   const config = ctx?.config ?? { mode: 'full' };
@@ -809,7 +879,6 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
   const [loading, setLoading] = useState(false);
   const [loadingStored, setLoadingStored] = useState(!!trackingIdFromUrl);
   const [saving, setSaving] = useState(false);
-  const [auditPackDownloading, setAuditPackDownloading] = useState(false);
   const [auditPackDocxDownloading, setAuditPackDocxDownloading] = useState(false);
   const [auditPackError, setAuditPackError] = useState(null);
   const [saveStatus, setSaveStatus] = useState(null);
@@ -841,6 +910,18 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
   const [loadingStepIndex, setLoadingStepIndex] = useState(0);
   /** Backend stream: done/total progress events (drives progress bar when total > 0). */
   const [streamProgress, setStreamProgress] = useState({ done: 0, total: 0 });
+  const [governancePolicyRef, setGovernancePolicyRef] = useState('');
+  const [findingDispositions, setFindingDispositions] = useState({});
+  const [findingGovernanceNotes, setFindingGovernanceNotes] = useState({});
+  const [findingHazardControlTags, setFindingHazardControlTags] = useState({});
+  const findingDispositionsRef = useRef(findingDispositions);
+  const findingGovernanceNotesRef = useRef(findingGovernanceNotes);
+  const findingHazardControlTagsRef = useRef(findingHazardControlTags);
+  findingDispositionsRef.current = findingDispositions;
+  findingGovernanceNotesRef.current = findingGovernanceNotes;
+  findingHazardControlTagsRef.current = findingHazardControlTags;
+  const governanceAutosaveDebounceRef = useRef(null);
+  const [dispositionAutosaveStatus, setDispositionAutosaveStatus] = useState(null); // null | 'saving' | 'saved' | 'error'
 
   function logInteraction(actionType, metadata = {}) {
     addInteractionLog({
@@ -854,13 +935,6 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
       doc_layer: effectiveDocLayer || '',
       metadata,
     }).catch(() => {});
-  }
-
-  function findingId(agentKey, item) {
-    const str = JSON.stringify(itemForFindingIdHash(item));
-    let h = 0;
-    for (let i = 0; i < str.length; i++) h = ((h << 5) - h) + str.charCodeAt(i) | 0;
-    return `${agentKey}:${h}`;
   }
 
   function handleApplyFinding(id) {
@@ -1080,26 +1154,54 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
   }, [result, selectedMetricFilter]);
 
   // When trackingId in URL, use the stored session metadata as the review source of truth.
-  // Still keep explicit documentId validation if one was provided in the URL.
+  // Do not clear an in-memory result that already matches this tracking id (avoids a blank flash and loss on slow/failed fetch).
+  // Depends on location.key so navigation with new state re-runs; avoids session object identity churn in dependency list.
   useEffect(() => {
     if (!trackingIdFromUrl) {
       setLoadedSessionMeta(null);
       return;
     }
+    const storedResNav = location.state?.storedResult;
+    const sessionNav = location.state?.session;
+
     latestTrackingRequestRef.current = trackingIdFromUrl;
-    const stateSessionMeta = buildSessionMetadata(sessionFromState, storedResultFromState);
+    const stateSessionMeta = buildSessionMetadata(sessionNav, storedResNav);
     setLoadedSessionMeta(stateSessionMeta);
+    if (stateSessionMeta?.policyRef) setGovernancePolicyRef(stateSessionMeta.policyRef);
     setError(null);
     setSessionNotPersisted(false);
-    setResult(null);
-    setDraftContent('');
-    setHighlightSearch('');
+
+    const keepInMemory =
+      !!resultRef.current?.tracking_id &&
+      resultRef.current.tracking_id === trackingIdFromUrl;
+    if (!keepInMemory) {
+      setResult(null);
+      setDraftContent('');
+      setHighlightSearch('');
+    }
+
     setLoadingStored(true);
     getAnalysisSession(trackingIdFromUrl)
       .then(session => {
         if (latestTrackingRequestRef.current !== trackingIdFromUrl) return;
         const sessionMeta = buildSessionMetadata(session, session?.result || null);
         setLoadedSessionMeta(sessionMeta);
+        setGovernancePolicyRef((session.policyRef || '').trim());
+        setFindingDispositions(
+          session.findingDispositions && typeof session.findingDispositions === 'object'
+            ? { ...session.findingDispositions }
+            : {},
+        );
+        setFindingGovernanceNotes(
+          session.findingGovernanceNotes && typeof session.findingGovernanceNotes === 'object'
+            ? { ...session.findingGovernanceNotes }
+            : {},
+        );
+        setFindingHazardControlTags(
+          session.findingHazardControlTags && typeof session.findingHazardControlTags === 'object'
+            ? { ...session.findingHazardControlTags }
+            : {},
+        );
         const res = session?.result;
         if (res) {
           if (!resultMatchesDocument(res, sessionMeta?.documentId || documentIdFromUrl)) {
@@ -1122,20 +1224,21 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
             requester: sessionMeta.requester || '',
             docLayer: sessionMeta.docLayer || 'sop',
             sites: sessionMeta.sites,
+            policyRef: sessionMeta.policyRef || c.policyRef || '',
           }));
         }
       })
       .catch(() => {
         if (latestTrackingRequestRef.current !== trackingIdFromUrl) return;
-        if (storedResultFromState) {
-          if (!resultMatchesDocument(storedResultFromState, stateSessionMeta?.documentId || documentIdFromUrl)) {
+        if (storedResNav) {
+          if (!resultMatchesDocument(storedResNav, stateSessionMeta?.documentId || documentIdFromUrl)) {
             setError('Stored analysis results do not match the selected document. Open the latest analysis for this SOP or run a new analysis.');
             setLoadedSessionMeta(null);
             return;
           }
           setLoadedSessionMeta(stateSessionMeta);
-          setResult(storedResultFromState);
-          setDraftContent(storedResultFromState.draft_content || '');
+          setResult(storedResNav);
+          setDraftContent(storedResNav.draft_content || '');
           if (stateSessionMeta && !documentIdFromUrl) {
             setConfig(c => ({
               ...c,
@@ -1144,18 +1247,27 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
               requester: stateSessionMeta.requester || '',
               docLayer: stateSessionMeta.docLayer || 'sop',
               sites: stateSessionMeta.sites,
+              policyRef: stateSessionMeta.policyRef || c.policyRef || '',
             }));
           }
           return;
         }
+        const localMatchesUrl =
+          resultRef.current?.tracking_id === trackingIdFromUrl;
+        if (localMatchesUrl) {
+          setError('Could not refresh this session from the server — showing the analysis already on this page.');
+          return;
+        }
         setError('Could not load analysis results. The session may not be in the database — run a new analysis to see results.');
         setLoadedSessionMeta(null);
+        setResult(null);
+        setDraftContent('');
       })
       .finally(() => {
         if (latestTrackingRequestRef.current !== trackingIdFromUrl) return;
         setLoadingStored(false);
       });
-  }, [trackingIdFromUrl, documentIdFromUrl, storedResultFromState, sessionFromState, setResult, setConfig]);
+  }, [trackingIdFromUrl, documentIdFromUrl, location.key, location.state, setResult, setConfig]);
 
   // Fetch original document for split view — DOCX→HTML for procedures, else plain text. For Create WI, use generated content.
   useEffect(() => {
@@ -1308,7 +1420,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         request_type: mode === 'create' && generatedContent ? 'new_document' : (config.requestType || 'single_document_review'),
         doc_layer: docLayerForApi(config.docLayer),
         sites: resolveSitesForApi(sitesArr),
-        policy_ref: mode === 'review' ? null : (config.policyRef || null),
+        policy_ref: (config.policyRef || '').trim() || null,
         document_id: effectiveDocId || null,
         title: effectiveTitle || effectiveDocId || null,
         requester: config.requester || null,
@@ -1344,6 +1456,11 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         prev.total > 0 ? { ...prev, done: prev.total } : prev,
       );
       setResult(res);
+      const freshPolicyRef = String(config.policyRef || '').trim();
+      setGovernancePolicyRef(freshPolicyRef);
+      setFindingDispositions({});
+      setFindingGovernanceNotes({});
+      setFindingHazardControlTags({});
       // In review mode, preserve source document integrity as the draft baseline.
       if (mode === 'review' && documentContent) setDraftContent(documentContent);
       else setDraftContent(res.draft_content || '');
@@ -1381,10 +1498,15 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
           title: effectiveTitle || effectiveDocId || 'Unnamed',
           doc_layer: docLayerForApi(config.docLayer),
           sites: Array.isArray(config.sites) ? (config.sites.includes('all') ? 'All Sites' : config.sites.join(',')) : (config.sites || ''),
+          policy_ref: freshPolicyRef,
           overall_risk: res.overall_risk || null,
           total_findings: totalFindings,
           agents_run: res.agents_run || [],
           agent_findings: agentFindings,
+          finding_dispositions: {},
+          finding_governance_notes: {},
+          finding_hazard_control_tags: {},
+          governance_save_mode: 'dispositions_only',
           result_json: {
             ...res,
             document_id: effectiveDocId || res.document_id || '',
@@ -1394,6 +1516,25 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
           },
         });
       } catch (_) { /* non-blocking */ }
+
+      const sitesNav = Array.isArray(config.sites)
+        ? (config.sites.includes('all') ? 'All Sites' : config.sites.join(','))
+        : (config.sites || '');
+      navigate(`${base}/analyse/overview?trackingId=${encodeURIComponent(res.tracking_id)}`, {
+        replace: true,
+        state: {
+          storedResult: res,
+          session: {
+            documentId: effectiveDocId || res.document_id || '',
+            title: effectiveTitle || res.title || res.document_id || '',
+            trackingId: res.tracking_id,
+            docLayer: effectiveDocLayer || res.doc_layer || 'sop',
+            requester: config.requester || '',
+            sites: sitesNav,
+            policyRef: freshPolicyRef,
+          },
+        },
+      });
     } catch (err) {
       setError(err.message);
       logInteraction('analysis_run_failed', { error: err.message || 'Analysis failed' });
@@ -1438,6 +1579,133 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
   const hasDraft = !!result; // Show draft in both modes when analysis has run — apply changes update it
   const displayDraft = draftContent || documentContent || result?.draft_content || '';
 
+  const runGovernanceAutosave = useCallback(async () => {
+    if (!result?.tracking_id) return;
+    const disp = findingDispositionsRef.current;
+    const notes = findingGovernanceNotesRef.current;
+    const hzTags = findingHazardControlTagsRef.current;
+    const agentFindings = {};
+    if (result.risk_gaps?.length) agentFindings.risk = result.risk_gaps.length;
+    if (result.cleanser_flags?.length) agentFindings.cleansing = (agentFindings.cleansing || 0) + result.cleanser_flags.length;
+    if (result.specifying_flags?.length) agentFindings.specifying = (agentFindings.specifying || 0) + result.specifying_flags.length;
+    if (result.structure_flags?.length) agentFindings.cleansing = (agentFindings.cleansing || 0) + result.structure_flags.length;
+    if (result.content_integrity_flags?.length) agentFindings.cleansing = (agentFindings.cleansing || 0) + result.content_integrity_flags.length;
+    if (result.sequencing_flags?.length) agentFindings.sequencing = result.sequencing_flags.length;
+    if (result.formatting_flags?.length) agentFindings.formatting = result.formatting_flags.length;
+    if (result.compliance_flags?.length) agentFindings.validation = result.compliance_flags.length;
+    if (result.terminology_flags?.length) agentFindings.terminology = result.terminology_flags.length;
+    if (result.conflicts?.length) agentFindings.conflict = result.conflicts.length;
+    try {
+      setDispositionAutosaveStatus('saving');
+      const resSave = await saveAnalysisSession({
+        tracking_id: result.tracking_id,
+        document_id: effectiveDocId || '',
+        title: effectiveTitle || effectiveDocId || 'Unnamed',
+        requester: effectiveRequester,
+        doc_layer: docLayerForApi(effectiveDocLayer),
+        sites: effectiveSitesDisplay,
+        policy_ref: (governancePolicyRef || '').trim(),
+        overall_risk: result.overall_risk || null,
+        total_findings: totalFindings,
+        agents_run: result.agents_run || [],
+        agent_findings: agentFindings,
+        corrections_implemented: totalApplied,
+        finding_dispositions: disp,
+        finding_governance_notes: notes,
+        finding_hazard_control_tags: hzTags,
+        governance_save_mode: 'dispositions_only',
+        result_json: effectiveResultJson,
+      });
+      if (resSave?.ok !== false) {
+        setDispositionAutosaveStatus('saved');
+        window.setTimeout(() => setDispositionAutosaveStatus(null), 2000);
+      } else {
+        setDispositionAutosaveStatus('error');
+        window.setTimeout(() => setDispositionAutosaveStatus(null), 5000);
+      }
+    } catch {
+      setDispositionAutosaveStatus('error');
+      window.setTimeout(() => setDispositionAutosaveStatus(null), 5000);
+    }
+  }, [
+    result,
+    effectiveDocId,
+    effectiveTitle,
+    effectiveRequester,
+    effectiveDocLayer,
+    effectiveSitesDisplay,
+    governancePolicyRef,
+    totalFindings,
+    totalApplied,
+    effectiveResultJson,
+  ]);
+
+  function scheduleGovernanceAutosave() {
+    if (governanceAutosaveDebounceRef.current) clearTimeout(governanceAutosaveDebounceRef.current);
+    governanceAutosaveDebounceRef.current = window.setTimeout(() => {
+      governanceAutosaveDebounceRef.current = null;
+      void runGovernanceAutosave();
+    }, 450);
+  }
+
+  async function flushGovernanceAutosave() {
+    if (governanceAutosaveDebounceRef.current) {
+      clearTimeout(governanceAutosaveDebounceRef.current);
+      governanceAutosaveDebounceRef.current = null;
+    }
+    await runGovernanceAutosave();
+  }
+
+  function handleDispositionChange(fid, value) {
+    setFindingDispositions((prev) => {
+      const next = { ...prev, [fid]: value };
+      if (!value) delete next[fid];
+      findingDispositionsRef.current = next;
+      return next;
+    });
+    scheduleGovernanceAutosave();
+  }
+
+  function handleGovernanceNoteChange(fid, text) {
+    setFindingGovernanceNotes((prev) => {
+      const next = { ...prev, [fid]: text };
+      if (!String(text || '').trim()) delete next[fid];
+      findingGovernanceNotesRef.current = next;
+      return next;
+    });
+    scheduleGovernanceAutosave();
+  }
+
+  function handleHazardControlChange(fid, value, gap) {
+    const model = String(gap?.hazard_control_type || '').trim();
+    const v = String(value || '').trim();
+    setFindingHazardControlTags((prev) => {
+      const next = { ...prev };
+      if (!v || v === model) delete next[fid];
+      else next[fid] = v;
+      findingHazardControlTagsRef.current = next;
+      return next;
+    });
+    scheduleGovernanceAutosave();
+  }
+
+  useEffect(() => () => {
+    if (governanceAutosaveDebounceRef.current) clearTimeout(governanceAutosaveDebounceRef.current);
+  }, []);
+
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState !== 'hidden' || !resultRef.current?.tracking_id) return;
+      if (governanceAutosaveDebounceRef.current) {
+        clearTimeout(governanceAutosaveDebounceRef.current);
+        governanceAutosaveDebounceRef.current = null;
+      }
+      void runGovernanceAutosave();
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [runGovernanceAutosave]);
+
   async function handleSave() {
     if (!result) return;
     setSaving(true);
@@ -1462,11 +1730,16 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         requester: effectiveRequester,
         doc_layer: docLayerForApi(effectiveDocLayer),
         sites: effectiveSitesDisplay,
+        policy_ref: (governancePolicyRef || '').trim(),
         overall_risk: result.overall_risk || null,
         total_findings: totalFindings,
         agents_run: result.agents_run || [],
         agent_findings: agentFindings,
         corrections_implemented: totalApplied,
+        finding_dispositions: findingDispositions,
+        finding_governance_notes: findingGovernanceNotes,
+        finding_hazard_control_tags: findingHazardControlTags,
+        governance_save_mode: 'dispositions_only',
         result_json: effectiveResultJson,
       });
       setSaveStatus(res?.ok !== false ? 'saved' : 'error');
@@ -1487,49 +1760,6 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
     }
   }
 
-  async function handleDownloadAuditPack() {
-    if (!result) return;
-    setAuditPackDownloading(true);
-    setAuditPackError(null);
-    try {
-      const sitesArr = resolveSitesForApi(Array.isArray(effectiveSites) ? effectiveSites : []);
-      const payload = {
-        ...effectiveResultJson,
-        document_id: effectiveDocId || effectiveResultJson.document_id || '',
-        title: effectiveTitle || effectiveResultJson.title || '',
-        doc_layer: docLayerForApi(effectiveDocLayer),
-        sites: sitesArr,
-        ...(effectiveRequester ? { requester: effectiveRequester } : {}),
-      };
-      const { blob, filename } = await downloadAuditPack(payload);
-      const safeName = String(filename || 'audit-pack.md').replace(/[/\\?%*:|"<>]/g, '-').trim() || 'audit-pack.md';
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = safeName;
-      a.rel = 'noopener';
-      a.style.display = 'none';
-      document.body.appendChild(a);
-      a.click();
-      // Revoking immediately can abort the download in some browsers; defer cleanup.
-      window.setTimeout(() => {
-        URL.revokeObjectURL(url);
-        a.remove();
-      }, 2000);
-      logInteraction('audit_pack_download', { tracking_id: result.tracking_id });
-    } catch (err) {
-      const msg = err?.message || 'Download failed';
-      setAuditPackError(msg);
-      window.setTimeout(() => setAuditPackError(null), 8000);
-      logInteraction('audit_pack_download_failed', {
-        tracking_id: result.tracking_id,
-        error: msg,
-      });
-    } finally {
-      setAuditPackDownloading(false);
-    }
-  }
-
   async function handleDownloadAuditPackDocx() {
     if (!result) return;
     setAuditPackDocxDownloading(true);
@@ -1543,6 +1773,10 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         doc_layer: docLayerForApi(effectiveDocLayer),
         sites: sitesArr,
         ...(effectiveRequester ? { requester: effectiveRequester } : {}),
+        policy_ref: (governancePolicyRef || '').trim(),
+        finding_dispositions: findingDispositions,
+        finding_governance_notes: findingGovernanceNotes,
+        finding_hazard_control_tags: findingHazardControlTags,
       };
       const { blob, filename } = await downloadAuditPackDocx(payload);
       const safeName = String(filename || 'audit-pack.docx').replace(/[/\\?%*:|"<>]/g, '-').trim() || 'audit-pack.docx';
@@ -1595,11 +1829,16 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         requester: effectiveRequester,
         doc_layer: docLayerForApi(effectiveDocLayer),
         sites: effectiveSitesDisplay,
+        policy_ref: (governancePolicyRef || '').trim(),
         overall_risk: result.overall_risk || null,
         total_findings: totalFindings,
         agents_run: result.agents_run || [],
         agent_findings: agentFindings,
         corrections_implemented: totalApplied,
+        finding_dispositions: findingDispositions,
+        finding_governance_notes: findingGovernanceNotes,
+        finding_hazard_control_tags: findingHazardControlTags,
+        governance_save_mode: 'dispositions_only',
         result_json: effectiveResultJson,
       });
       setHitlSubmitStatus('submitted');
@@ -1617,7 +1856,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
     }
   }
 
-  const stepTitles = { overview: 'Analyse', review: 'Analyse', draft: 'Draft for HITL' };
+  const stepTitles = { overview: 'Analyse', review: 'Analyse', draft: draftSessionStepLabel() };
   const stepTitle = stepTitles[step] || step;
 
   return (
@@ -1661,7 +1900,16 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         </div>
       </div>
 
+      {step === 'draft' && (
+        <p className="analyse-draft-disclaimer" role="note">
+          {DRAFT_ASSISTIVE_LINE}
+        </p>
+      )}
+
       <div className="analyse-page meatspec-main-content">
+      {mode === 'review' && step === 'overview' && (
+        <PhasePositioningBanner variant="compact" className="analyse-phase-banner" />
+      )}
       <form id="analyse-form" onSubmit={handleRun} className="analyse-form" style={{ display: step === 'overview' ? 'flex' : 'none' }}>
         {!effectiveDocId && (
           <div className="analyse-no-doc-warning">
@@ -1771,6 +2019,51 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
               </div>
             </div>
           )}
+          <AnalysisScopeStrip
+            documentId={effectiveDocId}
+            title={effectiveTitle}
+            docLayer={effectiveDocLayer}
+            sitesLabel={effectiveSitesDisplay}
+            policyRef={governancePolicyRef}
+            onPolicyRefChange={(v) => {
+              setGovernancePolicyRef(v);
+              setConfig((c) => ({ ...c, policyRef: v }));
+            }}
+            trackingId={result.tracking_id}
+          />
+          {result?.tracking_id && (
+            <div className="governance-summary-link-strip">
+              <button
+                type="button"
+                className="doc-btn primary"
+                onClick={async () => {
+                  await flushGovernanceAutosave();
+                  navigate(`${base}/analyse/governance-summary?trackingId=${encodeURIComponent(result.tracking_id)}`, {
+                    state: {
+                      findingDispositions,
+                      findingGovernanceNotes,
+                      findingHazardControlTags,
+                      governancePolicyRef: (governancePolicyRef || '').trim(),
+                    },
+                  });
+                }}
+              >
+                Governance summary & sign-off →
+              </button>
+              <span className="governance-summary-link-hint">
+                Dispositions, hazard control tags, and governance notes save automatically (and once more when you open the summary). Record formal sign-off on the next step.
+              </span>
+              {dispositionAutosaveStatus === 'saving' && (
+                <span className="disposition-autosave-pill" aria-live="polite">Saving…</span>
+              )}
+              {dispositionAutosaveStatus === 'saved' && (
+                <span className="disposition-autosave-pill disposition-autosave-saved" aria-live="polite">Saved</span>
+              )}
+              {dispositionAutosaveStatus === 'error' && (
+                <span className="disposition-autosave-pill disposition-autosave-error" aria-live="polite">Could not save — check connection or use Save</span>
+              )}
+            </div>
+          )}
           <div className="results-summary" style={{ marginTop: 'var(--space-xl)' }}>
             <div className={`risk-badge risk-${result.overall_risk || 'unknown'}`}>
               {result.overall_risk || '—'}
@@ -1839,20 +2132,11 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
               <button
                 type="button"
                 className="doc-btn"
-                onClick={handleDownloadAuditPack}
-                disabled={!result || auditPackDownloading}
-                title="Download Markdown audit pack (includes compliance clause mapping)"
-              >
-                {auditPackDownloading ? 'Preparing pack…' : 'Download audit pack'}
-              </button>
-              <button
-                type="button"
-                className="doc-btn"
                 onClick={handleDownloadAuditPackDocx}
                 disabled={!result || auditPackDocxDownloading}
-                title="Download structured DOCX audit pack"
+                title="Download audit pack (Word .docx — includes governance dispositions and notes)"
               >
-                {auditPackDocxDownloading ? 'Preparing DOCX…' : 'Download audit pack (DOCX)'}
+                {auditPackDocxDownloading ? 'Preparing pack…' : 'Download audit pack'}
               </button>
               {auditPackError && (
                 <span className="audit-pack-error" role="alert" title={auditPackError}>
@@ -1882,7 +2166,14 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 onApplyChange={handleApplyFinding} onAddNote={handleAddNote}
                 appliedFindings={appliedFindings} findingId={findingId}
                 customSolutionByFindingId={customSolutionByFindingId} onCustomSolutionChange={(id, text) => setCustomSolutionByFindingId(prev => ({ ...prev, [id]: text }))}
-                onCheckWithAgent={handleCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId} /></div>
+                onCheckWithAgent={handleCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId}
+                findingDispositions={findingDispositions}
+                findingGovernanceNotes={findingGovernanceNotes}
+                findingHazardControlTags={findingHazardControlTags}
+                onDispositionChange={handleDispositionChange}
+                onGovernanceNoteChange={handleGovernanceNoteChange}
+                onHazardControlChange={handleHazardControlChange}
+              /></div>
             )}
             {result.cleanser_flags?.length > 0 && selectedMetricFilter === 'cleanser' && (
               <div id="agent-card-cleanser"><AgentCard title="Cleanser" items={result.cleanser_flags} agentKey="cleanser"
@@ -1891,7 +2182,12 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 onApplyChange={handleApplyFinding} onAddNote={handleAddNote}
                 appliedFindings={appliedFindings} findingId={findingId}
                 customSolutionByFindingId={customSolutionByFindingId} onCustomSolutionChange={(id, text) => setCustomSolutionByFindingId(prev => ({ ...prev, [id]: text }))}
-                onCheckWithAgent={handleCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId} /></div>
+                onCheckWithAgent={handleCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId}
+                findingDispositions={findingDispositions}
+                findingGovernanceNotes={findingGovernanceNotes}
+                onDispositionChange={handleDispositionChange}
+                onGovernanceNoteChange={handleGovernanceNoteChange}
+              /></div>
             )}
             {result.structure_flags?.length > 0 && selectedMetricFilter === 'structure' && (
               <div id="agent-card-structure"><StructureCard items={result.structure_flags} agentKey="structure"
@@ -1899,7 +2195,12 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 onApplyChange={handleApplyFinding} onAddNote={handleAddNote}
                 appliedFindings={appliedFindings} findingId={findingId}
                 customSolutionByFindingId={customSolutionByFindingId} onCustomSolutionChange={(id, text) => setCustomSolutionByFindingId(prev => ({ ...prev, [id]: text }))}
-                onCheckWithAgent={handleCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId} /></div>
+                onCheckWithAgent={handleCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId}
+                findingDispositions={findingDispositions}
+                findingGovernanceNotes={findingGovernanceNotes}
+                onDispositionChange={handleDispositionChange}
+                onGovernanceNoteChange={handleGovernanceNoteChange}
+              /></div>
             )}
             {result.content_integrity_flags?.length > 0 && selectedMetricFilter === 'content integrity' && (
               <div id="agent-card-content-integrity"><ContentIntegrityCard items={result.content_integrity_flags} agentKey="content-integrity"
@@ -1907,7 +2208,12 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 onApplyChange={handleApplyFinding} onAddNote={handleAddNote}
                 appliedFindings={appliedFindings} findingId={findingId}
                 customSolutionByFindingId={customSolutionByFindingId} onCustomSolutionChange={(id, text) => setCustomSolutionByFindingId(prev => ({ ...prev, [id]: text }))}
-                onCheckWithAgent={handleCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId} /></div>
+                onCheckWithAgent={handleCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId}
+                findingDispositions={findingDispositions}
+                findingGovernanceNotes={findingGovernanceNotes}
+                onDispositionChange={handleDispositionChange}
+                onGovernanceNoteChange={handleGovernanceNoteChange}
+              /></div>
             )}
             {result.specifying_flags?.length > 0 && selectedMetricFilter === 'specifying' && (
               <div id="agent-card-specifying"><AgentCard title="Specifying" items={result.specifying_flags} agentKey="specifying"
@@ -1916,7 +2222,12 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 onApplyChange={handleApplyFinding} onAddNote={handleAddNote}
                 appliedFindings={appliedFindings} findingId={findingId}
                 customSolutionByFindingId={customSolutionByFindingId} onCustomSolutionChange={(id, text) => setCustomSolutionByFindingId(prev => ({ ...prev, [id]: text }))}
-                onCheckWithAgent={handleCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId} /></div>
+                onCheckWithAgent={handleCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId}
+                findingDispositions={findingDispositions}
+                findingGovernanceNotes={findingGovernanceNotes}
+                onDispositionChange={handleDispositionChange}
+                onGovernanceNoteChange={handleGovernanceNoteChange}
+              /></div>
             )}
             {result.sequencing_flags?.length > 0 && selectedMetricFilter === 'sequencing' && (
               <div id="agent-card-sequencing"><AgentCard title="Sequencing" items={result.sequencing_flags} agentKey="sequencing"
@@ -1925,7 +2236,12 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 onApplyChange={handleApplyFinding} onAddNote={handleAddNote}
                 appliedFindings={appliedFindings} findingId={findingId}
                 customSolutionByFindingId={customSolutionByFindingId} onCustomSolutionChange={(id, text) => setCustomSolutionByFindingId(prev => ({ ...prev, [id]: text }))}
-                onCheckWithAgent={handleCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId} /></div>
+                onCheckWithAgent={handleCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId}
+                findingDispositions={findingDispositions}
+                findingGovernanceNotes={findingGovernanceNotes}
+                onDispositionChange={handleDispositionChange}
+                onGovernanceNoteChange={handleGovernanceNoteChange}
+              /></div>
             )}
             {result.formatting_flags?.length > 0 && selectedMetricFilter === 'formatting' && (
               <div id="agent-card-formatting"><AgentCard title="Formatting" items={result.formatting_flags} agentKey="formatting"
@@ -1934,7 +2250,12 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 onApplyChange={handleApplyFinding} onAddNote={handleAddNote}
                 appliedFindings={appliedFindings} findingId={findingId}
                 customSolutionByFindingId={customSolutionByFindingId} onCustomSolutionChange={(id, text) => setCustomSolutionByFindingId(prev => ({ ...prev, [id]: text }))}
-                onCheckWithAgent={handleCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId} /></div>
+                onCheckWithAgent={handleCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId}
+                findingDispositions={findingDispositions}
+                findingGovernanceNotes={findingGovernanceNotes}
+                onDispositionChange={handleDispositionChange}
+                onGovernanceNoteChange={handleGovernanceNoteChange}
+              /></div>
             )}
             {result.compliance_flags?.length > 0 && selectedMetricFilter === 'compliance' && (
               <div id="agent-card-compliance"><AgentCard title="Compliance" items={result.compliance_flags} agentKey="compliance"
@@ -1943,7 +2264,12 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 onApplyChange={handleApplyFinding} onAddNote={handleAddNote}
                 appliedFindings={appliedFindings} findingId={findingId}
                 customSolutionByFindingId={customSolutionByFindingId} onCustomSolutionChange={(id, text) => setCustomSolutionByFindingId(prev => ({ ...prev, [id]: text }))}
-                onCheckWithAgent={handleCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId} /></div>
+                onCheckWithAgent={handleCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId}
+                findingDispositions={findingDispositions}
+                findingGovernanceNotes={findingGovernanceNotes}
+                onDispositionChange={handleDispositionChange}
+                onGovernanceNoteChange={handleGovernanceNoteChange}
+              /></div>
             )}
             {result.terminology_flags?.length > 0 && selectedMetricFilter === 'terminology' && (
               <div id="agent-card-terminology"><AgentCard title="Terminology" items={result.terminology_flags} agentKey="terminology"
@@ -1952,7 +2278,12 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 onApplyChange={handleApplyFinding} onAddNote={handleAddNote}
                 appliedFindings={appliedFindings} findingId={findingId}
                 customSolutionByFindingId={customSolutionByFindingId} onCustomSolutionChange={(id, text) => setCustomSolutionByFindingId(prev => ({ ...prev, [id]: text }))}
-                onCheckWithAgent={handleCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId} /></div>
+                onCheckWithAgent={handleCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId}
+                findingDispositions={findingDispositions}
+                findingGovernanceNotes={findingGovernanceNotes}
+                onDispositionChange={handleDispositionChange}
+                onGovernanceNoteChange={handleGovernanceNoteChange}
+              /></div>
             )}
             {result.conflicts?.length > 0 && selectedMetricFilter === 'conflicts' && (
               <div id="agent-card-conflict"><AgentCard title="Conflicts" items={result.conflicts} agentKey="conflict"
@@ -1961,7 +2292,12 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 onApplyChange={handleApplyFinding} onAddNote={handleAddNote}
                 appliedFindings={appliedFindings} findingId={findingId}
                 customSolutionByFindingId={customSolutionByFindingId} onCustomSolutionChange={(id, text) => setCustomSolutionByFindingId(prev => ({ ...prev, [id]: text }))}
-                onCheckWithAgent={handleCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId} /></div>
+                onCheckWithAgent={handleCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId}
+                findingDispositions={findingDispositions}
+                findingGovernanceNotes={findingGovernanceNotes}
+                onDispositionChange={handleDispositionChange}
+                onGovernanceNoteChange={handleGovernanceNoteChange}
+              /></div>
             )}
           </div>
 
@@ -2438,7 +2774,7 @@ function OriginalDocumentPanel({ htmlContent, content, sections = [], sourceType
 // ---------------------------------------------------------------------------
 // Risk Gap card — sorted by HACCP RPN score, shows score bar inline
 // ---------------------------------------------------------------------------
-function RiskGapCard({ items, agentKey, onFindingClick, onApplyChange, onAddNote, appliedFindings, findingId, customSolutionByFindingId, onCustomSolutionChange, onCheckWithAgent, validateSolutionResult, validatingFindingId }) {
+function RiskGapCard({ items, agentKey, onFindingClick, onApplyChange, onAddNote, appliedFindings, findingId, customSolutionByFindingId, onCustomSolutionChange, onCheckWithAgent, validateSolutionResult, validatingFindingId, findingDispositions, findingGovernanceNotes, findingHazardControlTags, onDispositionChange, onGovernanceNoteChange, onHazardControlChange }) {
   const [expanded, setExpanded] = useState(false);
   const sorted = [...items].sort((a, b) => (b.fmea_score || 0) - (a.fmea_score || 0));
   const display = expanded ? sorted : sorted.slice(0, 3);
@@ -2453,9 +2789,14 @@ function RiskGapCard({ items, agentKey, onFindingClick, onApplyChange, onAddNote
         {display.map((gap, i) => {
           const id = findingId(agentKey, gap);
           const isApplied = appliedFindings?.has(id);
+          const modelHz = String(gap.hazard_control_type || '').trim();
+          const hzSelectValue = findingHazardControlTags && Object.prototype.hasOwnProperty.call(findingHazardControlTags, id)
+            ? findingHazardControlTags[id]
+            : modelHz;
           return (
           <li
             key={i}
+            data-finding-id={id}
             className={`agent-item ${onFindingClick && (gap.excerpt || gap.location) ? 'agent-item-clickable' : ''}`}
             onClick={onFindingClick && (gap.excerpt || gap.location) ? () => onFindingClick(gap.excerpt || gap.location) : undefined}
             onKeyDown={onFindingClick && (gap.excerpt || gap.location) ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onFindingClick(gap.excerpt || gap.location); } } : undefined}
@@ -2496,7 +2837,13 @@ function RiskGapCard({ items, agentKey, onFindingClick, onApplyChange, onAddNote
             </div>
             <FindingActions id={id} agentKey={agentKey} item={gap} onApplyChange={onApplyChange} onAddNote={onAddNote} isApplied={isApplied}
               customSolution={customSolutionByFindingId?.[id]} onCustomSolutionChange={onCustomSolutionChange}
-              onCheckWithAgent={onCheckWithAgent} validateFeedback={validateSolutionResult?.findingId === id ? validateSolutionResult.feedback : null} isChecking={validatingFindingId === id} />
+              onCheckWithAgent={onCheckWithAgent} validateFeedback={validateSolutionResult?.findingId === id ? validateSolutionResult.feedback : null} isChecking={validatingFindingId === id}
+              dispositionValue={findingDispositions?.[id]} onDispositionChange={onDispositionChange}
+              governanceNoteValue={findingGovernanceNotes?.[id]} onGovernanceNoteChange={onGovernanceNoteChange}
+              hazardControlValue={hzSelectValue}
+              onHazardControlChange={onHazardControlChange ? (fid, v) => onHazardControlChange(fid, v, gap) : undefined}
+              modelHazardHint={modelHz || null}
+            />
           </li>
           );
         })}
@@ -2513,7 +2860,7 @@ function RiskGapCard({ items, agentKey, onFindingClick, onApplyChange, onAddNote
 // ---------------------------------------------------------------------------
 // Structure flag card — omission/ordering, shows severity pill
 // ---------------------------------------------------------------------------
-function StructureCard({ items, agentKey, onFindingClick, onApplyChange, onAddNote, appliedFindings, findingId, customSolutionByFindingId, onCustomSolutionChange, onCheckWithAgent, validateSolutionResult, validatingFindingId }) {
+function StructureCard({ items, agentKey, onFindingClick, onApplyChange, onAddNote, appliedFindings, findingId, customSolutionByFindingId, onCustomSolutionChange, onCheckWithAgent, validateSolutionResult, validatingFindingId, findingDispositions, findingGovernanceNotes, onDispositionChange, onGovernanceNoteChange }) {
   const [expanded, setExpanded] = useState(false);
   // Required-section omissions first, then ordering, then optional omissions
   const sorted = [...items].sort((a, b) => {
@@ -2535,6 +2882,7 @@ function StructureCard({ items, agentKey, onFindingClick, onApplyChange, onAddNo
           return (
           <li
             key={i}
+            data-finding-id={id}
             className={`agent-item structure-item ${onFindingClick && flag.section ? 'agent-item-clickable' : ''}`}
             onClick={onFindingClick && flag.section ? () => onFindingClick(flag.section) : undefined}
             onKeyDown={onFindingClick && flag.section ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onFindingClick(flag.section); } } : undefined}
@@ -2556,7 +2904,9 @@ function StructureCard({ items, agentKey, onFindingClick, onApplyChange, onAddNo
             </div>
             <FindingActions id={id} agentKey={agentKey} item={flag} onApplyChange={onApplyChange} onAddNote={onAddNote} isApplied={isApplied}
               customSolution={customSolutionByFindingId?.[id]} onCustomSolutionChange={onCustomSolutionChange}
-              onCheckWithAgent={onCheckWithAgent} validateFeedback={validateSolutionResult?.findingId === id ? validateSolutionResult.feedback : null} isChecking={validatingFindingId === id} />
+              onCheckWithAgent={onCheckWithAgent} validateFeedback={validateSolutionResult?.findingId === id ? validateSolutionResult.feedback : null} isChecking={validatingFindingId === id}
+              dispositionValue={findingDispositions?.[id]} onDispositionChange={onDispositionChange}
+              governanceNoteValue={findingGovernanceNotes?.[id]} onGovernanceNoteChange={onGovernanceNoteChange} />
           </li>
           );
         })}
@@ -2573,7 +2923,7 @@ function StructureCard({ items, agentKey, onFindingClick, onApplyChange, onAddNo
 // ---------------------------------------------------------------------------
 // Content integrity card — grouped by flag_type sub-section
 // ---------------------------------------------------------------------------
-function ContentIntegrityCard({ items, agentKey, onFindingClick, onApplyChange, onAddNote, appliedFindings, findingId, customSolutionByFindingId, onCustomSolutionChange, onCheckWithAgent, validateSolutionResult, validatingFindingId }) {
+function ContentIntegrityCard({ items, agentKey, onFindingClick, onApplyChange, onAddNote, appliedFindings, findingId, customSolutionByFindingId, onCustomSolutionChange, onCheckWithAgent, validateSolutionResult, validatingFindingId, findingDispositions, findingGovernanceNotes, onDispositionChange, onGovernanceNoteChange }) {
   const [expanded, setExpanded] = useState(false);
   const grouped = groupBy(items, 'flag_type');
 
@@ -2601,7 +2951,9 @@ function ContentIntegrityCard({ items, agentKey, onFindingClick, onApplyChange, 
                 onFindingClick={onFindingClick} onApplyChange={onApplyChange} onAddNote={onAddNote}
                 appliedFindings={appliedFindings} findingId={findingId}
                 customSolutionByFindingId={customSolutionByFindingId} onCustomSolutionChange={onCustomSolutionChange}
-                onCheckWithAgent={onCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId} />
+                onCheckWithAgent={onCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId}
+                findingDispositions={findingDispositions} findingGovernanceNotes={findingGovernanceNotes}
+                onDispositionChange={onDispositionChange} onGovernanceNoteChange={onGovernanceNoteChange} />
             );
           })}
         </div>
@@ -2635,7 +2987,7 @@ function ContentIntegrityCard({ items, agentKey, onFindingClick, onApplyChange, 
   );
 }
 
-function IntegrityGroup({ ftype, items, agentKey, onFindingClick, onApplyChange, onAddNote, appliedFindings, findingId, customSolutionByFindingId, onCustomSolutionChange, onCheckWithAgent, validateSolutionResult, validatingFindingId }) {
+function IntegrityGroup({ ftype, items, agentKey, onFindingClick, onApplyChange, onAddNote, appliedFindings, findingId, customSolutionByFindingId, onCustomSolutionChange, onCheckWithAgent, validateSolutionResult, validatingFindingId, findingDispositions, findingGovernanceNotes, onDispositionChange, onGovernanceNoteChange }) {
   const [open, setOpen] = useState(false);
   const label = INTEGRITY_TYPE_LABELS[ftype] || ftype.replace(/_/g, ' ');
   const display = open ? items : items.slice(0, 2);
@@ -2655,6 +3007,7 @@ function IntegrityGroup({ ftype, items, agentKey, onFindingClick, onApplyChange,
           return (
           <li
             key={i}
+            data-finding-id={id}
             className={`agent-item ${onFindingClick && searchText ? 'agent-item-clickable' : ''}`}
             onClick={onFindingClick && searchText ? () => onFindingClick(searchText) : undefined}
             onKeyDown={onFindingClick && searchText ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onFindingClick(searchText); } } : undefined}
@@ -2682,7 +3035,9 @@ function IntegrityGroup({ ftype, items, agentKey, onFindingClick, onApplyChange,
             </div>
             <FindingActions id={id} agentKey={agentKey} item={flag} onApplyChange={onApplyChange} onAddNote={onAddNote} isApplied={isApplied}
               customSolution={customSolutionByFindingId?.[id]} onCustomSolutionChange={onCustomSolutionChange}
-              onCheckWithAgent={onCheckWithAgent} validateFeedback={validateSolutionResult?.findingId === id ? validateSolutionResult.feedback : null} isChecking={validatingFindingId === id} />
+              onCheckWithAgent={onCheckWithAgent} validateFeedback={validateSolutionResult?.findingId === id ? validateSolutionResult.feedback : null} isChecking={validatingFindingId === id}
+              dispositionValue={findingDispositions?.[id]} onDispositionChange={onDispositionChange}
+              governanceNoteValue={findingGovernanceNotes?.[id]} onGovernanceNoteChange={onGovernanceNoteChange} />
           </li>
           );
         })}
@@ -2699,7 +3054,7 @@ function IntegrityGroup({ ftype, items, agentKey, onFindingClick, onApplyChange,
 // ---------------------------------------------------------------------------
 // Generic agent card — supports click-to-highlight via searchTextKey or searchTextKeys (array, try in order)
 // ---------------------------------------------------------------------------
-function AgentCard({ title, items, keys, agentKey, searchTextKey = 'location', searchTextKeys, onFindingClick, onApplyChange, onAddNote, appliedFindings, findingId, customSolutionByFindingId, onCustomSolutionChange, onCheckWithAgent, validateSolutionResult, validatingFindingId }) {
+function AgentCard({ title, items, keys, agentKey, searchTextKey = 'location', searchTextKeys, onFindingClick, onApplyChange, onAddNote, appliedFindings, findingId, customSolutionByFindingId, onCustomSolutionChange, onCheckWithAgent, validateSolutionResult, validatingFindingId, findingDispositions, findingGovernanceNotes, onDispositionChange, onGovernanceNoteChange }) {
   const [expanded, setExpanded] = useState(false);
   const displayItems = expanded ? items : items.slice(0, 3);
   const hasMore = items.length > 3;
@@ -2727,6 +3082,7 @@ function AgentCard({ title, items, keys, agentKey, searchTextKey = 'location', s
           return (
           <li
             key={i}
+            data-finding-id={id}
             className={`agent-item ${onFindingClick && searchText ? 'agent-item-clickable' : ''}`}
             onClick={onFindingClick && searchText ? () => onFindingClick(searchText) : undefined}
             onKeyDown={onFindingClick && searchText ? (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onFindingClick(searchText); } } : undefined}
@@ -2822,7 +3178,9 @@ function AgentCard({ title, items, keys, agentKey, searchTextKey = 'location', s
             })}
             <FindingActions id={id} agentKey={agentKey} item={item} onApplyChange={onApplyChange} onAddNote={onAddNote} isApplied={isApplied}
               customSolution={customSolutionByFindingId?.[id]} onCustomSolutionChange={onCustomSolutionChange}
-              onCheckWithAgent={onCheckWithAgent} validateFeedback={validateSolutionResult?.findingId === id ? validateSolutionResult.feedback : null} isChecking={validatingFindingId === id} />
+              onCheckWithAgent={onCheckWithAgent} validateFeedback={validateSolutionResult?.findingId === id ? validateSolutionResult.feedback : null} isChecking={validatingFindingId === id}
+              dispositionValue={findingDispositions?.[id]} onDispositionChange={onDispositionChange}
+              governanceNoteValue={findingGovernanceNotes?.[id]} onGovernanceNoteChange={onGovernanceNoteChange} />
           </li>
           );
         })}

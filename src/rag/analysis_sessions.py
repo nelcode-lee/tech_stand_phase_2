@@ -14,6 +14,32 @@ SUPABASE_DB_URL = os.environ.get("SUPABASE_DB_URL", "")
 TABLE_NAME = "analysis_sessions"
 
 
+def _sign_off_at_value(raw) -> datetime | None:
+    """Parse ISO timestamp for sign_off_at; None if empty."""
+    if raw is None:
+        return None
+    if hasattr(raw, "isoformat") and not isinstance(raw, str):
+        return raw
+    s = str(raw).strip()
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _completed_at_iso(value) -> str | None:
+    """Format timestamps for JSON; drivers may return datetime or str."""
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
 def _compute_risk_metrics(result_json: dict | None) -> dict | None:
     """Summarise gap-level HACCP RPN bands from stored analysis JSON for dashboard aggregation."""
     if not result_json:
@@ -105,6 +131,34 @@ def ensure_table():
             ALTER TABLE public.{TABLE_NAME}
             ADD COLUMN IF NOT EXISTS risk_metrics JSONB
         """)
+        cur.execute(f"""
+            ALTER TABLE public.{TABLE_NAME}
+            ADD COLUMN IF NOT EXISTS policy_ref TEXT NOT NULL DEFAULT ''
+        """)
+        cur.execute(f"""
+            ALTER TABLE public.{TABLE_NAME}
+            ADD COLUMN IF NOT EXISTS sign_off_user TEXT NOT NULL DEFAULT ''
+        """)
+        cur.execute(f"""
+            ALTER TABLE public.{TABLE_NAME}
+            ADD COLUMN IF NOT EXISTS sign_off_statement TEXT NOT NULL DEFAULT ''
+        """)
+        cur.execute(f"""
+            ALTER TABLE public.{TABLE_NAME}
+            ADD COLUMN IF NOT EXISTS sign_off_at TIMESTAMPTZ
+        """)
+        cur.execute(f"""
+            ALTER TABLE public.{TABLE_NAME}
+            ADD COLUMN IF NOT EXISTS finding_dispositions JSONB NOT NULL DEFAULT '{{}}'::jsonb
+        """)
+        cur.execute(f"""
+            ALTER TABLE public.{TABLE_NAME}
+            ADD COLUMN IF NOT EXISTS finding_governance_notes JSONB NOT NULL DEFAULT '{{}}'::jsonb
+        """)
+        cur.execute(f"""
+            ALTER TABLE public.{TABLE_NAME}
+            ADD COLUMN IF NOT EXISTS finding_hazard_control_tags JSONB NOT NULL DEFAULT '{{}}'::jsonb
+        """)
 
 
 def record_session(
@@ -121,25 +175,84 @@ def record_session(
     workflow_type: str = "review",
     result_json: dict | None = None,
     corrections_implemented: int = 0,
-) -> None:
-    """Insert or update an analysis session record."""
+    policy_ref: str = "",
+    sign_off_user: str = "",
+    sign_off_statement: str = "",
+    sign_off_at=None,
+    finding_dispositions: dict | None = None,
+    finding_governance_notes: dict | None = None,
+    finding_hazard_control_tags: dict | None = None,
+    *,
+    update_governance: bool = False,
+    governance_mode: str | None = None,
+) -> bool:
+    """
+    Insert or update an analysis session record. Returns True if a row was written.
+
+    When update_governance is False (e.g. pipeline completion), policy_ref and analysis fields
+    update, but sign-off and finding_dispositions are preserved on conflict.
+
+    governance_mode (preferred over update_governance for saves):
+      - None: use legacy update_governance bool (False = preserve sign-off + dispositions on conflict)
+      - "preserve_all": same as update_governance False for those columns
+      - "dispositions_only": update disposition/governance/hazard-tag JSONB columns on conflict; preserve sign-off columns
+      - "full": update sign-off and those JSONB columns (governance summary / explicit save)
+    """
     if not tracking_id:
-        return
+        return False
     if not SUPABASE_DB_URL:
         log.warning("SUPABASE_DB_URL not set — analysis sessions will not persist to database")
-        return
+        return False
     ensure_table()
     agents_json = json.dumps(agents_run or [])
     findings_json = json.dumps(agent_findings or {})
-    result_json_str = json.dumps(result_json) if result_json else None
+    # Use `is not None` so a valid empty dict ({}) is still persisted (truthy test would skip and NULL out on upsert).
+    result_json_str = json.dumps(result_json) if result_json is not None else None
     corrections = max(0, int(corrections_implemented))
+    rm = _compute_risk_metrics(result_json) if result_json is not None else None
+    risk_metrics_str = json.dumps(rm) if rm else None
+    policy_ref_s = (policy_ref or "").strip()
+    sign_off_user_s = (sign_off_user or "").strip()
+    sign_off_statement_s = (sign_off_statement or "").strip()
+    sign_off_at_dt = _sign_off_at_value(sign_off_at)
+    fd = finding_dispositions if isinstance(finding_dispositions, dict) else {}
+    finding_dispositions_str = json.dumps(fd)
+    fgn = finding_governance_notes if isinstance(finding_governance_notes, dict) else {}
+    finding_governance_notes_str = json.dumps(fgn)
+    fht = finding_hazard_control_tags if isinstance(finding_hazard_control_tags, dict) else {}
+    finding_hazard_control_tags_str = json.dumps(fht)
+    mode = governance_mode
+    if mode is None:
+        ug = bool(update_governance)
+        ug_so = ug
+        ug_fd = ug
+    elif mode == "preserve_all":
+        ug_so = False
+        ug_fd = False
+    elif mode == "dispositions_only":
+        ug_so = False
+        ug_fd = True
+    elif mode == "full":
+        ug_so = True
+        ug_fd = True
+    else:
+        ug = bool(update_governance)
+        ug_so = ug
+        ug_fd = ug
     with _cursor() as cur:
-        cur.execute(f"""
+        cur.execute(
+            f"""
             INSERT INTO public.{TABLE_NAME} (
                 tracking_id, document_id, title, requester, doc_layer, sites,
                 overall_risk, total_findings, agents_run, agent_findings,
-                workflow_type, result_json, corrections_implemented, completed_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s::jsonb, %s, NOW())
+                workflow_type, result_json, corrections_implemented, risk_metrics,
+                policy_ref, sign_off_user, sign_off_statement, sign_off_at, finding_dispositions,
+                finding_governance_notes, finding_hazard_control_tags,
+                completed_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s, %s::jsonb, %s, %s::jsonb,
+                %s, %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, NOW()
+            )
             ON CONFLICT (tracking_id) DO UPDATE SET
                 document_id = EXCLUDED.document_id,
                 title = EXCLUDED.title,
@@ -153,12 +266,47 @@ def record_session(
                 workflow_type = EXCLUDED.workflow_type,
                 result_json = COALESCE(EXCLUDED.result_json, {TABLE_NAME}.result_json),
                 corrections_implemented = EXCLUDED.corrections_implemented,
+                risk_metrics = COALESCE(EXCLUDED.risk_metrics, {TABLE_NAME}.risk_metrics),
+                policy_ref = EXCLUDED.policy_ref,
+                sign_off_user = CASE WHEN %s THEN EXCLUDED.sign_off_user ELSE {TABLE_NAME}.sign_off_user END,
+                sign_off_statement = CASE WHEN %s THEN EXCLUDED.sign_off_statement ELSE {TABLE_NAME}.sign_off_statement END,
+                sign_off_at = CASE WHEN %s THEN EXCLUDED.sign_off_at ELSE {TABLE_NAME}.sign_off_at END,
+                finding_dispositions = CASE WHEN %s THEN EXCLUDED.finding_dispositions ELSE {TABLE_NAME}.finding_dispositions END,
+                finding_governance_notes = CASE WHEN %s THEN EXCLUDED.finding_governance_notes ELSE {TABLE_NAME}.finding_governance_notes END,
+                finding_hazard_control_tags = CASE WHEN %s THEN EXCLUDED.finding_hazard_control_tags ELSE {TABLE_NAME}.finding_hazard_control_tags END,
                 completed_at = EXCLUDED.completed_at
-        """, (
-            tracking_id, document_id, title, requester or "", doc_layer, sites,
-            overall_risk, total_findings, agents_json, findings_json,
-            workflow_type, result_json_str, corrections,
-        ))
+            """,
+            (
+                tracking_id,
+                document_id,
+                title,
+                requester or "",
+                doc_layer,
+                sites,
+                overall_risk,
+                total_findings,
+                agents_json,
+                findings_json,
+                workflow_type,
+                result_json_str,
+                corrections,
+                risk_metrics_str,
+                policy_ref_s,
+                sign_off_user_s,
+                sign_off_statement_s,
+                sign_off_at_dt,
+                finding_dispositions_str,
+                finding_governance_notes_str,
+                finding_hazard_control_tags_str,
+                ug_so,
+                ug_so,
+                ug_so,
+                ug_fd,
+                ug_fd,
+                ug_fd,
+            ),
+        )
+    return True
 
 
 def get_session(tracking_id: str) -> dict | None:
@@ -172,7 +320,10 @@ def get_session(tracking_id: str) -> dict | None:
         cur.execute(f"""
             SELECT tracking_id, document_id, title, requester, doc_layer, sites,
                    overall_risk, total_findings, agents_run, agent_findings,
-                   workflow_type, result_json, corrections_implemented, risk_metrics, completed_at
+                   workflow_type, result_json, corrections_implemented, risk_metrics,
+                   policy_ref, sign_off_user, sign_off_statement, sign_off_at, finding_dispositions,
+                   finding_governance_notes, finding_hazard_control_tags,
+                   completed_at
             FROM public.{TABLE_NAME}
             WHERE tracking_id = %s
         """, (tracking_id,))
@@ -211,6 +362,36 @@ def get_session(tracking_id: str) -> dict | None:
         risk_metrics = None
     if risk_metrics is None and result_json:
         risk_metrics = _compute_risk_metrics(result_json)
+    fd_raw = r.get("finding_dispositions")
+    if isinstance(fd_raw, str):
+        try:
+            finding_dispositions = json.loads(fd_raw) if fd_raw else {}
+        except json.JSONDecodeError:
+            finding_dispositions = {}
+    elif isinstance(fd_raw, dict):
+        finding_dispositions = fd_raw
+    else:
+        finding_dispositions = {}
+    fgn_raw = r.get("finding_governance_notes")
+    if isinstance(fgn_raw, str):
+        try:
+            finding_governance_notes = json.loads(fgn_raw) if fgn_raw else {}
+        except json.JSONDecodeError:
+            finding_governance_notes = {}
+    elif isinstance(fgn_raw, dict):
+        finding_governance_notes = fgn_raw
+    else:
+        finding_governance_notes = {}
+    fht_raw = r.get("finding_hazard_control_tags")
+    if isinstance(fht_raw, str):
+        try:
+            finding_hazard_control_tags = json.loads(fht_raw) if fht_raw else {}
+        except json.JSONDecodeError:
+            finding_hazard_control_tags = {}
+    elif isinstance(fht_raw, dict):
+        finding_hazard_control_tags = fht_raw
+    else:
+        finding_hazard_control_tags = {}
     return {
         "trackingId": r["tracking_id"],
         "documentId": r["document_id"] or "",
@@ -218,15 +399,22 @@ def get_session(tracking_id: str) -> dict | None:
         "requester": r.get("requester") or "",
         "docLayer": r["doc_layer"] or "sop",
         "sites": r["sites"] or "",
+        "policyRef": (r.get("policy_ref") or "").strip(),
         "overallRisk": r["overall_risk"],
         "totalFindings": r["total_findings"] or 0,
         "agentsRun": agents,
         "agentFindings": findings,
         "workflowType": r["workflow_type"] or "review",
         "correctionsImplemented": r.get("corrections_implemented") or 0,
-        "completedAt": r["completed_at"].isoformat() if r.get("completed_at") else None,
+        "completedAt": _completed_at_iso(r.get("completed_at")),
         "result": result_json,
         "riskMetrics": risk_metrics,
+        "signOffUser": (r.get("sign_off_user") or "").strip(),
+        "signOffStatement": (r.get("sign_off_statement") or "").strip(),
+        "signOffAt": _completed_at_iso(r.get("sign_off_at")),
+        "findingDispositions": finding_dispositions if isinstance(finding_dispositions, dict) else {},
+        "findingGovernanceNotes": finding_governance_notes if isinstance(finding_governance_notes, dict) else {},
+        "findingHazardControlTags": finding_hazard_control_tags if isinstance(finding_hazard_control_tags, dict) else {},
     }
 
 
@@ -265,59 +453,61 @@ def list_sessions(limit: int = 50) -> list[dict]:
             cur.execute(f"""
                 SELECT tracking_id, document_id, title, requester, doc_layer, sites,
                        overall_risk, total_findings, agents_run, agent_findings,
-                       workflow_type, corrections_implemented, completed_at
+                       workflow_type, corrections_implemented, completed_at, risk_metrics,
+                       policy_ref
                 FROM public.{TABLE_NAME}
                 ORDER BY completed_at DESC
                 LIMIT %s
             """, (limit,))
             rows = cur.fetchall()
+
+        result = []
+        for r in rows:
+            agents = r.get("agents_run")
+            if isinstance(agents, str):
+                try:
+                    agents = json.loads(agents) if agents else []
+                except json.JSONDecodeError:
+                    agents = []
+            elif agents is None:
+                agents = []
+            findings = r.get("agent_findings")
+            if isinstance(findings, str):
+                try:
+                    findings = json.loads(findings) if findings else {}
+                except json.JSONDecodeError:
+                    findings = {}
+            elif findings is None:
+                findings = {}
+            risk_metrics = r.get("risk_metrics")
+            if isinstance(risk_metrics, str):
+                try:
+                    risk_metrics = json.loads(risk_metrics) if risk_metrics else None
+                except json.JSONDecodeError:
+                    risk_metrics = None
+            elif risk_metrics is not None and not isinstance(risk_metrics, dict):
+                risk_metrics = None
+            result.append({
+                "trackingId": r["tracking_id"],
+                "documentId": r["document_id"] or "",
+                "title": r["title"] or r["document_id"] or "Unnamed",
+                "requester": r.get("requester") or "",
+                "docLayer": r["doc_layer"] or "sop",
+                "sites": r["sites"] or "",
+                "policyRef": (r.get("policy_ref") or "").strip(),
+                "overallRisk": r["overall_risk"],
+                "totalFindings": r["total_findings"] or 0,
+                "agentsRun": agents,
+                "agentFindings": findings,
+                "workflowType": r["workflow_type"] or "review",
+                "correctionsImplemented": r.get("corrections_implemented") or 0,
+                "completedAt": _completed_at_iso(r.get("completed_at")),
+                "riskMetrics": risk_metrics,
+            })
+        return result
     except Exception as e:
         log.warning("analysis_sessions list_sessions failed (DB may be unavailable): %s", e)
         return []
-
-    result = []
-    for r in rows:
-        agents = r.get("agents_run")
-        if isinstance(agents, str):
-            try:
-                agents = json.loads(agents) if agents else []
-            except json.JSONDecodeError:
-                agents = []
-        elif agents is None:
-            agents = []
-        findings = r.get("agent_findings")
-        if isinstance(findings, str):
-            try:
-                findings = json.loads(findings) if findings else {}
-            except json.JSONDecodeError:
-                findings = {}
-        elif findings is None:
-            findings = {}
-        risk_metrics = r.get("risk_metrics")
-        if isinstance(risk_metrics, str):
-            try:
-                risk_metrics = json.loads(risk_metrics) if risk_metrics else None
-            except json.JSONDecodeError:
-                risk_metrics = None
-        elif risk_metrics is not None and not isinstance(risk_metrics, dict):
-            risk_metrics = None
-        result.append({
-            "trackingId": r["tracking_id"],
-            "documentId": r["document_id"] or "",
-            "title": r["title"] or r["document_id"] or "Unnamed",
-            "requester": r.get("requester") or "",
-            "docLayer": r["doc_layer"] or "sop",
-            "sites": r["sites"] or "",
-            "overallRisk": r["overall_risk"],
-            "totalFindings": r["total_findings"] or 0,
-            "agentsRun": agents,
-            "agentFindings": findings,
-            "workflowType": r["workflow_type"] or "review",
-            "correctionsImplemented": r.get("corrections_implemented") or 0,
-            "completedAt": r["completed_at"].isoformat() if r.get("completed_at") else None,
-            "riskMetrics": risk_metrics,
-        })
-    return result
 
 
 def _normalise_result_json(result_json_raw) -> dict:
@@ -376,6 +566,17 @@ def _classify_harmonisation_standard_bucket(
     Map clause-mapping metadata to a coarse standard family for multi-standard harmonisation UI.
     Order: BRCGS, Cranswick MS, supermarket / customer, then other.
     """
+    pid_lower = (policy_document_id or "").lower()
+    # Document IDs / slugs often omit the word "brcgs" in the stored standard_name.
+    if pid_lower and (
+        "brcgs" in pid_lower
+        or "brc-food" in pid_lower
+        or "brc_food" in pid_lower
+        or "brc_global" in pid_lower
+        or "brc global standard" in pid_lower
+    ):
+        return "brcgs"
+
     parts = [standard_name or "", policy_document_id or "", citation or "", issue or ""]
     bag = " ".join(parts).lower()
 
@@ -419,6 +620,30 @@ def _classify_harmonisation_standard_bucket(
     return "other"
 
 
+def _enriched_standard_name_for_harmonisation(cm: dict) -> str | None:
+    """
+    Merge clause_mapping.standard_name with site_standard_links friendly name for the policy doc.
+    Ensures BRCGS / Cranswick MS buckets match when policy_clause_records uses raw filenames.
+    """
+    parts: list[str] = []
+    raw = cm.get("standard_name")
+    if isinstance(raw, str) and raw.strip():
+        parts.append(raw.strip())
+    pid = cm.get("policy_document_id")
+    if isinstance(pid, str) and pid.strip():
+        try:
+            from src.rag.document_registry import get_friendly_standard_name_for_document
+
+            fn = get_friendly_standard_name_for_document(pid.strip())
+        except Exception:
+            fn = None
+        if fn:
+            blob = " ".join(parts).lower()
+            if fn.lower() not in blob:
+                parts.append(fn)
+    return " ".join(parts) if parts else None
+
+
 def _build_harmonisation_from_result(result_json: dict) -> dict:
     compliance_flags = result_json.get("compliance_flags") or []
     if not isinstance(compliance_flags, list):
@@ -437,9 +662,10 @@ def _build_harmonisation_from_result(result_json: dict) -> dict:
         cm_status = str(cm.get("status") or "").strip().lower()
         issue_text = str(f.get("issue") or "").strip().lower()
         issue_raw = f.get("issue")
-        std_name = cm.get("standard_name")
-        if isinstance(std_name, str):
-            std_name = std_name.strip() or None
+        std_name = _enriched_standard_name_for_harmonisation(cm)
+        if not std_name:
+            raw = cm.get("standard_name")
+            std_name = raw.strip() if isinstance(raw, str) and raw.strip() else None
         cite = cm.get("canonical_citation")
         bucket = _classify_harmonisation_standard_bucket(
             std_name,
@@ -469,7 +695,7 @@ def _build_harmonisation_from_result(result_json: dict) -> dict:
                     "policy_document_id": cm.get("policy_document_id"),
                     "clause_id": cm.get("clause_id"),
                     "citation": cm.get("canonical_citation"),
-                    "standard_name": std_name,
+                    "standard_name": std_name or cm.get("standard_name"),
                     "standard_bucket": bucket,
                     "status": status,
                     "issue": f.get("issue"),
@@ -565,7 +791,7 @@ def get_harmonisation_scorecard(document_id: str, site: str = "", doc_layer: str
         },
         "by_standard": metrics.get("by_standard") or {},
         "top_gaps": metrics["top_gaps"],
-        "last_updated": row["completed_at"].isoformat() if row.get("completed_at") else datetime.now(timezone.utc).isoformat(),
+        "last_updated": _completed_at_iso(row.get("completed_at")) or datetime.now(timezone.utc).isoformat(),
     }
 
 
@@ -607,7 +833,7 @@ def get_harmonisation_trend(document_id: str, limit: int = 12, site: str = "", d
         points.append(
             {
                 "tracking_id": r.get("tracking_id") or "",
-                "completed_at": r["completed_at"].isoformat() if r.get("completed_at") else None,
+                "completed_at": _completed_at_iso(r.get("completed_at")),
                 "harmonisation_score": metrics["harmonisation_score"],
                 "total_clauses": metrics["total_clauses"],
                 "missing": metrics["status_counts"]["missing"],

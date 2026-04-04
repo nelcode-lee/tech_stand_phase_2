@@ -3,6 +3,10 @@
   max-width: var(--content-max-narrow, 640px);
 }
 
+.configure-phase-banner {
+  margin-bottom: var(--space-md);
+}
+
 .configure-top-bar {
   display: flex;
   align-items: center;

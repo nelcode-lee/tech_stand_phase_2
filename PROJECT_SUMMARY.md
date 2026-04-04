@@ -3,6 +3,8 @@
 **For:** Progress meeting  
 **Date:** February 2025
 
+**Phase positioning:** The product treats **review, validation, harmonisation metrics, and exports** as the primary outcomes of this phase. **Draft output and “Create a Document”** are **assistive / experimental** — not governed templates or approved issuance. Frontend: `VITE_DRAFT_OUTPUT_MODE` = `assistive` (default), `beta` (stronger labelling), or `minimal` (de-emphasise create in the nav). See `frontend/src/config/productPhase.js`.
+
 ---
 
 ## 1. What We Have Built

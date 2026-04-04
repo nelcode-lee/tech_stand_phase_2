@@ -1,13 +1,44 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { FileSearch, FilePlus2, Clock, CheckCircle2, AlertTriangle, XCircle, RefreshCw, Upload, Pencil, Trash2 } from 'lucide-react';
 import { useAnalysis } from '../context/AnalysisContext';
-import { addInteractionLog, listDocuments, updateDocumentMetadata, deleteDocument } from '../api';
+import { draftNavLabel } from '../config/productPhase';
+import { addInteractionLog, health, listDocuments, updateDocumentMetadata, deleteDocument } from '../api';
 import PolicyRefSelect from '../components/PolicyRefSelect';
 import SitesSelect from '../components/SitesSelect';
 import { filterPolicyDocumentsForRef } from '../utils/policyDocuments';
 import { ALL_SITES_VALUES, resolveSitesForApi, formatSitesForDisplay } from '../constants/sites';
 import './LibraryPage.css';
+
+/** Persist last successful library list so leaving the page and returning does not flash empty. */
+const LIBRARY_DOCS_CACHE_KEY = 'tech-standards-library-docs-v1';
+
+function loadCachedDocs() {
+  try {
+    const raw = sessionStorage.getItem(LIBRARY_DOCS_CACHE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCachedDocs(list) {
+  try {
+    sessionStorage.setItem(LIBRARY_DOCS_CACHE_KEY, JSON.stringify(list));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+function clearCachedDocs() {
+  try {
+    sessionStorage.removeItem(LIBRARY_DOCS_CACHE_KEY);
+  } catch {
+    /* ignore */
+  }
+}
 
 const LAYER_ORDER = { policy: 0, policy_brcgs: 0, policy_cranswick: 0, principle: 1, sop: 2, work_instruction: 3 };
 
@@ -49,9 +80,10 @@ export default function LibraryPage() {
   const location = useLocation();
   const { setWorkflowMode, setConfig, sessionLog, selectedSite } = useAnalysis();
 
-  const [docs, setDocs] = useState([]);
+  const [docs, setDocs] = useState(() => loadCachedDocs());
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const fetchGenRef = useRef(0);
   const [search, setSearch] = useState('');
   const [layerFilter, setLayerFilter] = useState('all');
   const [editDoc, setEditDoc] = useState(null);
@@ -61,15 +93,35 @@ export default function LibraryPage() {
   const [deletingId, setDeletingId] = useState(null);
 
   async function fetchDocs() {
+    const gen = ++fetchGenRef.current;
     setLoading(true);
     setError(null);
     try {
+      let h;
+      try {
+        h = await health();
+      } catch {
+        h = null;
+      }
+      if (h && h.supabase_db_configured === false) {
+        if (gen !== fetchGenRef.current) return;
+        setDocs([]);
+        clearCachedDocs();
+        setError(
+          'Document library needs a database: set SUPABASE_DB_URL in the API .env file (same folder as main.py), then restart the backend.',
+        );
+        return;
+      }
       const data = await listDocuments();
-      setDocs(data || []);
+      if (gen !== fetchGenRef.current) return;
+      const list = data || [];
+      setDocs(list);
+      saveCachedDocs(list);
     } catch (err) {
+      if (gen !== fetchGenRef.current) return;
       setError(err.message || 'Could not fetch document list from backend.');
     } finally {
-      setLoading(false);
+      if (gen === fetchGenRef.current) setLoading(false);
     }
   }
 
@@ -275,13 +327,15 @@ export default function LibraryPage() {
         <div>
           <h1 className="library-title">Document Library</h1>
           <p className="library-subtitle">
-            Ingested document store — pick a document and use Review to run analysis, or add new documents via Upload.
+            Ingested document store — use <strong>Review a document</strong> for compliance analysis (primary). <strong>New Document</strong> is assistive authoring only, not an issued controlled document.
+            {' '}
+            Add files via Upload.
             {docs.length > 0 && ` ${docs.length} document${docs.length !== 1 ? 's' : ''} in store.`}
           </p>
         </div>
         <div className="library-header-actions">
           <button type="button" className="library-header-btn icon-only" onClick={fetchDocs} title="Refresh">
-            <RefreshCw size={14} />
+            <RefreshCw size={14} className={loading ? 'library-refresh-spin' : ''} />
           </button>
           <button type="button" className="library-header-btn primary next-action" onClick={() => navigate('/review/configure')}>
             <FileSearch size={16} />
@@ -291,9 +345,14 @@ export default function LibraryPage() {
             <Upload size={16} />
             Add to Library
           </button>
-          <button type="button" className="library-header-btn secondary" onClick={startCreate} title="Build a new SOP from ingested policies and standards">
+          <button
+            type="button"
+            className="library-header-btn secondary"
+            onClick={startCreate}
+            title="Assistive / experimental — not for publishing controlled documents without governance"
+          >
             <FilePlus2 size={16} />
-            New Document
+            {draftNavLabel('New Document')}
           </button>
         </div>
       </div>
@@ -354,12 +413,12 @@ export default function LibraryPage() {
             </tr>
           </thead>
           <tbody>
-            {loading && (
+            {loading && merged.length === 0 && (
               <tr>
                 <td colSpan={9} className="library-loading">Loading documents…</td>
               </tr>
             )}
-            {!loading && displayed.length === 0 && (
+            {!(loading && merged.length === 0) && displayed.length === 0 && (
               <tr>
                 <td colSpan={9} className="library-empty">
                   {merged.length === 0 ? (
@@ -373,7 +432,7 @@ export default function LibraryPage() {
                 </td>
               </tr>
             )}
-            {!loading && displayed.map(doc => {
+            {displayed.length > 0 && displayed.map(doc => {
               const statusMeta = STATUS_META[doc.status] || STATUS_META.current;
               const StatusIcon = statusMeta.icon;
               const siteLabel = formatSitesForDisplay(doc.sites) ?? '—';

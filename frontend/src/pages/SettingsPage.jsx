@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Cloud,
   Shield,
@@ -8,16 +9,22 @@ import {
   Building2,
   Lock,
   Trash2,
+  ScrollText,
 } from 'lucide-react';
 import { useAnalysis } from '../context/AnalysisContext';
 import { SITES_OPTIONS } from '../constants/sites';
 import { addInteractionLog, clearSopsAndResetMetrics, resetMetricsAndPruneLibrary } from '../api';
+import { GovernanceLogsPanel } from './LogsPage';
 import './SettingsPage.css';
 
 const SESSION_LOG_KEY = 'tech-standards-session-log';
 
 export default function SettingsPage() {
-  const [activeSection, setActiveSection] = useState('sharepoint');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const sectionFromUrl = searchParams.get('section');
+  const [activeSection, setActiveSection] = useState(() =>
+    sectionFromUrl === 'governance' ? 'governance' : 'sharepoint'
+  );
   const { reloadSessionLog } = useAnalysis();
   const [sessionCleared, setSessionCleared] = useState(false);
   const [resetInProgress, setResetInProgress] = useState(false);
@@ -26,6 +33,29 @@ export default function SettingsPage() {
   const [sopClearInProgress, setSopClearInProgress] = useState(false);
   const [sopClearResult, setSopClearResult] = useState(null);
   const [sopClearError, setSopClearError] = useState(null);
+
+  const goToSection = useCallback(
+    (sectionKey, elementId) => {
+      setActiveSection(sectionKey);
+      if (sectionKey === 'governance') {
+        setSearchParams({ section: 'governance' });
+      } else {
+        setSearchParams({});
+      }
+      requestAnimationFrame(() => {
+        document.getElementById(elementId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    },
+    [setSearchParams]
+  );
+
+  useEffect(() => {
+    if (sectionFromUrl !== 'governance') return;
+    const t = setTimeout(() => {
+      document.getElementById('governance-logs')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
+    return () => clearTimeout(t);
+  }, [sectionFromUrl]);
 
   function clearSessionHistory() {
     try {
@@ -108,7 +138,7 @@ export default function SettingsPage() {
       <header className="settings-header">
         <h1 className="settings-title">Settings</h1>
         <p className="settings-subtitle">
-          Configure integrations, authentication, and site-specific options.
+          Configure integrations, authentication, site-specific options, and governance logs.
         </p>
       </header>
 
@@ -117,10 +147,7 @@ export default function SettingsPage() {
         <button
           type="button"
           className={`settings-nav-btn ${activeSection === 'sharepoint' ? 'active' : ''}`}
-          onClick={() => {
-            setActiveSection('sharepoint');
-            document.getElementById('sharepoint')?.scrollIntoView({ behavior: 'smooth' });
-          }}
+          onClick={() => goToSection('sharepoint', 'sharepoint')}
         >
           <Cloud size={16} />
           SharePoint
@@ -128,10 +155,7 @@ export default function SettingsPage() {
         <button
           type="button"
           className={`settings-nav-btn ${activeSection === 'sso' ? 'active' : ''}`}
-          onClick={() => {
-            setActiveSection('sso');
-            document.getElementById('sso')?.scrollIntoView({ behavior: 'smooth' });
-          }}
+          onClick={() => goToSection('sso', 'sso')}
         >
           <Shield size={16} />
           SSO & Authentication
@@ -139,21 +163,23 @@ export default function SettingsPage() {
         <button
           type="button"
           className={`settings-nav-btn ${activeSection === 'sites' ? 'active' : ''}`}
-          onClick={() => {
-            setActiveSection('sites');
-            document.getElementById('sites')?.scrollIntoView({ behavior: 'smooth' });
-          }}
+          onClick={() => goToSection('sites', 'sites')}
         >
           <MapPin size={16} />
           Site-specific
         </button>
         <button
           type="button"
+          className={`settings-nav-btn ${activeSection === 'governance' ? 'active' : ''}`}
+          onClick={() => goToSection('governance', 'governance-logs')}
+        >
+          <ScrollText size={16} />
+          Governance logs
+        </button>
+        <button
+          type="button"
           className={`settings-nav-btn ${activeSection === 'data' ? 'active' : ''}`}
-          onClick={() => {
-            setActiveSection('data');
-            document.getElementById('data')?.scrollIntoView({ behavior: 'smooth' });
-          }}
+          onClick={() => goToSection('data', 'data')}
         >
           <Trash2 size={16} />
           Data
@@ -250,6 +276,20 @@ export default function SettingsPage() {
               </ul>
             </div>
           </div>
+        </section>
+
+        {/* Governance logs — interaction audit trail */}
+        <section id="governance-logs" className="settings-section settings-section--governance">
+          <div className="settings-section-header">
+            <h2 className="settings-section-title">
+              <ScrollText size={20} />
+              Governance logs
+            </h2>
+          </div>
+          <p className="settings-section-desc">
+            Recent user and workflow interactions (same data as the former Governance Logs page). Use Refresh to reload from the server.
+          </p>
+          <GovernanceLogsPanel embedded />
         </section>
 
         {/* Data & session history */}

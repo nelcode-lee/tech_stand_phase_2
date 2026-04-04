@@ -13,7 +13,10 @@ function formatMeta(metadata) {
     .join(' | ');
 }
 
-export default function LogsPage() {
+/**
+ * @param {{ embedded?: boolean }} props — when true, render for Settings (h2 + compact title styles)
+ */
+export function GovernanceLogsPanel({ embedded = false }) {
   const [logs, setLogs] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -41,13 +44,18 @@ export default function LogsPage() {
     fetchLogs();
   }, []);
 
+  const rootClass = embedded ? 'logs-embedded' : 'logs-page';
+
   return (
-    <div className="logs-page">
-      <div className="logs-header">
-        <div>
-          <h1 className="logs-title">Governance Logs</h1>
-          <p className="logs-subtitle">Recent user and workflow interactions captured for audit and oversight.</p>
-        </div>
+    <div className={rootClass}>
+      <div className={`logs-header ${embedded ? 'logs-header--embedded-only' : ''}`}>
+        {!embedded && (
+          <div>
+            <h1 className="logs-title">Governance Logs</h1>
+            <p className="logs-subtitle">Recent user and workflow interactions captured for audit and oversight.</p>
+          </div>
+        )}
+        {embedded && <span className="logs-embedded-toolbar-spacer" aria-hidden />}
         <button type="button" className="logs-refresh-btn" onClick={fetchLogs} disabled={loading}>
           <RefreshCw size={14} style={loading ? { animation: 'spin 1s linear infinite' } : undefined} />
           Refresh
@@ -91,4 +99,8 @@ export default function LogsPage() {
       </div>
     </div>
   );
+}
+
+export default function LogsPage() {
+  return <GovernanceLogsPanel />;
 }

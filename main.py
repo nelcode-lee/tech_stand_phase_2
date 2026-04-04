@@ -1,5 +1,7 @@
 """Tech standards Phase 2 — FastAPI app. RAG ingest (Workato) + agent pipeline /analyse."""
+import os
 from pathlib import Path
+
 try:
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).resolve().parent / ".env")
@@ -32,4 +34,9 @@ app.include_router(pipeline_router)
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    """Liveness + whether Postgres (Supabase) is configured for ingest, sessions, and policy clauses."""
+    db = bool((os.environ.get("SUPABASE_DB_URL") or "").strip())
+    return {
+        "status": "ok",
+        "supabase_db_configured": db,
+    }

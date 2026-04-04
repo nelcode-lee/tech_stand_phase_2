@@ -88,8 +88,19 @@
   margin-bottom: var(--space-md);
 }
 
+/* Visually hidden but still in the DOM — display:none breaks file dialog in some browsers when using label + click(). */
 .upload-input {
-  display: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+  opacity: 0;
 }
 
 .upload-browse {

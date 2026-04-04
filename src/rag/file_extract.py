@@ -6,8 +6,12 @@ from io import BytesIO
 # DOCX
 try:
     from docx import Document as DocxDocument
+    from docx.table import Table as DocxTable
+    from docx.text.paragraph import Paragraph as DocxParagraph
 except ImportError:
     DocxDocument = None
+    DocxTable = None  # type: ignore[misc, assignment]
+    DocxParagraph = None  # type: ignore[misc, assignment]
 
 # PDF
 try:
@@ -33,27 +37,33 @@ def _is_list_paragraph(para) -> bool:
 
 
 def extract_text_from_docx(file_bytes: bytes) -> str | None:
-    """Extract plain text from a DOCX file. List items get a bullet prefix so extraction preserves structure."""
-    if DocxDocument is None:
+    """
+    Extract plain text from a DOCX file. List items get a bullet prefix so extraction preserves structure.
+
+    Block items (paragraphs and tables) are emitted in document body order — not all paragraphs
+    then all tables — so headings stay adjacent to their tables for chunking and retrieval.
+    """
+    if DocxDocument is None or DocxParagraph is None or DocxTable is None:
         return None
     try:
         doc = DocxDocument(BytesIO(file_bytes))
-        paragraphs = []
-        for p in doc.paragraphs:
-            text = p.text.strip()
-            if not text:
-                continue
-            if _is_list_paragraph(p):
-                paragraphs.append("• " + text)
-            else:
-                paragraphs.append(text)
-        for table in doc.tables:
-            paragraphs.append("[TABLE]")
-            for row in table.rows:
-                cells = [cell.text.strip() for cell in row.cells]
-                if any(cells):
-                    paragraphs.append("\t".join(cells))
-        return "\n\n".join(paragraphs) if paragraphs else None
+        parts: list[str] = []
+        for block in doc.iter_inner_content():
+            if isinstance(block, DocxParagraph):
+                text = block.text.strip()
+                if not text:
+                    continue
+                if _is_list_paragraph(block):
+                    parts.append("• " + text)
+                else:
+                    parts.append(text)
+            elif isinstance(block, DocxTable):
+                parts.append("[TABLE]")
+                for row in block.rows:
+                    cells = [cell.text.strip() for cell in row.cells]
+                    if any(cells):
+                        parts.append("\t".join(cells))
+        return "\n\n".join(parts) if parts else None
     except Exception:
         return None
 

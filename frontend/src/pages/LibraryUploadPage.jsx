@@ -188,12 +188,12 @@ export default function LibraryUploadPage() {
         {/* File upload */}
         <section className="lib-upload-section">
           <h2 className="lib-upload-section-title">File</h2>
-          <div
+          <label
             className={`lib-upload-zone ${dragOver ? 'drag-over' : ''} ${file ? 'has-file' : ''}`}
+            htmlFor="lib-upload-input"
             onDrop={handleDrop}
             onDragOver={e => { e.preventDefault(); setDragOver(true); }}
             onDragLeave={() => setDragOver(false)}
-            onClick={() => fileInputRef.current?.click()}
             style={{ cursor: 'pointer' }}
           >
             <Upload className="lib-upload-icon" size={36} />
@@ -203,7 +203,6 @@ export default function LibraryUploadPage() {
               ref={fileInputRef}
               type="file"
               accept=".docx,.pdf,.doc"
-              onClick={e => e.stopPropagation()}
               onChange={e => {
                 const f = e.target.files?.[0];
                 if (f) {
@@ -215,7 +214,7 @@ export default function LibraryUploadPage() {
               id="lib-upload-input"
             />
             {file && <span className="lib-upload-filename">{file.name}</span>}
-          </div>
+          </label>
         </section>
 
         {status && (

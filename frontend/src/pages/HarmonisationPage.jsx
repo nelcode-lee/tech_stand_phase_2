@@ -1,7 +1,16 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { getHarmonisationScorecard, listDocuments } from '../api';
+import { useAnalysis } from '../context/AnalysisContext';
 import './HarmonisationPage.css';
+
+/** Procedure layers scored for harmonisation vs policy PDFs (BRCGS, Cranswick MS, etc.). */
+const HARMONISATION_SUBJECT_LAYERS = new Set(['sop', 'work_instruction', 'principle']);
+
+function isProcedureDocument(doc) {
+  const layer = String(doc?.doc_layer || 'sop').toLowerCase();
+  return HARMONISATION_SUBJECT_LAYERS.has(layer);
+}
 
 const STANDARD_FILTER_OPTIONS = [
   { value: 'all', label: 'All standards (combined)' },
@@ -32,6 +41,8 @@ function bucketLabel(scorecard, key) {
 
 function HarmonisationPage() {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { setConfig, setWorkflowMode } = useAnalysis();
   const [documents, setDocuments] = useState([]);
   const [selectedDocumentId, setSelectedDocumentId] = useState('');
   const [scorecard, setScorecard] = useState(null);
@@ -54,14 +65,6 @@ function HarmonisationPage() {
         if (cancelled) return;
         const docs = Array.isArray(rows) ? rows : [];
         setDocuments(docs);
-        if (docs.length > 0) {
-          const prefStr = location.state?.documentId ? String(location.state.documentId) : '';
-          if (prefStr && docs.some((d) => String(d.document_id) === prefStr)) {
-            setSelectedDocumentId(prefStr);
-          } else {
-            setSelectedDocumentId(String(docs[0].document_id || ''));
-          }
-        }
       } catch (e) {
         if (!cancelled) setError(e?.message || 'Could not load documents.');
       } finally {
@@ -74,13 +77,26 @@ function HarmonisationPage() {
     };
   }, []);
 
+  const procedureDocuments = useMemo(
+    () => documents.filter((d) => isProcedureDocument(d)),
+    [documents],
+  );
+
   useEffect(() => {
-    const preferred = location.state?.documentId;
-    if (!preferred) return;
-    const id = String(preferred);
-    const match = documents.some((d) => String(d.document_id) === id);
-    if (match) setSelectedDocumentId(id);
-  }, [location.state, documents]);
+    if (procedureDocuments.length === 0) {
+      setSelectedDocumentId('');
+      return;
+    }
+    const ids = new Set(procedureDocuments.map((d) => String(d.document_id)));
+    const pref = location.state?.documentId ? String(location.state.documentId) : '';
+    if (pref && ids.has(pref)) {
+      setSelectedDocumentId(pref);
+      return;
+    }
+    setSelectedDocumentId((prev) =>
+      prev && ids.has(prev) ? prev : String(procedureDocuments[0].document_id || ''),
+    );
+  }, [procedureDocuments, location.state?.documentId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -113,22 +129,40 @@ function HarmonisationPage() {
 
   const availableSites = useMemo(() => {
     const values = new Set();
-    documents.forEach((d) => {
+    procedureDocuments.forEach((d) => {
       const raw = String(d?.sites || '').trim();
       if (!raw) return;
       raw.split(',').map((s) => s.trim()).filter(Boolean).forEach((s) => values.add(s));
     });
     return Array.from(values).sort((a, b) => a.localeCompare(b));
-  }, [documents]);
+  }, [procedureDocuments]);
 
-  const availableDocLayers = useMemo(() => {
+  const availableSessionDocLayers = useMemo(() => {
     const values = new Set();
-    documents.forEach((d) => {
-      const raw = String(d?.doc_layer || '').trim();
-      if (raw) values.add(raw);
+    procedureDocuments.forEach((d) => {
+      const raw = String(d?.doc_layer || '').trim().toLowerCase();
+      if (raw && HARMONISATION_SUBJECT_LAYERS.has(raw)) values.add(raw);
     });
     return Array.from(values).sort((a, b) => a.localeCompare(b));
-  }, [documents]);
+  }, [procedureDocuments]);
+
+  const selectedProcedure = useMemo(
+    () => procedureDocuments.find((d) => String(d.document_id) === selectedDocumentId),
+    [procedureDocuments, selectedDocumentId],
+  );
+
+  function goToConfigureAnalysis() {
+    if (!selectedDocumentId || !selectedProcedure) return;
+    setWorkflowMode('review');
+    setConfig((c) => ({
+      ...c,
+      requestType: 'single_document_review',
+      documentId: selectedDocumentId,
+      title: selectedProcedure.title || selectedDocumentId,
+      docLayer: selectedProcedure.doc_layer || 'sop',
+    }));
+    navigate('/review/configure');
+  }
 
   const activeSummary = useMemo(() => {
     if (!scorecard) return {};
@@ -245,26 +279,48 @@ function HarmonisationPage() {
         <div>
           <h1>Harmonisation Scorecard</h1>
           <p>
-            Clause alignment across BRCGS, Cranswick Manufacturing Standard, and supermarket / customer requirements. Metrics
-            come from the latest saved analysis session for this document.
+            Compare a procedure (SOP, work instruction, or principle document) against mapped policy requirements. Metrics
+            reflect clause alignment from the <strong>latest saved analysis session</strong> for the selected document (compliance
+            flags and clause mapping). Use the standard filter to focus on BRCGS, Cranswick MS, supermarket, or other families.
+            Policy PDFs are not listed here — choose a procedure, then configure which additional policy documents to include when
+            you run analysis.
           </p>
         </div>
-        <div className="harmonisation-controls">
-          <label htmlFor="harmonisation-document">Document</label>
-          <select
-            id="harmonisation-document"
-            value={selectedDocumentId}
-            onChange={(e) => setSelectedDocumentId(e.target.value)}
-            disabled={loadingDocs || documents.length === 0}
+        <div className="harmonisation-header-actions">
+          <div className="harmonisation-controls">
+            <label htmlFor="harmonisation-document">Procedure document</label>
+            <select
+              id="harmonisation-document"
+              value={selectedDocumentId}
+              onChange={(e) => setSelectedDocumentId(e.target.value)}
+              disabled={loadingDocs || procedureDocuments.length === 0}
+            >
+              {procedureDocuments.map((doc) => (
+                <option key={doc.document_id} value={doc.document_id}>
+                  {doc.title || doc.document_id}
+                  {doc.doc_layer ? ` (${doc.doc_layer})` : ''}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button
+            type="button"
+            className="harmonisation-configure-btn"
+            onClick={goToConfigureAnalysis}
+            disabled={!selectedDocumentId || !selectedProcedure}
+            title="Open Review → Configure to add policy documents and run analysis"
           >
-            {documents.map((doc) => (
-              <option key={doc.document_id} value={doc.document_id}>
-                {doc.title || doc.document_id}
-              </option>
-            ))}
-          </select>
+            Configure analysis
+          </button>
         </div>
       </header>
+
+      {!loadingDocs && documents.length > 0 && procedureDocuments.length === 0 && (
+        <div className="harmonisation-inline-hint harmonisation-empty-procedures">
+          No procedure documents (SOP, work instruction, or principle) found in the library. Policy-layer uploads are excluded from
+          this scorecard. Add or re-tag documents in the Library, or open a policy from the Library for reference only.
+        </div>
+      )}
       <section className="harmonisation-toolbar">
         <div className="harmonisation-filter-group">
           <label htmlFor="harmonisation-standard-filter">Standard</label>
@@ -292,10 +348,10 @@ function HarmonisationPage() {
           </select>
         </div>
         <div className="harmonisation-filter-group">
-          <label htmlFor="harmonisation-doc-layer-filter">Document layer</label>
+          <label htmlFor="harmonisation-doc-layer-filter">Session layer</label>
           <select id="harmonisation-doc-layer-filter" value={docLayerFilter} onChange={(e) => setDocLayerFilter(e.target.value)}>
-            <option value="">All layers</option>
-            {availableDocLayers.map((layer) => (
+            <option value="">Any procedure layer</option>
+            {availableSessionDocLayers.map((layer) => (
               <option key={layer} value={layer}>
                 {layer}
               </option>
