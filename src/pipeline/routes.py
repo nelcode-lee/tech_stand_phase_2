@@ -423,78 +423,227 @@ def _filter_chunks_by_document(chunks: list[DocumentChunk], document_id: str | N
     return filtered
 
 
+def build_pipeline_context(body: AnalyseRequest) -> tuple[PipelineContext, list[DocumentChunk]]:
+    """Build pipeline context from an analyse request (shared by /analyse and stepped endpoints)."""
+    if body.document_id:
+        from src.rag.document_registry import resolve_registry_document_id
+
+        canon = resolve_registry_document_id(body.document_id)
+        if canon and canon != body.document_id.strip():
+            log.info("Resolved document_id for analysis: %r -> %r", body.document_id, canon)
+            body.document_id = canon
+
+    chunks = _chunks_from_request(body)
+    chunks = _filter_chunks_by_document(chunks, body.document_id)
+    if body.document_id and not chunks:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No content found for document '{body.document_id}'. The document may not be ingested yet, or ingestion may have failed. Try re-uploading the document.",
+        )
+    doc_id = (body.document_id or "").strip() or (chunks[0].document_id if chunks else "") or ""
+    doc_title = (body.title or "").strip() or (chunks[0].title if chunks else "") or doc_id or ""
+    parent_policy, higher_order_policies = _fetch_parent_policies(body)
+    sibling_docs = _fetch_additional_documents(body.additional_doc_ids)
+
+    full_content = None
+    if doc_id:
+        try:
+            from src.rag.document_registry import get_document_content
+
+            full_content, _ = get_document_content(doc_id)
+        except Exception:
+            pass
+        if not full_content and chunks:
+            chunks_sorted = sorted(chunks, key=lambda c: getattr(c, "chunk_index", 0))
+            full_content = "\n\n".join((c.text or "").strip() for c in chunks_sorted if (c.text or "").strip())
+
+    prior_feedback: list[dict] = []
+    if doc_id:
+        try:
+            from src.rag.finding_notes import get_relevant_finding_notes
+
+            prior_feedback = get_relevant_finding_notes(doc_id, limit=20)
+        except Exception as e:
+            log.debug("Could not load prior feedback for pipeline: %s", e)
+
+    glossary_block: str | None = None
+    try:
+        from src.pipeline.domain import get_glossary_block, load_domain_context
+
+        glossary_block = get_glossary_block(load_domain_context()) or None
+    except Exception as e:
+        log.debug("Could not load glossary for pipeline: %s", e)
+
+    ctx = PipelineContext(
+        tracking_id=body.tracking_id,
+        request_type=_to_request_type(body.request_type),
+        doc_layer=_to_doc_layer(body.doc_layer),
+        sites=body.sites,
+        policy_ref=body.policy_ref,
+        attached_doc_url=body.attached_doc_url,
+        document_id=doc_id or None,
+        document_title=doc_title or None,
+        retrieved_chunks=chunks,
+        full_document_content=full_content,
+        parent_policy=parent_policy,
+        higher_order_policies=higher_order_policies,
+        sibling_docs=sibling_docs,
+        agent_instructions=(body.agent_instructions or "").strip() or None,
+        prior_feedback=prior_feedback,
+        glossary_block=glossary_block,
+    )
+    return ctx, chunks
+
+
+def _compose_analysis_json(ctx: PipelineContext, body: AnalyseRequest, chunks: list[DocumentChunk]) -> dict:
+    """Build the standard /analyse JSON payload (without session_saved)."""
+    doc_id = body.document_id or (chunks[0].document_id if chunks else "") or ""
+    title = body.title or (chunks[0].title if chunks else "") or doc_id or "Unnamed"
+    sites_str = ",".join(body.sites) if body.sites else ""
+    total_findings = (
+        len(ctx.risk_gaps)
+        + len(ctx.cleanser_flags)
+        + len(ctx.specifying_flags)
+        + len(ctx.structure_flags)
+        + len(ctx.content_integrity_flags)
+        + len(ctx.sequencing_flags)
+        + len(ctx.formatting_flags)
+        + len(ctx.compliance_flags)
+        + len(ctx.terminology_flags)
+        + len(ctx.conflicts)
+    )
+    agent_findings = {}
+    for key, agent in _FINDING_KEYS_TO_AGENT.items():
+        val = getattr(ctx, key, None)
+        count = len(val) if val else 0
+        if count > 0:
+            agent_findings[agent] = agent_findings.get(agent, 0) + count
+    glossary_candidates = [
+        {"term": t.term, "recommendation": t.recommendation}
+        for t in ctx.terminology_flags
+        if getattr(t, "glossary_candidate", False)
+    ]
+    analysis_date = datetime.now(timezone.utc).isoformat()
+    requester = (body.requester or "").strip()
+    policy_ref_val = (body.policy_ref or "").strip()
+    return {
+        "tracking_id": ctx.tracking_id,
+        "document_id": doc_id,
+        "title": title,
+        "doc_layer": ctx.doc_layer.value,
+        "policy_ref": policy_ref_val or None,
+        "requester": requester,
+        "analysis_date": analysis_date,
+        "draft_ready": ctx.draft_ready,
+        "draft_content": ctx.draft_content,
+        "overall_risk": ctx.overall_risk.value if ctx.overall_risk else None,
+        "conflict_count": ctx.conflict_count,
+        "blocker_count": ctx.blocker_count,
+        "conflicts": [c.model_dump() for c in ctx.conflicts],
+        "terminology_flags": [t.model_dump() for t in ctx.terminology_flags],
+        "glossary_candidates": glossary_candidates,
+        "risk_scores": [r.model_dump() for r in ctx.risk_scores],
+        "risk_gaps": [g.model_dump() for g in ctx.risk_gaps],
+        "cleanser_flags": [c.model_dump() for c in ctx.cleanser_flags],
+        "specifying_flags": [s.model_dump() for s in ctx.specifying_flags],
+        "structure_flags": [s.model_dump() for s in ctx.structure_flags],
+        "content_integrity_flags": [c.model_dump() for c in ctx.content_integrity_flags],
+        "sequencing_flags": [s.model_dump() for s in ctx.sequencing_flags],
+        "formatting_flags": [f.model_dump() for f in ctx.formatting_flags],
+        "compliance_flags": [c.model_dump() for c in ctx.compliance_flags],
+        "warnings": ctx.warnings,
+        "errors": [e.model_dump() for e in ctx.errors],
+        "agents_run": ctx.agents_run,
+        "agent_timings": ctx.agent_timings,
+        "_internal_total_findings": total_findings,
+        "_internal_agent_findings": agent_findings,
+        "_internal_sites_str": sites_str,
+    }
+
+
+def _persist_analysis_session(ctx: PipelineContext, body: AnalyseRequest, chunks: list[DocumentChunk], response: dict) -> bool:
+    """Persist analysis session for dashboard; returns session_saved."""
+    from src.rag.analysis_sessions import record_session
+
+    doc_id = body.document_id or (chunks[0].document_id if chunks else "") or ""
+    title = body.title or (chunks[0].title if chunks else "") or doc_id or "Unnamed"
+    sites_str = response.get("_internal_sites_str") or (",".join(body.sites) if body.sites else "")
+    total_findings = response.get("_internal_total_findings", 0)
+    agent_findings = response.get("_internal_agent_findings") or {}
+    requester = (body.requester or "").strip()
+    policy_ref_val = (body.policy_ref or "").strip()
+    # Strip internal keys from stored JSON
+    clean = {k: v for k, v in response.items() if not k.startswith("_internal")}
+    try:
+        return record_session(
+            tracking_id=ctx.tracking_id,
+            document_id=doc_id,
+            title=title,
+            requester=requester,
+            doc_layer=ctx.doc_layer.value,
+            sites=sites_str,
+            overall_risk=ctx.overall_risk.value if ctx.overall_risk else None,
+            total_findings=total_findings,
+            agents_run=ctx.agents_run,
+            agent_findings=agent_findings,
+            workflow_type="review",
+            result_json=clean,
+            policy_ref=policy_ref_val,
+            update_governance=False,
+        )
+    except Exception as e:
+        log.warning("Failed to persist analysis session for dashboard: %s", e)
+        return False
+
+
+async def _post_pipeline_verification(ctx: PipelineContext, progress_emit: ProgressEmit | None = None) -> None:
+    """Finding verification + compliance clause mapping (runs after full pipeline or last stepped agent)."""
+    try:
+        from src.pipeline.finding_verification import run_finding_verification
+
+        if progress_emit:
+            await progress_emit(
+                {
+                    "type": "progress",
+                    "agent": "finding_verification",
+                    "step_key": _agent_to_frontend_step_key("finding_verification"),
+                }
+            )
+        await run_finding_verification(ctx)
+    except Exception as e:
+        log.warning("Finding verification skipped: %s", e)
+
+    if ctx.compliance_flags:
+        from src.pipeline.clause_mapping import (
+            enrich_compliance_flags_clause_mapping,
+            ensure_compliance_flags_have_clause_mapping,
+        )
+
+        try:
+            await enrich_compliance_flags_clause_mapping(ctx)
+        except Exception as e:
+            log.warning("Clause mapping enrichment skipped: %s", e)
+        try:
+            ensure_compliance_flags_have_clause_mapping(ctx)
+        except Exception:
+            pass
+
+
+def _apply_inter_step_edit(ctx: PipelineContext, edited: str | None) -> None:
+    """Apply user-edited document text before the next agent; keeps full/cleansed/draft in sync for downstream agents."""
+    if not edited or not str(edited).strip():
+        return
+    t = str(edited).strip()
+    ctx.full_document_content = t
+    ctx.cleansed_content = t
+    ctx.draft_content = t
+
+
 async def _execute_analyse(body: AnalyseRequest, progress_emit: ProgressEmit | None = None) -> dict:
     """Build context, run pipeline, return the same JSON dict as the non-streaming /analyse response."""
     try:
-        if body.document_id:
-            from src.rag.document_registry import resolve_registry_document_id
-
-            canon = resolve_registry_document_id(body.document_id)
-            if canon and canon != body.document_id.strip():
-                log.info("Resolved document_id for analysis: %r -> %r", body.document_id, canon)
-                body.document_id = canon
-
-        chunks = _chunks_from_request(body)
-        chunks = _filter_chunks_by_document(chunks, body.document_id)
-        if body.document_id and not chunks:
-            raise HTTPException(
-                status_code=400,
-                detail=f"No content found for document '{body.document_id}'. The document may not be ingested yet, or ingestion may have failed. Try re-uploading the document.",
-            )
-        doc_id = (body.document_id or "").strip() or (chunks[0].document_id if chunks else "") or ""
-        doc_title = (body.title or "").strip() or (chunks[0].title if chunks else "") or doc_id or ""
+        ctx, chunks = build_pipeline_context(body)
         agents_override = body.agents if body.agents else None
-        parent_policy, higher_order_policies = _fetch_parent_policies(body)
-        sibling_docs = _fetch_additional_documents(body.additional_doc_ids)
-
-        # When document_id set: use full document content for excerpts and to avoid chunk overlap duplicates
-        # If registry has no content, reconstruct from retrieved chunks so agents can still quote excerpts
-        full_content = None
-        if doc_id:
-            try:
-                from src.rag.document_registry import get_document_content
-                full_content, _ = get_document_content(doc_id)
-            except Exception:
-                pass
-            if not full_content and chunks:
-                chunks_sorted = sorted(chunks, key=lambda c: getattr(c, "chunk_index", 0))
-                full_content = "\n\n".join((c.text or "").strip() for c in chunks_sorted if (c.text or "").strip())
-
-        # Prior user feedback for this document (from finding_notes) — checked before reasoning
-        prior_feedback: list[dict] = []
-        if doc_id:
-            try:
-                from src.rag.finding_notes import get_relevant_finding_notes
-                prior_feedback = get_relevant_finding_notes(doc_id, limit=20)
-            except Exception as e:
-                log.debug("Could not load prior feedback for pipeline: %s", e)
-
-        # Glossary for all docs (from domain_context.json) — agents use for terminology
-        glossary_block: str | None = None
-        try:
-            from src.pipeline.domain import get_glossary_block, load_domain_context
-            glossary_block = get_glossary_block(load_domain_context()) or None
-        except Exception as e:
-            log.debug("Could not load glossary for pipeline: %s", e)
-
-        ctx = PipelineContext(
-            tracking_id=body.tracking_id,
-            request_type=_to_request_type(body.request_type),
-            doc_layer=_to_doc_layer(body.doc_layer),
-            sites=body.sites,
-            policy_ref=body.policy_ref,
-            attached_doc_url=body.attached_doc_url,
-            document_id=doc_id or None,
-            document_title=doc_title or None,
-            retrieved_chunks=chunks,
-            full_document_content=full_content,
-            parent_policy=parent_policy,
-            higher_order_policies=higher_order_policies,
-            sibling_docs=sibling_docs,
-            agent_instructions=(body.agent_instructions or "").strip() or None,
-            prior_feedback=prior_feedback,
-            glossary_block=glossary_block,
-        )
         router_instance = PipelineRouter(agents_override=agents_override)
 
         progress_callback = None
@@ -523,124 +672,11 @@ async def _execute_analyse(body: AnalyseRequest, progress_emit: ProgressEmit | N
         # Deduplicate findings — chunk overlap or table extraction can produce same finding twice
         ctx = _deduplicate_findings(ctx)
 
-        # Cross-check findings vs full document — drop false positives when limits/refs exist nearby (verbatim-checked)
-        try:
-            from src.pipeline.finding_verification import run_finding_verification
+        await _post_pipeline_verification(ctx, progress_emit)
 
-            if progress_emit:
-                await progress_emit(
-                    {
-                        "type": "progress",
-                        "agent": "finding_verification",
-                        "step_key": _agent_to_frontend_step_key("finding_verification"),
-                    }
-                )
-            await run_finding_verification(ctx)
-        except Exception as e:
-            log.warning("Finding verification skipped: %s", e)
-
-        # Compliance flags → grounded policy clause links (candidate retrieval + constrained LLM + verify)
-        if ctx.compliance_flags:
-            from src.pipeline.clause_mapping import (
-                enrich_compliance_flags_clause_mapping,
-                ensure_compliance_flags_have_clause_mapping,
-            )
-
-            try:
-                await enrich_compliance_flags_clause_mapping(ctx)
-            except Exception as e:
-                log.warning("Clause mapping enrichment skipped: %s", e)
-            try:
-                ensure_compliance_flags_have_clause_mapping(ctx)
-            except Exception:
-                pass
-
-        # Persist session for dashboard metrics
-        from src.rag.analysis_sessions import record_session
-
-        doc_id = body.document_id or (chunks[0].document_id if chunks else "") or ""
-        title = body.title or (chunks[0].title if chunks else "") or doc_id or "Unnamed"
-        sites_str = ",".join(body.sites) if body.sites else ""
-        total_findings = (
-            len(ctx.risk_gaps)
-            + len(ctx.cleanser_flags)
-            + len(ctx.specifying_flags)
-            + len(ctx.structure_flags)
-            + len(ctx.content_integrity_flags)
-            + len(ctx.sequencing_flags)
-            + len(ctx.formatting_flags)
-            + len(ctx.compliance_flags)
-            + len(ctx.terminology_flags)
-            + len(ctx.conflicts)
-        )
-        agent_findings = {}
-        for key, agent in _FINDING_KEYS_TO_AGENT.items():
-            val = getattr(ctx, key, None)
-            count = len(val) if val else 0
-            if count > 0:
-                agent_findings[agent] = agent_findings.get(agent, 0) + count
-        # Glossary candidates: vague terms to add to glossary (route to HITL)
-        glossary_candidates = [
-            {"term": t.term, "recommendation": t.recommendation}
-            for t in ctx.terminology_flags
-            if getattr(t, "glossary_candidate", False)
-        ]
-
-        analysis_date = datetime.now(timezone.utc).isoformat()
-        requester = (body.requester or "").strip()
-
-        policy_ref_val = (body.policy_ref or "").strip()
-        response = {
-            "tracking_id": ctx.tracking_id,
-            "document_id": doc_id,
-            "title": title,
-            "doc_layer": ctx.doc_layer.value,
-            "policy_ref": policy_ref_val or None,
-            "requester": requester,
-            "analysis_date": analysis_date,
-            "draft_ready": ctx.draft_ready,
-            "draft_content": ctx.draft_content,
-            "overall_risk": ctx.overall_risk.value if ctx.overall_risk else None,
-            "conflict_count": ctx.conflict_count,
-            "blocker_count": ctx.blocker_count,
-            "conflicts": [c.model_dump() for c in ctx.conflicts],
-            "terminology_flags": [t.model_dump() for t in ctx.terminology_flags],
-            "glossary_candidates": glossary_candidates,
-            "risk_scores": [r.model_dump() for r in ctx.risk_scores],
-            "risk_gaps": [g.model_dump() for g in ctx.risk_gaps],
-            "cleanser_flags": [c.model_dump() for c in ctx.cleanser_flags],
-            "specifying_flags": [s.model_dump() for s in ctx.specifying_flags],
-            "structure_flags": [s.model_dump() for s in ctx.structure_flags],
-            "content_integrity_flags": [c.model_dump() for c in ctx.content_integrity_flags],
-            "sequencing_flags": [s.model_dump() for s in ctx.sequencing_flags],
-            "formatting_flags": [f.model_dump() for f in ctx.formatting_flags],
-            "compliance_flags": [c.model_dump() for c in ctx.compliance_flags],
-            "warnings": ctx.warnings,
-            "errors": [e.model_dump() for e in ctx.errors],
-            "agents_run": ctx.agents_run,
-            "agent_timings": ctx.agent_timings,
-        }
-        session_saved = False
-        try:
-            session_saved = record_session(
-                tracking_id=ctx.tracking_id,
-                document_id=doc_id,
-                title=title,
-                requester=requester,
-                doc_layer=ctx.doc_layer.value,
-                sites=sites_str,
-                overall_risk=ctx.overall_risk.value if ctx.overall_risk else None,
-                total_findings=total_findings,
-                agents_run=ctx.agents_run,
-                agent_findings=agent_findings,
-                workflow_type="review",
-                result_json=response,
-                policy_ref=policy_ref_val,
-                update_governance=False,
-            )
-        except Exception as e:
-            log.warning("Failed to persist analysis session for dashboard: %s", e)
-
+        response = _compose_analysis_json(ctx, body, chunks)
+        session_saved = _persist_analysis_session(ctx, body, chunks, response)
+        response = {k: v for k, v in response.items() if not k.startswith("_internal")}
         response["session_saved"] = session_saved
         return response
     except HTTPException:
@@ -685,6 +721,187 @@ async def post_analyse(body: AnalyseRequest, stream: bool = Query(False, descrip
             await task
 
     return StreamingResponse(ndjson_generator(), media_type="application/x-ndjson")
+
+
+class SteppedNextRequest(BaseModel):
+    run_id: str
+    edited_document_text: str | None = None
+
+
+def _stepped_meta_from_body(body: AnalyseRequest) -> dict:
+    return body.model_dump(exclude={"retrieved_chunks", "content"}, exclude_none=False)
+
+
+def _body_from_stepped_meta(meta: dict) -> AnalyseRequest:
+    return AnalyseRequest(**meta)
+
+
+@router.post("/analyse/stepped/start")
+async def post_analyse_stepped_start(body: AnalyseRequest):
+    """
+    Start a stepped run: build context, execute the first agent only, persist state for /analyse/stepped/next.
+    Uses Supabase when SUPABASE_DB_URL is set; otherwise stores JSON under data/stepped_runs/.
+    """
+    from src.pipeline.stepped_runs import get_stepped_run_store
+
+    try:
+        ctx, chunks = build_pipeline_context(body)
+        router_instance = PipelineRouter(agents_override=body.agents if body.agents else None)
+        agent_list = [a.name for a in router_instance._select_agents(ctx)]
+        if not agent_list:
+            raise HTTPException(status_code=400, detail="No agents selected for this request")
+
+        store = get_stepped_run_store()
+        store.ensure_table()
+
+        ctx = await router_instance.run_step_at(ctx, 0, progress_callback=None)
+        ctx = _deduplicate_findings(ctx)
+
+        n = len(agent_list)
+        completed_last = n == 1
+        if completed_last:
+            await _post_pipeline_verification(ctx, None)
+
+        next_idx = 1 if n > 1 else n
+        status = "completed" if completed_last else "in_progress"
+        if any(e.severity == "critical" for e in (ctx.errors or [])):
+            status = "failed"
+
+        meta = _stepped_meta_from_body(body)
+        run_id = store.create(
+            tracking_id=body.tracking_id,
+            context=ctx,
+            next_step_index=next_idx,
+            agent_sequence=agent_list,
+            request_meta=meta,
+            status=status,
+        )
+
+        analyse_body = body
+        raw = _compose_analysis_json(ctx, analyse_body, chunks)
+        session_saved = False
+        if completed_last and status != "failed":
+            session_saved = _persist_analysis_session(ctx, analyse_body, chunks, raw)
+        out = {k: v for k, v in raw.items() if not k.startswith("_internal")}
+        out["session_saved"] = session_saved
+
+        return {
+            "run_id": run_id,
+            "step_index": 0,
+            "step_agent": agent_list[0],
+            "total_steps": n,
+            "next_step_index": next_idx,
+            "agent_sequence": agent_list,
+            "complete": completed_last or status == "failed",
+            "status": status,
+            "result": out,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("Stepped start failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.post("/analyse/stepped/next")
+async def post_analyse_stepped_next(body: SteppedNextRequest):
+    """Run the next agent in a stepped pipeline after optional user edits."""
+    from src.pipeline.stepped_runs import get_stepped_run_store
+
+    try:
+        store = get_stepped_run_store()
+        state = store.get(body.run_id.strip())
+        if not state:
+            raise HTTPException(status_code=404, detail="Stepped run not found or expired")
+        if state.status == "completed":
+            raise HTTPException(status_code=400, detail="This stepped run is already complete")
+        if state.status == "failed":
+            raise HTTPException(status_code=400, detail="This stepped run failed; start a new run")
+
+        seq = state.agent_sequence
+        idx = state.next_step_index
+        if idx >= len(seq):
+            raise HTTPException(status_code=400, detail="No pending agent step")
+
+        ctx = state.context
+        if len(ctx.agents_run) != idx:
+            raise HTTPException(
+                status_code=409,
+                detail="Run state is inconsistent — start a new stepped analysis",
+            )
+
+        analyse_body = _body_from_stepped_meta(state.request_meta)
+        chunks = ctx.retrieved_chunks or []
+
+        _apply_inter_step_edit(ctx, body.edited_document_text)
+
+        router_instance = PipelineRouter(agents_override=analyse_body.agents if analyse_body.agents else None)
+        ctx = await router_instance.run_step_at(ctx, idx, progress_callback=None)
+        ctx = _deduplicate_findings(ctx)
+
+        n = len(seq)
+        is_last = idx == n - 1
+        if is_last:
+            await _post_pipeline_verification(ctx, None)
+
+        next_idx = idx + 1
+        status: str = "completed" if is_last else "in_progress"
+        if any(e.severity == "critical" for e in (ctx.errors or [])):
+            status = "failed"
+
+        store.update(
+            body.run_id.strip(),
+            context=ctx,
+            next_step_index=next_idx,
+            status=status,
+        )
+
+        raw = _compose_analysis_json(ctx, analyse_body, chunks)
+        session_saved = False
+        if is_last and status != "failed":
+            session_saved = _persist_analysis_session(ctx, analyse_body, chunks, raw)
+        out = {k: v for k, v in raw.items() if not k.startswith("_internal")}
+        out["session_saved"] = session_saved
+
+        return {
+            "run_id": body.run_id.strip(),
+            "step_index": idx,
+            "step_agent": seq[idx],
+            "total_steps": n,
+            "next_step_index": next_idx,
+            "agent_sequence": seq,
+            "complete": is_last or status == "failed",
+            "status": status,
+            "result": out,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("Stepped next failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/analyse/stepped/{run_id}")
+async def get_analyse_stepped_run(run_id: str):
+    """Return persisted stepped run metadata (for reload)."""
+    from src.pipeline.stepped_runs import get_stepped_run_store
+
+    store = get_stepped_run_store()
+    state = store.get(run_id.strip())
+    if not state:
+        raise HTTPException(status_code=404, detail="Stepped run not found")
+    analyse_body = _body_from_stepped_meta(state.request_meta)
+    chunks = state.context.retrieved_chunks or []
+    raw = _compose_analysis_json(state.context, analyse_body, chunks)
+    out = {k: v for k, v in raw.items() if not k.startswith("_internal")}
+    return {
+        "run_id": state.run_id,
+        "next_step_index": state.next_step_index,
+        "total_steps": len(state.agent_sequence),
+        "agent_sequence": state.agent_sequence,
+        "status": state.status,
+        "result": out,
+    }
 
 
 class DraftRequest(BaseModel):

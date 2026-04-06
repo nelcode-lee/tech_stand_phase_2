@@ -328,6 +328,18 @@ export default function ConfigurePage({ mode = 'review' }) {
     navigate(url, { state: docId ? { fromIngest: false, documentId: docId, title: config?.title || docId, docLayer: config?.docLayer || 'sop' } : undefined });
   }
 
+  function goToSteppedAnalyse() {
+    const docId = config?.documentId?.trim() || '';
+    const url = docId
+      ? `${base}/analyse/stepped?documentId=${encodeURIComponent(docId)}`
+      : `${base}/analyse/stepped`;
+    navigate(url, {
+      state: docId
+        ? { fromConfigure: true, documentId: docId, title: config?.title || docId, docLayer: config?.docLayer || 'sop' }
+        : undefined,
+    });
+  }
+
   const isWiCreate = isCreate && config?.docLayer === 'work_instruction';
 
   async function handleWiGenerate() {
@@ -410,9 +422,16 @@ export default function ConfigurePage({ mode = 'review' }) {
             ← Back
           </button>
           {!isWiCreate && (
-          <button type="button" className="configure-top-btn primary next-action" onClick={goToAnalyse}>
-            Go to Analyse
-          </button>
+            <>
+              <button type="button" className="configure-top-btn primary next-action" onClick={goToAnalyse}>
+                Go to Analyse
+              </button>
+              {mode === 'review' && (
+                <button type="button" className="configure-top-btn next-action" onClick={goToSteppedAnalyse}>
+                  Stepped review
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>

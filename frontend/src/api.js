@@ -87,6 +87,38 @@ export async function analyse(body) {
   });
 }
 
+const ANALYSIS_STEP_TIMEOUT_MS = 600000;
+
+/**
+ * Stepped analysis: one agent per request. Start then call next with run_id until complete.
+ * Same request body shape as analyse().
+ */
+export async function analyseSteppedStart(body) {
+  return request(
+    '/analyse/stepped/start',
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    },
+    ANALYSIS_STEP_TIMEOUT_MS,
+  );
+}
+
+export async function analyseSteppedNext(body) {
+  return request(
+    '/analyse/stepped/next',
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    },
+    ANALYSIS_STEP_TIMEOUT_MS,
+  );
+}
+
+export async function getSteppedRun(runId) {
+  return request(`/analyse/stepped/${encodeURIComponent(runId)}`, {}, 30000);
+}
+
 /**
  * Generate or refine a Work Instruction from qualifying questions.
  * @param {object} body - task_name, parent_sop?, site?, process_type?, has_measurements, measurements_detail?, has_safety, safety_detail?, needs_visuals, needs_checklist, reference_doc_ids?, follow_up_message?, previous_draft?

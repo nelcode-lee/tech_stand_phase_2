@@ -163,6 +163,37 @@ class PipelineRouter:
         ctx = self._build_summary(ctx)
         return ctx
 
+    async def run_step_at(
+        self,
+        ctx: PipelineContext,
+        step_index: int,
+        progress_callback: ProgressCallback | None = None,
+    ) -> PipelineContext:
+        """
+        Run exactly one agent by index in the pipeline order (sequential list from _select_agents).
+        Used for stepped / HITL flows. Does not run the parallel specialist wave.
+        On the last agent, applies _build_summary.
+        """
+        agents = self._select_agents(ctx)
+        if step_index < 0 or step_index >= len(agents):
+            raise ValueError(
+                f"step_index {step_index} out of range; pipeline has {len(agents)} agent step(s)"
+            )
+        agent = agents[step_index]
+        if progress_callback:
+            await progress_callback(agent.name)
+        started = time.perf_counter()
+        ctx = await agent.run(ctx)
+        duration_ms = int((time.perf_counter() - started) * 1000)
+        ctx.agents_run.append(agent.name)
+        ctx.agent_timings.append({"agent": agent.name, "duration_ms": duration_ms})
+        blockers = [e for e in ctx.errors if e.severity == "critical"]
+        if blockers:
+            return ctx
+        if step_index == len(agents) - 1:
+            ctx = self._build_summary(ctx)
+        return ctx
+
     def _select_agents(self, ctx: PipelineContext) -> list[BaseAgent]:
         # Explicit agent list (Targeted mode or Quick Check)
         if self.agents_override:

@@ -39,6 +39,9 @@ ENV/
 # Local data (ChromaDB if ever used locally)
 chroma_data/
 
+# Stepped analysis dev store (file backend when Supabase unset)
+data/stepped_runs/*.json
+
 # Proprietary/sensitive documents (keep local only)
 src/*.doc
 
