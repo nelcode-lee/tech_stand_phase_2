@@ -1,6 +1,19 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate, useSearchParams, useLocation } from 'react-router-dom';
-import { analyseWithProgress, saveAnalysisSession, getAnalysisSession, getDocumentContent, getDocumentFile, addFindingNote, addInteractionLog, validateSolution, docLayerForApi, downloadAuditPackDocx } from '../api';
+import {
+  analyseWithProgress,
+  analyseSteppedStart,
+  analyseSteppedNext,
+  saveAnalysisSession,
+  getAnalysisSession,
+  getDocumentContent,
+  getDocumentFile,
+  addFindingNote,
+  addInteractionLog,
+  validateSolution,
+  docLayerForApi,
+  downloadAuditPackDocx,
+} from '../api';
 import mammoth from 'mammoth';
 import { useAnalysis } from '../context/AnalysisContext';
 import { resolveSitesForApi } from '../constants/sites';
@@ -260,6 +273,22 @@ const ANALYSIS_LOADING_STEPS = [
     detail: 'Final validation before results are returned to the dashboard',
   },
 ];
+
+/** Map backend pipeline agent name → loading strip index (ANALYSIS_LOADING_STEPS). */
+function backendAgentToStripIndex(agentName) {
+  const m = {
+    cleansing: 0,
+    draft_layout: 3,
+    terminology: 5,
+    conflict: 2,
+    specifying: 3,
+    sequencing: 4,
+    formatting: 6,
+    risk: 1,
+    validation: 7,
+  };
+  return m[agentName] ?? 0;
+}
 
 function AnalysisLoadingPanel({ activeIndex, progressPercent }) {
   const currentStep = ANALYSIS_LOADING_STEPS[activeIndex] || ANALYSIS_LOADING_STEPS[0];
@@ -863,6 +892,8 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
   const documentIdFromUrl = searchParams.get('documentId');
   const titleFromUrl = searchParams.get('title');
   const trackingIdFromUrl = searchParams.get('trackingId');
+  const steppedMode =
+    mode === 'review' && (searchParams.get('stepped') === '1' || location.state?.stepped === true);
   const storedResultFromState = location.state?.storedResult;
   const sessionFromState = location.state?.session;
   const ctx = useAnalysis();
@@ -910,6 +941,10 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
   const [loadingStepIndex, setLoadingStepIndex] = useState(0);
   /** Backend stream: done/total progress events (drives progress bar when total > 0). */
   const [streamProgress, setStreamProgress] = useState({ done: 0, total: 0 });
+  const [steppedRunId, setSteppedRunId] = useState(null);
+  const [steppedSequence, setSteppedSequence] = useState([]);
+  const [steppedNextIdx, setSteppedNextIdx] = useState(0);
+  const [steppedComplete, setSteppedComplete] = useState(false);
   const [governancePolicyRef, setGovernancePolicyRef] = useState('');
   const [findingDispositions, setFindingDispositions] = useState({});
   const [findingGovernanceNotes, setFindingGovernanceNotes] = useState({});
@@ -922,6 +957,15 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
   findingHazardControlTagsRef.current = findingHazardControlTags;
   const governanceAutosaveDebounceRef = useRef(null);
   const [dispositionAutosaveStatus, setDispositionAutosaveStatus] = useState(null); // null | 'saving' | 'saved' | 'error'
+
+  useEffect(() => {
+    if (!steppedMode) {
+      setSteppedRunId(null);
+      setSteppedSequence([]);
+      setSteppedNextIdx(0);
+      setSteppedComplete(false);
+    }
+  }, [steppedMode]);
 
   function logInteraction(actionType, metadata = {}) {
     addInteractionLog({
@@ -1413,8 +1457,140 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
     setSessionNotPersisted(false);
     setLoadingStepIndex(0);
     setStreamProgress({ done: 0, total: 0 });
+    if (steppedMode) {
+      setSteppedRunId(null);
+      setSteppedSequence([]);
+      setSteppedNextIdx(0);
+      setSteppedComplete(false);
+    }
     try {
       const sitesArr = Array.isArray(config.sites) ? config.sites : (config.sites ? String(config.sites).split(/[,\s]+/).filter(Boolean) : []);
+      if (steppedMode) {
+        const rid =
+          globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function'
+            ? globalThis.crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        const steppedBody = {
+          tracking_id: `stepped-${rid}`,
+          request_type: mode === 'create' && generatedContent ? 'new_document' : (config.requestType || 'single_document_review'),
+          doc_layer: docLayerForApi(config.docLayer),
+          sites: resolveSitesForApi(sitesArr),
+          policy_ref: (config.policyRef || '').trim() || null,
+          document_id: effectiveDocId || null,
+          title: effectiveTitle || effectiveDocId || null,
+          requester: config.requester || null,
+          agents: config?.mode && config.mode !== 'full' ? config.agents : undefined,
+          additional_doc_ids: (config.additionalDocIds || []).length > 0 ? config.additionalDocIds : undefined,
+          agent_instructions: (config.agentInstructions || '').trim() || undefined,
+        };
+        if (mode === 'create' && (generatedContent || (draftContent || '').trim())) {
+          steppedBody.content = (generatedContent || draftContent || '').trim();
+        }
+        logInteraction('analysis_stepped_started', {
+          tracking_id: steppedBody.tracking_id,
+          request_type: steppedBody.request_type,
+        });
+        setLoadingStepIndex(backendAgentToStripIndex('cleansing'));
+        setStreamProgress({ done: 0, total: 9 });
+        const sres = await analyseSteppedStart(steppedBody);
+        const res = sres.result;
+        const totalSt = Math.max(1, sres.total_steps || 1);
+        setStreamProgress({
+          done: Math.min(sres.next_step_index ?? 0, totalSt),
+          total: totalSt,
+        });
+        setLoadingStepIndex(backendAgentToStripIndex(sres.step_agent || 'cleansing'));
+        setResult(res);
+        setSteppedRunId(sres.run_id);
+        setSteppedSequence(sres.agent_sequence || []);
+        setSteppedNextIdx(sres.next_step_index ?? 0);
+        setSteppedComplete(!!sres.complete);
+        const freshPolicyRefS = String(config.policyRef || '').trim();
+        setGovernancePolicyRef(freshPolicyRefS);
+        setFindingDispositions({});
+        setFindingGovernanceNotes({});
+        setFindingHazardControlTags({});
+        if (mode === 'review' && documentContent) setDraftContent(documentContent);
+        else setDraftContent(res.draft_content || '');
+        if (sres.complete) {
+          recordSession(res, { ...config, documentId: effectiveDocId, title: effectiveTitle }, workflowMode);
+          logInteraction('analysis_run_completed', {
+            tracking_id: res.tracking_id,
+            total_findings:
+              (res.risk_gaps?.length || 0) + (res.cleanser_flags?.length || 0) + (res.specifying_flags?.length || 0) +
+              (res.structure_flags?.length || 0) + (res.content_integrity_flags?.length || 0) + (res.sequencing_flags?.length || 0) +
+              (res.formatting_flags?.length || 0) + (res.compliance_flags?.length || 0) + (res.terminology_flags?.length || 0) + (res.conflicts?.length || 0),
+          });
+        }
+        if (res.session_saved === false) setSessionNotPersisted(true);
+        else if (sres.complete) setSessionNotPersisted(false);
+        if (sres.complete) {
+          const totalFindingsS =
+            (res.risk_gaps?.length || 0) + (res.cleanser_flags?.length || 0) + (res.specifying_flags?.length || 0) + (res.structure_flags?.length || 0) +
+            (res.content_integrity_flags?.length || 0) + (res.sequencing_flags?.length || 0) + (res.formatting_flags?.length || 0) +
+            (res.compliance_flags?.length || 0) + (res.terminology_flags?.length || 0) + (res.conflicts?.length || 0);
+          const agentFindingsS = {};
+          if (res.risk_gaps?.length) agentFindingsS.risk = res.risk_gaps.length;
+          if (res.cleanser_flags?.length) agentFindingsS.cleansing = (agentFindingsS.cleansing || 0) + res.cleanser_flags.length;
+          if (res.specifying_flags?.length) agentFindingsS.specifying = res.specifying_flags.length;
+          if (res.structure_flags?.length) agentFindingsS.cleansing = (agentFindingsS.cleansing || 0) + res.structure_flags.length;
+          if (res.content_integrity_flags?.length) agentFindingsS.cleansing = (agentFindingsS.cleansing || 0) + res.content_integrity_flags.length;
+          if (res.sequencing_flags?.length) agentFindingsS.sequencing = res.sequencing_flags.length;
+          if (res.formatting_flags?.length) agentFindingsS.formatting = res.formatting_flags.length;
+          if (res.compliance_flags?.length) agentFindingsS.validation = res.compliance_flags.length;
+          if (res.terminology_flags?.length) agentFindingsS.terminology = res.terminology_flags.length;
+          if (res.conflicts?.length) agentFindingsS.conflict = res.conflicts.length;
+          try {
+            await saveAnalysisSession({
+              tracking_id: res.tracking_id,
+              document_id: effectiveDocId || '',
+              title: effectiveTitle || effectiveDocId || 'Unnamed',
+              doc_layer: docLayerForApi(config.docLayer),
+              sites: Array.isArray(config.sites) ? (config.sites.includes('all') ? 'All Sites' : config.sites.join(',')) : (config.sites || ''),
+              policy_ref: freshPolicyRefS,
+              overall_risk: res.overall_risk || null,
+              total_findings: totalFindingsS,
+              agents_run: res.agents_run || [],
+              agent_findings: agentFindingsS,
+              finding_dispositions: {},
+              finding_governance_notes: {},
+              finding_hazard_control_tags: {},
+              governance_save_mode: 'dispositions_only',
+              result_json: {
+                ...res,
+                document_id: effectiveDocId || res.document_id || '',
+                title: effectiveTitle || res.title || res.document_id || '',
+                doc_layer: effectiveDocLayer || res.doc_layer || 'sop',
+                draft_content: res.draft_content || '',
+              },
+            });
+          } catch (_) { /* non-blocking */ }
+        }
+        const sitesNavS = Array.isArray(config.sites)
+          ? (config.sites.includes('all') ? 'All Sites' : config.sites.join(','))
+          : (config.sites || '');
+        const navParams = new URLSearchParams();
+        navParams.set('trackingId', res.tracking_id);
+        if (effectiveDocId) navParams.set('documentId', effectiveDocId);
+        navParams.set('stepped', '1');
+        navigate(`${base}/analyse/overview?${navParams.toString()}`, {
+          replace: true,
+          state: {
+            storedResult: res,
+            stepped: true,
+            session: {
+              documentId: effectiveDocId || res.document_id || '',
+              title: effectiveTitle || res.title || res.document_id || '',
+              trackingId: res.tracking_id,
+              docLayer: effectiveDocLayer || res.doc_layer || 'sop',
+              requester: config.requester || '',
+              sites: sitesNavS,
+              policyRef: freshPolicyRefS,
+            },
+          },
+        });
+        return;
+      }
       const body = {
         tracking_id: `ui-${Date.now()}`,
         request_type: mode === 'create' && generatedContent ? 'new_document' : (config.requestType || 'single_document_review'),
@@ -1538,6 +1714,123 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
     } catch (err) {
       setError(err.message);
       logInteraction('analysis_run_failed', { error: err.message || 'Analysis failed' });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleSteppedNext() {
+    if (!steppedRunId || steppedComplete) return;
+    setLoading(true);
+    setError(null);
+    const nextAgent = steppedSequence[steppedNextIdx];
+    if (nextAgent) setLoadingStepIndex(backendAgentToStripIndex(nextAgent));
+    setStreamProgress({
+      done: steppedNextIdx,
+      total: Math.max(1, steppedSequence.length || 1),
+    });
+    try {
+      const sres = await analyseSteppedNext({
+        run_id: steppedRunId,
+        edited_document_text: (draftContent || result?.draft_content || documentContent || '').trim() || null,
+      });
+      const res = sres.result;
+      const totalSt = Math.max(1, sres.total_steps || 1);
+      setStreamProgress({
+        done: Math.min(sres.next_step_index ?? 0, totalSt),
+        total: totalSt,
+      });
+      setLoadingStepIndex(backendAgentToStripIndex(sres.step_agent || 'cleansing'));
+      setResult(res);
+      setSteppedNextIdx(sres.next_step_index ?? 0);
+      setSteppedComplete(!!sres.complete);
+      const freshPolicyRefN = String(config.policyRef || '').trim();
+      setGovernancePolicyRef(freshPolicyRefN);
+      if (mode === 'review' && documentContent && !(res.draft_content || '').trim()) {
+        /* keep draftContent */
+      } else if ((res.draft_content || '').trim()) {
+        setDraftContent(res.draft_content);
+      }
+      if (sres.complete) {
+        recordSession(res, { ...config, documentId: effectiveDocId, title: effectiveTitle }, workflowMode);
+        logInteraction('analysis_run_completed', {
+          tracking_id: res.tracking_id,
+          total_findings:
+            (res.risk_gaps?.length || 0) + (res.cleanser_flags?.length || 0) + (res.specifying_flags?.length || 0) +
+            (res.structure_flags?.length || 0) + (res.content_integrity_flags?.length || 0) + (res.sequencing_flags?.length || 0) +
+            (res.formatting_flags?.length || 0) + (res.compliance_flags?.length || 0) + (res.terminology_flags?.length || 0) + (res.conflicts?.length || 0),
+        });
+      }
+      if (res.session_saved === false) setSessionNotPersisted(true);
+      else if (sres.complete) setSessionNotPersisted(false);
+      if (sres.complete) {
+        const totalFindingsN =
+          (res.risk_gaps?.length || 0) + (res.cleanser_flags?.length || 0) + (res.specifying_flags?.length || 0) + (res.structure_flags?.length || 0) +
+          (res.content_integrity_flags?.length || 0) + (res.sequencing_flags?.length || 0) + (res.formatting_flags?.length || 0) +
+          (res.compliance_flags?.length || 0) + (res.terminology_flags?.length || 0) + (res.conflicts?.length || 0);
+        const agentFindingsN = {};
+        if (res.risk_gaps?.length) agentFindingsN.risk = res.risk_gaps.length;
+        if (res.cleanser_flags?.length) agentFindingsN.cleansing = (agentFindingsN.cleansing || 0) + res.cleanser_flags.length;
+        if (res.specifying_flags?.length) agentFindingsN.specifying = res.specifying_flags.length;
+        if (res.structure_flags?.length) agentFindingsN.cleansing = (agentFindingsN.cleansing || 0) + res.structure_flags.length;
+        if (res.content_integrity_flags?.length) agentFindingsN.cleansing = (agentFindingsN.cleansing || 0) + res.content_integrity_flags.length;
+        if (res.sequencing_flags?.length) agentFindingsN.sequencing = res.sequencing_flags.length;
+        if (res.formatting_flags?.length) agentFindingsN.formatting = res.formatting_flags.length;
+        if (res.compliance_flags?.length) agentFindingsN.validation = res.compliance_flags.length;
+        if (res.terminology_flags?.length) agentFindingsN.terminology = res.terminology_flags.length;
+        if (res.conflicts?.length) agentFindingsN.conflict = res.conflicts.length;
+        try {
+          await saveAnalysisSession({
+            tracking_id: res.tracking_id,
+            document_id: effectiveDocId || '',
+            title: effectiveTitle || effectiveDocId || 'Unnamed',
+            doc_layer: docLayerForApi(config.docLayer),
+            sites: Array.isArray(config.sites) ? (config.sites.includes('all') ? 'All Sites' : config.sites.join(',')) : (config.sites || ''),
+            policy_ref: freshPolicyRefN,
+            overall_risk: res.overall_risk || null,
+            total_findings: totalFindingsN,
+            agents_run: res.agents_run || [],
+            agent_findings: agentFindingsN,
+            finding_dispositions: {},
+            finding_governance_notes: {},
+            finding_hazard_control_tags: {},
+            governance_save_mode: 'dispositions_only',
+            result_json: {
+              ...res,
+              document_id: effectiveDocId || res.document_id || '',
+              title: effectiveTitle || res.title || res.document_id || '',
+              doc_layer: effectiveDocLayer || res.doc_layer || 'sop',
+              draft_content: res.draft_content || '',
+            },
+          });
+        } catch (_) { /* non-blocking */ }
+      }
+      const sitesNavN = Array.isArray(config.sites)
+        ? (config.sites.includes('all') ? 'All Sites' : config.sites.join(','))
+        : (config.sites || '');
+      const navParamsN = new URLSearchParams();
+      navParamsN.set('trackingId', res.tracking_id);
+      if (effectiveDocId) navParamsN.set('documentId', effectiveDocId);
+      navParamsN.set('stepped', '1');
+      navigate(`${base}/analyse/overview?${navParamsN.toString()}`, {
+        replace: true,
+        state: {
+          storedResult: res,
+          stepped: true,
+          session: {
+            documentId: effectiveDocId || res.document_id || '',
+            title: effectiveTitle || res.title || res.document_id || '',
+            trackingId: res.tracking_id,
+            docLayer: effectiveDocLayer || res.doc_layer || 'sop',
+            requester: config.requester || '',
+            sites: sitesNavN,
+            policyRef: freshPolicyRefN,
+          },
+        },
+      });
+    } catch (err) {
+      setError(err.message);
+      logInteraction('analysis_run_failed', { error: err.message || 'Step failed' });
     } finally {
       setLoading(false);
     }
@@ -1867,15 +2160,28 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
           <p className="doc-subtitle">
             {(effectiveDocId || effectiveTitle) ? `${[effectiveDocId, effectiveTitle].filter(Boolean).join(' — ')} · ` : ''}
             Agent pipeline · {effectiveDocLayer || 'sop'}
+            {steppedMode ? ' · Stepped mode (one agent per run)' : ''}
             {effectiveSites.length ? ` · ${effectiveSites.includes('all') ? 'All Sites' : effectiveSites.join(', ')}` : ''}
             {effectiveRequester ? ` · Requester: ${effectiveRequester}` : ''}
           </p>
         </div>
         <div className="doc-actions">
           <button type="button" className="doc-btn" onClick={() => navigate(`${base}/configure`)}>← Back</button>
-          {step === 'overview' && (
+          {step === 'overview' && steppedMode && result && !steppedComplete && (
+            <button
+              type="button"
+              disabled={loading}
+              className="doc-btn primary next-action"
+              onClick={handleSteppedNext}
+            >
+              {loading
+                ? 'Running next agent…'
+                : `Run next agent (${Math.min(steppedNextIdx + 1, steppedSequence.length || 1)}/${steppedSequence.length || '?'})`}
+            </button>
+          )}
+          {step === 'overview' && !(steppedMode && result && !steppedComplete) && (
             <button type="submit" form="analyse-form" disabled={loading} className="doc-btn primary next-action">
-              {loading ? 'Analysing…' : 'Run Analysis'}
+              {loading ? 'Analysing…' : steppedMode ? 'Run first agent' : 'Run Analysis'}
             </button>
           )}
           {step === 'draft' && (

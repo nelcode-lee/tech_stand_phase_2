@@ -330,13 +330,13 @@ export default function ConfigurePage({ mode = 'review' }) {
 
   function goToSteppedAnalyse() {
     const docId = config?.documentId?.trim() || '';
-    const url = docId
-      ? `${base}/analyse/stepped?documentId=${encodeURIComponent(docId)}`
-      : `${base}/analyse/stepped`;
-    navigate(url, {
+    const q = new URLSearchParams();
+    q.set('stepped', '1');
+    if (docId) q.set('documentId', docId);
+    navigate(`${base}/analyse/overview?${q.toString()}`, {
       state: docId
-        ? { fromConfigure: true, documentId: docId, title: config?.title || docId, docLayer: config?.docLayer || 'sop' }
-        : undefined,
+        ? { fromConfigure: true, stepped: true, documentId: docId, title: config?.title || docId, docLayer: config?.docLayer || 'sop' }
+        : { stepped: true },
     });
   }
 

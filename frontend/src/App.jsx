@@ -14,7 +14,6 @@ import HarmonisationPage from './pages/HarmonisationPage'
 import LibraryUploadPage from './pages/LibraryUploadPage'
 import ConfigurePage from './pages/ConfigurePage'
 import AnalysePage from './pages/AnalysePage'
-import SteppedAnalysePage from './pages/SteppedAnalysePage'
 import GovernanceSummaryPage from './pages/GovernanceSummaryPage'
 import FinalizePage from './pages/FinalizePage'
 import './App.css'
@@ -40,7 +39,6 @@ function App() {
           <Route path="configure" element={<ConfigurePage mode="review" />} />
           <Route path="analyse" element={<Navigate to="overview" replace />} />
           <Route path="analyse/overview" element={<AnalysePage mode="review" step="overview" />} />
-          <Route path="analyse/stepped" element={<SteppedAnalysePage mode="review" />} />
           <Route path="analyse/review" element={<Navigate to="overview" replace />} />
           <Route path="analyse/draft" element={<AnalysePage mode="review" step="draft" />} />
           <Route path="analyse/governance-summary" element={<GovernanceSummaryPage />} />
