@@ -76,6 +76,10 @@ class SteppedRunStore(Protocol):
     def get(self, run_id: str) -> SteppedRunState | None:
         ...
 
+    def get_in_progress_by_tracking_id(self, tracking_id: str) -> SteppedRunState | None:
+        """Latest in-progress run for this analysis tracking_id (for UI resume)."""
+        ...
+
 
 class SupabaseSteppedRunStore:
     def __init__(self, dsn: str) -> None:
@@ -215,6 +219,45 @@ class SupabaseSteppedRunStore:
             context=ctx,
         )
 
+    def get_in_progress_by_tracking_id(self, tracking_id: str) -> SteppedRunState | None:
+        tid = (tracking_id or "").strip()
+        if not tid:
+            return None
+        conn = self._conn()
+        try:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    f"""
+                    SELECT run_id, tracking_id, context_json, next_step_index, agent_sequence, request_meta, status
+                    FROM public.{TABLE_NAME}
+                    WHERE tracking_id = %s AND status = 'in_progress'
+                    ORDER BY updated_at DESC
+                    LIMIT 1
+                    """,
+                    (tid,),
+                )
+                row = cur.fetchone()
+        finally:
+            conn.close()
+        if not row:
+            return None
+        ctx = context_from_dict(row["context_json"])
+        seq = row["agent_sequence"]
+        if isinstance(seq, str):
+            seq = json.loads(seq)
+        meta = row["request_meta"]
+        if isinstance(meta, str):
+            meta = json.loads(meta)
+        return SteppedRunState(
+            run_id=row["run_id"],
+            tracking_id=row["tracking_id"],
+            next_step_index=int(row["next_step_index"]),
+            agent_sequence=list(seq or []),
+            request_meta=dict(meta or {}),
+            status=row["status"] or "in_progress",
+            context=ctx,
+        )
+
 
 class FileSteppedRunStore:
     """Dev fallback when SUPABASE_DB_URL is unset."""
@@ -277,6 +320,41 @@ class FileSteppedRunStore:
             agent_sequence=list(raw.get("agent_sequence") or []),
             request_meta=dict(raw.get("request_meta") or {}),
             status=raw.get("status") or "in_progress",
+            context=ctx,
+        )
+
+    def get_in_progress_by_tracking_id(self, tracking_id: str) -> SteppedRunState | None:
+        tid = (tracking_id or "").strip()
+        if not tid:
+            return None
+        best_raw = None
+        best_mtime = 0.0
+        for path in _local_dir().glob("*.json"):
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if raw.get("tracking_id") != tid:
+                continue
+            if raw.get("status") != "in_progress":
+                continue
+            try:
+                mtime = path.stat().st_mtime
+            except OSError:
+                mtime = 0.0
+            if mtime >= best_mtime:
+                best_mtime = mtime
+                best_raw = raw
+        if not best_raw:
+            return None
+        ctx = context_from_dict(best_raw["context_json"])
+        return SteppedRunState(
+            run_id=best_raw["run_id"],
+            tracking_id=best_raw["tracking_id"],
+            next_step_index=int(best_raw["next_step_index"]),
+            agent_sequence=list(best_raw.get("agent_sequence") or []),
+            request_meta=dict(best_raw.get("request_meta") or {}),
+            status=best_raw.get("status") or "in_progress",
             context=ctx,
         )
 

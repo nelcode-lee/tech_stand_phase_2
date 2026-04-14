@@ -8,6 +8,8 @@ export function itemForFindingIdHash(item) {
     requirement_reference: _rr,
     clause_mapping: _cm,
     hazard_control_type: _hz,
+    representation_class_id: _rc,
+    representation_standard_ref: _rsr,
     ...rest
   } = item;
   return rest;
@@ -22,7 +24,7 @@ export function stableFindingId(agentKey, item) {
 }
 
 /**
- * Build stable finding rows for governance (disposition) — IDs must match stableFindingId.
+ * Build stable finding rows for governance — IDs must match stableFindingId.
  */
 export function buildGovernanceRows(result, findingIdFn) {
   if (!result || typeof findingIdFn !== 'function') return [];
@@ -43,8 +45,7 @@ export function buildGovernanceRows(result, findingIdFn) {
     for (const item of items) {
       const id = findingIdFn(key, item);
       const excerpt = excerptPreview(key, item);
-      const hazardModelHint = key === 'risk' ? String(item.hazard_control_type || '').trim() : '';
-      rows.push({ id, agent: label, excerpt, hazardModelHint });
+      rows.push({ id, agent: label, excerpt });
     }
   }
   for (const flag of result.content_integrity_flags || []) {
@@ -55,7 +56,6 @@ export function buildGovernanceRows(result, findingIdFn) {
       id,
       agent: 'Content integrity',
       excerpt: excerptPreview('content-integrity', flag),
-      hazardModelHint: '',
     });
   }
   return rows.slice(0, 200);
@@ -68,7 +68,7 @@ function excerptPreview(agentKey, item) {
   if (agentKey === 'structure') return String(item.section || item.detail || '').slice(0, 140);
   if (agentKey === 'content-integrity') return String(item.excerpt || item.location || item.detail || '').slice(0, 140);
   if (agentKey === 'specifying') return String(item.current_text || item.location || '').slice(0, 140);
-  if (agentKey === 'sequencing') return String(item.excerpt || item.location || '').slice(0, 140);
+  if (agentKey === 'sequencing') return String(item.excerpt || item.location || item.issue || '').slice(0, 140);
   if (agentKey === 'formatting') return String(item.excerpt || item.location || item.issue || '').slice(0, 140);
   if (agentKey === 'compliance') return String(item.excerpt || item.location || item.issue || '').slice(0, 140);
   if (agentKey === 'terminology') return String(item.location || item.term || '').slice(0, 140);
@@ -76,29 +76,23 @@ function excerptPreview(agentKey, item) {
   return String(item.excerpt || item.current_text || item.location || '').slice(0, 140);
 }
 
-export const DISPOSITION_OPTIONS = [
+/** User response per finding — stored in finding_dispositions JSON (same key as before). */
+export const FINDING_RESPONSE_OPTIONS = [
   { value: '', label: '— Not set —' },
-  { value: 'must_fix', label: 'Must-fix' },
-  { value: 'advisory', label: 'Advisory' },
-  { value: 'info', label: 'Info' },
+  { value: 'accept', label: 'Accept' },
+  { value: 'edit', label: 'Edit' },
+  { value: 'ignore', label: 'Ignore' },
 ];
 
-/** CCP / oPRP / PRP — risk findings only in UI; persisted map overrides model hint. */
-export const HAZARD_CONTROL_OPTIONS = [
-  { value: '', label: '— Inherit / not set —' },
-  { value: 'ccp', label: 'CCP' },
-  { value: 'oprp', label: 'oPRP' },
-  { value: 'prp', label: 'PRP' },
-];
-
-/**
- * Effective hazard-control tag per risk gap id (user map wins, else model field on gap).
- * @param {Record<string, string>} userMap finding_hazard_control_tags from session
- */
-export function effectiveHazardControlForRiskGap(gap, userMap, findingIdFn) {
-  if (!gap || typeof findingIdFn !== 'function') return '';
-  const id = findingIdFn('risk', gap);
-  const u = userMap && typeof userMap === 'object' ? userMap[id] : '';
-  if (u != null && String(u).trim() !== '') return String(u).trim();
-  return String(gap.hazard_control_type || '').trim();
+/** Display label for export / tables (includes legacy disposition values). */
+export function formatFindingResponseLabel(value) {
+  const v = String(value || '').trim().toLowerCase();
+  if (!v) return '—';
+  if (v === 'accept') return 'Accept';
+  if (v === 'edit') return 'Edit';
+  if (v === 'ignore') return 'Ignore';
+  if (v === 'must_fix') return 'Must-fix (legacy)';
+  if (v === 'advisory') return 'Advisory (legacy)';
+  if (v === 'info') return 'Info (legacy)';
+  return String(value);
 }

@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import { getAnalysisSession, saveAnalysisSession, docLayerForApi } from '../api';
 import { resolveSitesForApi } from '../constants/sites';
-import { buildGovernanceRows, stableFindingId, DISPOSITION_OPTIONS, HAZARD_CONTROL_OPTIONS } from '../utils/findingGovernance';
+import { buildGovernanceRows, stableFindingId, FINDING_RESPONSE_OPTIONS } from '../utils/findingGovernance';
 import './GovernanceSummaryPage.css';
 
 function normaliseSessionSites(sites) {
@@ -24,7 +24,6 @@ export default function GovernanceSummaryPage() {
   const [meta, setMeta] = useState(null);
   const [findingDispositions, setFindingDispositions] = useState({});
   const [findingGovernanceNotes, setFindingGovernanceNotes] = useState({});
-  const [findingHazardControlTags, setFindingHazardControlTags] = useState({});
   const [signOffUser, setSignOffUser] = useState('');
   const [signOffStatement, setSignOffStatement] = useState('');
   const [signOffAt, setSignOffAt] = useState('');
@@ -52,7 +51,6 @@ export default function GovernanceSummaryPage() {
     const hadNavHandoff = !!(
       navHandoff?.findingDispositions ||
       navHandoff?.findingGovernanceNotes ||
-      navHandoff?.findingHazardControlTags ||
       (navHandoff?.governancePolicyRef != null && String(navHandoff.governancePolicyRef).trim() !== '')
     );
     getAnalysisSession(trackingId)
@@ -91,13 +89,6 @@ export default function GovernanceSummaryPage() {
         const notesOverlay =
           navNotes && typeof navNotes === 'object' ? { ...navNotes } : {};
         setFindingGovernanceNotes({ ...serverNotes, ...notesOverlay });
-        const serverHz =
-          session.findingHazardControlTags && typeof session.findingHazardControlTags === 'object'
-            ? { ...session.findingHazardControlTags }
-            : {};
-        const navHz = navHandoff?.findingHazardControlTags;
-        const hzOverlay = navHz && typeof navHz === 'object' ? { ...navHz } : {};
-        setFindingHazardControlTags({ ...serverHz, ...hzOverlay });
         const navPolicy = navHandoff?.governancePolicyRef;
         if (navPolicy != null && String(navPolicy).trim() !== '') {
           setGovernancePolicyRef(String(navPolicy).trim());
@@ -172,12 +163,14 @@ export default function GovernanceSummaryPage() {
         sign_off_at: signOffAt || null,
         finding_dispositions: findingDispositions,
         finding_governance_notes: findingGovernanceNotes,
-        finding_hazard_control_tags: findingHazardControlTags,
+        finding_hazard_control_tags: {},
         result_json: {
           ...baseResult,
           document_id: meta?.documentId || baseResult.document_id || '',
           title: meta?.title || baseResult.title || '',
           doc_layer: meta?.docLayer || baseResult.doc_layer || 'sop',
+          finding_dispositions: findingDispositions,
+          finding_governance_notes: findingGovernanceNotes,
         },
         governance_save_mode: 'full',
       });
@@ -199,11 +192,6 @@ export default function GovernanceSummaryPage() {
             setFindingGovernanceNotes(
               refreshed.findingGovernanceNotes && typeof refreshed.findingGovernanceNotes === 'object'
                 ? { ...refreshed.findingGovernanceNotes }
-                : {},
-            );
-            setFindingHazardControlTags(
-              refreshed.findingHazardControlTags && typeof refreshed.findingHazardControlTags === 'object'
-                ? { ...refreshed.findingHazardControlTags }
                 : {},
             );
             setMeta((m) => ({
@@ -245,7 +233,7 @@ export default function GovernanceSummaryPage() {
         <div>
           <h2>Governance summary & sign-off</h2>
           <p className="doc-subtitle">
-            Review dispositions for every finding and record formal sign-off for this analysis session.
+            Review accept / edit / ignore responses for every finding and record formal sign-off for this analysis session.
           </p>
         </div>
         <div className="doc-actions">
@@ -286,8 +274,8 @@ export default function GovernanceSummaryPage() {
           </section>
 
           <section className="governance-summary-table-section" aria-labelledby="gov-disp-h">
-            <h3 id="gov-disp-h">Finding dispositions</h3>
-            <p className="governance-summary-lead">Set QA disposition, optional CCP / oPRP / PRP tag (risk findings), and governance notes per finding. Same IDs as on the Analyse step.</p>
+            <h3 id="gov-disp-h">Finding responses</h3>
+            <p className="governance-summary-lead">Set Accept, Edit, or Ignore per finding and optional governance notes. Same IDs as on the Analyse step.</p>
             {governanceRows.length === 0 ? (
               <p className="governance-summary-muted">No findings in this session.</p>
             ) : (
@@ -297,19 +285,12 @@ export default function GovernanceSummaryPage() {
                     <tr>
                       <th>Agent</th>
                       <th>Excerpt</th>
-                      <th>Disposition</th>
-                      <th>Hazard control</th>
+                      <th>Response</th>
                       <th>Governance note</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {governanceRows.map((row) => {
-                      const isRisk = row.agent === 'Risk';
-                      const modelHz = String(row.hazardModelHint || '').trim();
-                      const hzSelectValue = isRisk && Object.prototype.hasOwnProperty.call(findingHazardControlTags, row.id)
-                        ? findingHazardControlTags[row.id]
-                        : modelHz;
-                      return (
+                    {governanceRows.map((row) => (
                       <tr key={row.id}>
                         <td>{row.agent}</td>
                         <td className="governance-summary-excerpt">{row.excerpt || '—'}</td>
@@ -326,34 +307,10 @@ export default function GovernanceSummaryPage() {
                               });
                             }}
                           >
-                            {DISPOSITION_OPTIONS.map((opt) => (
+                            {FINDING_RESPONSE_OPTIONS.map((opt) => (
                               <option key={opt.value || 'u'} value={opt.value}>{opt.label}</option>
                             ))}
                           </select>
-                        </td>
-                        <td className="governance-summary-hazard-cell">
-                          {isRisk ? (
-                            <select
-                              className="governance-summary-disp-select"
-                              value={hzSelectValue || ''}
-                              onChange={(e) => {
-                                const v = e.target.value.trim();
-                                setFindingHazardControlTags((prev) => {
-                                  const next = { ...prev };
-                                  if (!v || v === modelHz) delete next[row.id];
-                                  else next[row.id] = v;
-                                  return next;
-                                });
-                              }}
-                              aria-label={`Hazard control for ${row.id}`}
-                            >
-                              {HAZARD_CONTROL_OPTIONS.map((opt) => (
-                                <option key={opt.value || 'hz'} value={opt.value}>{opt.label}</option>
-                              ))}
-                            </select>
-                          ) : (
-                            <span className="governance-summary-muted">—</span>
-                          )}
                         </td>
                         <td className="governance-summary-note-cell">
                           <textarea
@@ -372,8 +329,7 @@ export default function GovernanceSummaryPage() {
                           />
                         </td>
                       </tr>
-                      );
-                    })}
+                    ))}
                   </tbody>
                 </table>
               </div>

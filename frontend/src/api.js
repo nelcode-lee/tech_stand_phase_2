@@ -3,6 +3,16 @@
  */
 const BASE = import.meta.env.VITE_API_URL || '/api';
 
+/**
+ * Client-side fetch timeouts. The previous default (30s) caused frequent false
+ * "Request timed out" on LLM work, large session JSON, and slow networks.
+ */
+const DEFAULT_JSON_TIMEOUT_MS = 120000;
+const HEALTH_TIMEOUT_MS = 20000;
+const LLM_JSON_TIMEOUT_MS = 300000;
+/** Non-streaming POST /analyse — prefer analyseWithProgress in the UI. */
+const ANALYSE_SYNC_TIMEOUT_MS = 600000;
+
 /** Policy-layer variants sent as 'policy' to the backend. */
 export function docLayerForApi(layer) {
   if (layer === 'policy_brcgs' || layer === 'policy_cranswick') return 'policy';
@@ -26,7 +36,7 @@ function fetchWithTimeout(url, options = {}, ms = 60000) {
   return fetch(url, { ...options, signal: ctrl.signal }).finally(() => clearTimeout(t));
 }
 
-async function request(path, options = {}, timeoutMs = 30000) {
+async function request(path, options = {}, timeoutMs = DEFAULT_JSON_TIMEOUT_MS) {
   const url = `${BASE}${path}`;
   let res;
   try {
@@ -52,7 +62,7 @@ async function request(path, options = {}, timeoutMs = 30000) {
 }
 
 export async function health() {
-  return request('/health');
+  return request('/health', {}, HEALTH_TIMEOUT_MS);
 }
 
 export async function ingestFile(file, metadata = {}) {
@@ -66,7 +76,15 @@ export async function ingestFile(file, metadata = {}) {
   if (metadata.title) form.append('title', metadata.title);
   if (metadata.library) form.append('library', metadata.library);
   const url = `${BASE}/ingest/file`;
-  const res = await fetch(url, { method: 'POST', body: form });
+  let res;
+  try {
+    res = await fetchWithTimeout(url, { method: 'POST', body: form }, LLM_JSON_TIMEOUT_MS);
+  } catch (e) {
+    if (e.name === 'AbortError' || (e.message && e.message.includes('aborted'))) {
+      throw new Error('Ingest timed out. The file may be large or the backend is busy — try again.');
+    }
+    throw e;
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     const detail = err.detail;
@@ -81,10 +99,14 @@ export async function ingestFile(file, metadata = {}) {
 }
 
 export async function analyse(body) {
-  return request('/analyse', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
+  return request(
+    '/analyse',
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    },
+    ANALYSE_SYNC_TIMEOUT_MS,
+  );
 }
 
 const ANALYSIS_STEP_TIMEOUT_MS = 600000;
@@ -116,7 +138,16 @@ export async function analyseSteppedNext(body) {
 }
 
 export async function getSteppedRun(runId) {
-  return request(`/analyse/stepped/${encodeURIComponent(runId)}`, {}, 30000);
+  return request(`/analyse/stepped/${encodeURIComponent(runId)}`, {}, DEFAULT_JSON_TIMEOUT_MS);
+}
+
+/** When the UI lost run_id but still has analysis tracking_id from the session URL. */
+export async function getSteppedRunByTracking(trackingId) {
+  return request(
+    `/analyse/stepped/by-tracking/${encodeURIComponent(trackingId)}`,
+    {},
+    DEFAULT_JSON_TIMEOUT_MS,
+  );
 }
 
 /**
@@ -125,10 +156,14 @@ export async function getSteppedRun(runId) {
  * @returns {Promise<{draft: string, suggested_document_id: string}>}
  */
 export async function generateWorkInstruction(body) {
-  return request('/analysis/generate-work-instruction', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
+  return request(
+    '/analysis/generate-work-instruction',
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    },
+    LLM_JSON_TIMEOUT_MS,
+  );
 }
 
 /**
@@ -139,14 +174,19 @@ export async function generateWorkInstruction(body) {
  */
 export async function analyseWithProgress(body, onEvent) {
   const url = `${BASE}/analyse?stream=true`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Accept: 'application/x-ndjson',
-      'Content-Type': 'application/json',
+  // Long-running stream: no client abort; rely on server + proxy limits (see vite proxy timeout).
+  const res = await fetchWithTimeout(
+    url,
+    {
+      method: 'POST',
+      headers: {
+        Accept: 'application/x-ndjson',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
-  });
+    0,
+  );
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(errorMessage(err, res.statusText || `HTTP ${res.status}`));
@@ -193,13 +233,17 @@ export async function analyseWithProgress(body, onEvent) {
  * Re-validate a proposed solution against the original excerpt. Returns { feedback }.
  */
 export async function validateSolution(excerpt, proposedSolution) {
-  return request('/analyse/validate-solution', {
-    method: 'POST',
-    body: JSON.stringify({
-      excerpt: excerpt || '',
-      proposed_solution: proposedSolution || '',
-    }),
-  });
+  return request(
+    '/analyse/validate-solution',
+    {
+      method: 'POST',
+      body: JSON.stringify({
+        excerpt: excerpt || '',
+        proposed_solution: proposedSolution || '',
+      }),
+    },
+    LLM_JSON_TIMEOUT_MS,
+  );
 }
 
 /**
@@ -253,9 +297,13 @@ export async function deleteDocument(documentId) {
  * Returns { ok, sessions_deleted, documents_removed, documents_kept }.
  */
 export async function resetMetricsAndPruneLibrary() {
-  return request('/ingest/admin/reset-metrics-and-library', {
-    method: 'POST',
-  });
+  return request(
+    '/ingest/admin/reset-metrics-and-library',
+    {
+      method: 'POST',
+    },
+    LLM_JSON_TIMEOUT_MS,
+  );
 }
 
 /**
@@ -263,9 +311,13 @@ export async function resetMetricsAndPruneLibrary() {
  * and all analysis sessions. Keeps policy & principle documents (BRCGS, Cranswick MS, etc.).
  */
 export async function clearSopsAndResetMetrics() {
-  return request('/ingest/admin/clear-sops-and-reset-metrics', {
-    method: 'POST',
-  });
+  return request(
+    '/ingest/admin/clear-sops-and-reset-metrics',
+    {
+      method: 'POST',
+    },
+    LLM_JSON_TIMEOUT_MS,
+  );
 }
 
 /**
@@ -305,14 +357,14 @@ export async function getDocumentFile(documentId) {
  *   totalFindings, agentsRun, agentFindings, workflowType, completedAt }.
  */
 export async function listAnalysisSessions(limit = 50) {
-  return request(`/analysis/sessions?limit=${limit}`, {}, 45000);
+  return request(`/analysis/sessions?limit=${limit}`, {}, DEFAULT_JSON_TIMEOUT_MS);
 }
 
 /**
  * Fetch a single analysis session with full result (findings, flags, etc.).
  */
 export async function getAnalysisSession(trackingId) {
-  return request(`/analysis/sessions/${encodeURIComponent(trackingId)}`);
+  return request(`/analysis/sessions/${encodeURIComponent(trackingId)}`, {}, DEFAULT_JSON_TIMEOUT_MS);
 }
 
 /**
@@ -323,7 +375,11 @@ export async function getHarmonisationScorecard(documentId, options = {}) {
   if (options.site) params.set('site', options.site);
   if (options.docLayer) params.set('doc_layer', options.docLayer);
   const qs = params.toString();
-  return request(`/analysis/harmonisation-scorecard/${encodeURIComponent(documentId)}${qs ? `?${qs}` : ''}`);
+  return request(
+    `/analysis/harmonisation-scorecard/${encodeURIComponent(documentId)}${qs ? `?${qs}` : ''}`,
+    {},
+    DEFAULT_JSON_TIMEOUT_MS,
+  );
 }
 
 /**
@@ -338,10 +394,14 @@ export async function listFindingNotes(limit = 100) {
  * @param {object} body - { user_name, document_id, tracking_id, finding_id, finding_summary, agent_key, note, attachments? }
  */
 export async function addFindingNote(body) {
-  return request('/analysis/finding-notes', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
+  return request(
+    '/analysis/finding-notes',
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    },
+    DEFAULT_JSON_TIMEOUT_MS,
+  );
 }
 
 /**
@@ -365,10 +425,28 @@ export async function addInteractionLog(body) {
  * Save analysis session (captures changes, ensures state is persisted).
  */
 export async function saveAnalysisSession(body) {
-  return request('/analysis/save', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
+  return request(
+    '/analysis/save',
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    },
+    DEFAULT_JSON_TIMEOUT_MS,
+  );
+}
+
+/**
+ * LLM explanation of how a single finding was derived (training / transparency).
+ */
+export async function fetchFindingRationale(body) {
+  return request(
+    '/analysis/finding-rationale',
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    },
+    LLM_JSON_TIMEOUT_MS,
+  );
 }
 
 /**
@@ -440,11 +518,23 @@ export async function downloadAuditPackDocx(payload) {
  */
 export async function exportDraftDocx(content, filename = 'draft') {
   const url = `${BASE}/draft`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content, filename }),
-  });
+  let res;
+  try {
+    res = await fetchWithTimeout(
+      url,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, filename }),
+      },
+      DEFAULT_JSON_TIMEOUT_MS,
+    );
+  } catch (e) {
+    if (e.name === 'AbortError' || (e.message && e.message.includes('aborted'))) {
+      throw new Error('Draft export timed out. Try again or shorten the draft.');
+    }
+    throw e;
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.detail || err.message || res.statusText || `HTTP ${res.status}`);

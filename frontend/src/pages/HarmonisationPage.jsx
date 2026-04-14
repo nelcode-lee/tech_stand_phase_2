@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { getHarmonisationScorecard, listDocuments } from '../api';
 import { useAnalysis } from '../context/AnalysisContext';
@@ -7,8 +7,25 @@ import './HarmonisationPage.css';
 /** Procedure layers scored for harmonisation vs policy PDFs (BRCGS, Cranswick MS, etc.). */
 const HARMONISATION_SUBJECT_LAYERS = new Set(['sop', 'work_instruction', 'principle']);
 
+/** Align registry / ingest spelling variants with procedure layers used for harmonisation. */
+function normalisedProcedureLayer(doc) {
+  const raw = doc?.doc_layer;
+  if (raw == null || raw === '') return 'sop';
+  let s = String(raw).trim().toLowerCase().replace(/[\s-]+/g, '_');
+  const aliases = {
+    wi: 'work_instruction',
+    std_op: 'sop',
+    standard_operating_procedure: 'sop',
+    operating_procedure: 'sop',
+    procedure: 'sop',
+    procedures: 'sop',
+  };
+  if (aliases[s]) return aliases[s];
+  return s;
+}
+
 function isProcedureDocument(doc) {
-  const layer = String(doc?.doc_layer || 'sop').toLowerCase();
+  const layer = normalisedProcedureLayer(doc);
   return HARMONISATION_SUBJECT_LAYERS.has(layer);
 }
 
@@ -43,6 +60,7 @@ function HarmonisationPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const { setConfig, setWorkflowMode } = useAnalysis();
+  const appliedLocationKeyRef = useRef(null);
   const [documents, setDocuments] = useState([]);
   const [selectedDocumentId, setSelectedDocumentId] = useState('');
   const [scorecard, setScorecard] = useState(null);
@@ -88,15 +106,23 @@ function HarmonisationPage() {
       return;
     }
     const ids = new Set(procedureDocuments.map((d) => String(d.document_id)));
-    const pref = location.state?.documentId ? String(location.state.documentId) : '';
-    if (pref && ids.has(pref)) {
-      setSelectedDocumentId(pref);
-      return;
+    const navKey = location.key ?? '';
+    const navPref = location.state?.documentId ? String(location.state.documentId) : '';
+
+    // Only honour router state (e.g. Dashboard → here) on a fresh navigation, not when the
+    // document list refetches — otherwise selection snaps back and the SOP dropdown feels "stuck".
+    if (navKey !== appliedLocationKeyRef.current) {
+      appliedLocationKeyRef.current = navKey;
+      if (navPref && ids.has(navPref)) {
+        setSelectedDocumentId(navPref);
+        return;
+      }
     }
+
     setSelectedDocumentId((prev) =>
       prev && ids.has(prev) ? prev : String(procedureDocuments[0].document_id || ''),
     );
-  }, [procedureDocuments, location.state?.documentId]);
+  }, [procedureDocuments, location.key, location.state?.documentId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -140,14 +166,14 @@ function HarmonisationPage() {
   const availableSessionDocLayers = useMemo(() => {
     const values = new Set();
     procedureDocuments.forEach((d) => {
-      const raw = String(d?.doc_layer || '').trim().toLowerCase();
+      const raw = normalisedProcedureLayer(d);
       if (raw && HARMONISATION_SUBJECT_LAYERS.has(raw)) values.add(raw);
     });
     return Array.from(values).sort((a, b) => a.localeCompare(b));
   }, [procedureDocuments]);
 
   const selectedProcedure = useMemo(
-    () => procedureDocuments.find((d) => String(d.document_id) === selectedDocumentId),
+    () => procedureDocuments.find((d) => String(d.document_id) === String(selectedDocumentId)),
     [procedureDocuments, selectedDocumentId],
   );
 
@@ -296,7 +322,7 @@ function HarmonisationPage() {
               disabled={loadingDocs || procedureDocuments.length === 0}
             >
               {procedureDocuments.map((doc) => (
-                <option key={doc.document_id} value={doc.document_id}>
+                <option key={String(doc.document_id)} value={String(doc.document_id)}>
                   {doc.title || doc.document_id}
                   {doc.doc_layer ? ` (${doc.doc_layer})` : ''}
                 </option>

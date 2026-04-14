@@ -1,5 +1,7 @@
 /* Yorkshire Baker / Cranswick brand palette + spacing */
 :root {
+  /* Cranswick-style gold (bird, plc, tagline) — sidebar + accents */
+  --cranswick-gold: #c9a962;
   --yb-blue: #1f3556;
   --cranswick-di-serria: #4f46e5;
   --cranswick-spanish-white: #eef2ff;

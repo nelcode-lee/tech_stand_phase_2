@@ -87,8 +87,13 @@
   box-shadow: 0 0 0 3px rgba(50,65,87,0.1);
 }
 
-/* Upload zone */
+/* Upload zone — block-level label so borders and text don’t fragment */
 .lib-upload-zone {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  box-sizing: border-box;
   border: 2px dashed var(--border-card);
   border-radius: 10px;
   padding: var(--space-2xl);
@@ -136,16 +141,19 @@
 
 .lib-upload-input {
   position: absolute;
+  left: 0;
+  top: 0;
   width: 1px;
   height: 1px;
   padding: 0;
-  margin: -1px;
+  margin: 0;
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
   clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
   opacity: 0;
+  pointer-events: none;
 }
 
 .lib-upload-browse {

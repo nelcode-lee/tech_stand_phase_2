@@ -620,10 +620,16 @@ def _classify_harmonisation_standard_bucket(
     return "other"
 
 
-def _enriched_standard_name_for_harmonisation(cm: dict) -> str | None:
+def _enriched_standard_name_for_harmonisation(
+    cm: dict,
+    policy_friendly_cache: dict[str, str | None],
+) -> str | None:
     """
     Merge clause_mapping.standard_name with site_standard_links friendly name for the policy doc.
     Ensures BRCGS / Cranswick MS buckets match when policy_clause_records uses raw filenames.
+
+    policy_friendly_cache maps policy_document_id -> friendly name (or None if lookup failed / empty).
+    Populated on first use so we do not run one DB query per compliance flag.
     """
     parts: list[str] = []
     raw = cm.get("standard_name")
@@ -631,12 +637,15 @@ def _enriched_standard_name_for_harmonisation(cm: dict) -> str | None:
         parts.append(raw.strip())
     pid = cm.get("policy_document_id")
     if isinstance(pid, str) and pid.strip():
-        try:
-            from src.rag.document_registry import get_friendly_standard_name_for_document
+        key = pid.strip()
+        if key not in policy_friendly_cache:
+            try:
+                from src.rag.document_registry import get_friendly_standard_name_for_document
 
-            fn = get_friendly_standard_name_for_document(pid.strip())
-        except Exception:
-            fn = None
+                policy_friendly_cache[key] = get_friendly_standard_name_for_document(key)
+            except Exception:
+                policy_friendly_cache[key] = None
+        fn = policy_friendly_cache[key]
         if fn:
             blob = " ".join(parts).lower()
             if fn.lower() not in blob:
@@ -644,10 +653,15 @@ def _enriched_standard_name_for_harmonisation(cm: dict) -> str | None:
     return " ".join(parts) if parts else None
 
 
-def _build_harmonisation_from_result(result_json: dict) -> dict:
+def _build_harmonisation_from_result(
+    result_json: dict,
+    policy_friendly_cache: dict[str, str | None] | None = None,
+) -> dict:
     compliance_flags = result_json.get("compliance_flags") or []
     if not isinstance(compliance_flags, list):
         compliance_flags = []
+
+    friendly_cache = policy_friendly_cache if policy_friendly_cache is not None else {}
 
     status_counts = _empty_harmonisation_status_counts()
     by_standard: dict[str, dict] = {
@@ -662,7 +676,7 @@ def _build_harmonisation_from_result(result_json: dict) -> dict:
         cm_status = str(cm.get("status") or "").strip().lower()
         issue_text = str(f.get("issue") or "").strip().lower()
         issue_raw = f.get("issue")
-        std_name = _enriched_standard_name_for_harmonisation(cm)
+        std_name = _enriched_standard_name_for_harmonisation(cm, friendly_cache)
         if not std_name:
             raw = cm.get("standard_name")
             std_name = raw.strip() if isinstance(raw, str) and raw.strip() else None
@@ -828,8 +842,12 @@ def get_harmonisation_trend(document_id: str, limit: int = 12, site: str = "", d
         return None
 
     points = []
+    policy_friendly_cache: dict[str, str | None] = {}
     for r in reversed(rows):
-        metrics = _build_harmonisation_from_result(_normalise_result_json(r.get("result_json")))
+        metrics = _build_harmonisation_from_result(
+            _normalise_result_json(r.get("result_json")),
+            policy_friendly_cache,
+        )
         points.append(
             {
                 "tracking_id": r.get("tracking_id") or "",

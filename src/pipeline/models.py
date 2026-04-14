@@ -40,6 +40,12 @@ class TerminologyFlag(BaseModel):
     recommendation: str
     location: str | None = None  # Exact quote from document where term appears (evidence)
     glossary_candidate: bool = False  # True when term is vague/undefined — route to HITL, add to glossary
+    # v2 prompt (optional — backward compatible with older runs)
+    issue_type: str | None = None
+    impact_priority: str | None = None
+    functional_family_candidate: str | None = None
+    cross_document_candidate: bool = False
+    citations: list[str] = Field(default_factory=list)
 
 
 class Conflict(BaseModel):
@@ -113,6 +119,9 @@ class CleanserFlag(BaseModel):
     issue: str
     recommendation: str
     issue_category: CleanserIssueCategory = "readability"
+    # Group Representation & Notation Standard (Appendix A); set by deterministic lint or future LLM metadata
+    representation_class_id: str = ""
+    representation_standard_ref: str = ""
 
 
 class StructureFlag(BaseModel):

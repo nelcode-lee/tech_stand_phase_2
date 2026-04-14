@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response, StreamingResponse
 
 log = logging.getLogger(__name__)
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from src.pipeline.models import Document, PipelineContext, RequestType, DocLayer
 from src.pipeline.router import PipelineRouter
@@ -881,15 +881,8 @@ async def post_analyse_stepped_next(body: SteppedNextRequest):
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.get("/analyse/stepped/{run_id}")
-async def get_analyse_stepped_run(run_id: str):
-    """Return persisted stepped run metadata (for reload)."""
-    from src.pipeline.stepped_runs import get_stepped_run_store
-
-    store = get_stepped_run_store()
-    state = store.get(run_id.strip())
-    if not state:
-        raise HTTPException(status_code=404, detail="Stepped run not found")
+def _public_stepped_run_payload(state) -> dict:
+    """JSON for GET stepped run — shared by run_id and by-tracking_id."""
     analyse_body = _body_from_stepped_meta(state.request_meta)
     chunks = state.context.retrieved_chunks or []
     raw = _compose_analysis_json(state.context, analyse_body, chunks)
@@ -902,6 +895,34 @@ async def get_analyse_stepped_run(run_id: str):
         "status": state.status,
         "result": out,
     }
+
+
+@router.get("/analyse/stepped/by-tracking/{tracking_id}")
+async def get_analyse_stepped_by_tracking(tracking_id: str):
+    """Resolve an in-progress stepped run by analysis tracking_id (session id). Used when the UI lost run_id."""
+    from src.pipeline.stepped_runs import get_stepped_run_store
+
+    store = get_stepped_run_store()
+    store.ensure_table()
+    state = store.get_in_progress_by_tracking_id(tracking_id.strip())
+    if not state:
+        raise HTTPException(
+            status_code=404,
+            detail="No in-progress stepped run for this tracking id — start a new stepped analysis or the run may have completed.",
+        )
+    return _public_stepped_run_payload(state)
+
+
+@router.get("/analyse/stepped/{run_id}")
+async def get_analyse_stepped_run(run_id: str):
+    """Return persisted stepped run metadata (for reload)."""
+    from src.pipeline.stepped_runs import get_stepped_run_store
+
+    store = get_stepped_run_store()
+    state = store.get(run_id.strip())
+    if not state:
+        raise HTTPException(status_code=404, detail="Stepped run not found")
+    return _public_stepped_run_payload(state)
 
 
 class DraftRequest(BaseModel):
@@ -1109,7 +1130,10 @@ async def get_harmonisation_scorecard_route(
     """Return harmonisation scorecard for a specific document."""
     from src.rag.analysis_sessions import get_harmonisation_scorecard
 
-    scorecard = get_harmonisation_scorecard(document_id, site=site, doc_layer=doc_layer)
+    # Heavy work (large compliance_flags × DB lookups) runs off the event loop.
+    scorecard = await asyncio.to_thread(
+        get_harmonisation_scorecard, document_id, site, doc_layer
+    )
     if not scorecard:
         raise HTTPException(status_code=404, detail="No harmonisation scorecard found for document")
     return scorecard
@@ -1125,7 +1149,9 @@ async def get_harmonisation_trend_route(
     """Return harmonisation score trend for a specific document."""
     from src.rag.analysis_sessions import get_harmonisation_trend
 
-    trend = get_harmonisation_trend(document_id, limit=limit, site=site, doc_layer=doc_layer)
+    trend = await asyncio.to_thread(
+        get_harmonisation_trend, document_id, limit, site, doc_layer
+    )
     if not trend:
         raise HTTPException(status_code=404, detail="No harmonisation trend found for document")
     return trend
@@ -1261,6 +1287,52 @@ async def add_interaction_log_route(body: InteractionLogRequest):
     if not result:
         raise HTTPException(status_code=400, detail="Could not save interaction log")
     return {"ok": True, "log": result}
+
+
+class FindingRationaleRequest(BaseModel):
+    """Ask for an LLM explanation of how a finding was derived (training / audit)."""
+    tracking_id: str = ""
+    document_id: str = ""
+    finding_id: str
+    agent_key: str = ""
+    finding_item: dict = Field(default_factory=dict)
+
+
+@router.post("/analysis/finding-rationale")
+async def finding_rationale_route(body: FindingRationaleRequest):
+    """
+    Return a concise rationale for one finding, based on the structured fields returned by the agent.
+    Used in the UI for transparency and as copyable text for agent training notes.
+    """
+    from src.pipeline import llm
+
+    raw = body.finding_item if isinstance(body.finding_item, dict) else {}
+    try:
+        item_json = json.dumps(raw, ensure_ascii=False, indent=2, default=str)
+    except TypeError:
+        item_json = str(raw)
+    cap = 12000
+    if len(item_json) > cap:
+        item_json = item_json[:cap] + "\n…(truncated)"
+
+    system = (
+        "You explain how an automated document-review agent likely produced a specific finding from its JSON output. "
+        "Be concise and factual. Use short sections or bullets. Separate: (1) evidence present in the JSON, "
+        "(2) inferred reasoning, (3) gaps or what a human should verify. "
+        "This may be pasted into training documentation — avoid speculation beyond the data given."
+    )
+    prompt = (
+        f"Pipeline step / agent key: {body.agent_key or 'unknown'}\n"
+        f"Stable finding id: {body.finding_id}\n"
+        f"Session: tracking_id={body.tracking_id!r}, document_id={body.document_id!r}\n\n"
+        f"Finding JSON from the agent:\n{item_json}\n\n"
+        "Explain how the agent likely arrived at this finding and what is still uncertain."
+    )
+    try:
+        text = await llm.completion(prompt, system=system, temperature=0.2)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e)) from e
+    return {"rationale": (text or "").strip()}
 
 
 @router.post("/analysis/save")

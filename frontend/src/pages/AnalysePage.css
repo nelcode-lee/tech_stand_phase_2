@@ -24,6 +24,24 @@
   margin-bottom: var(--space-md);
 }
 
+.analyse-stepped-metrics-hint {
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  color: var(--text-secondary, #4b5563);
+  margin: 0 0 var(--space-md);
+  padding: 0.6rem 0.85rem;
+  background: rgba(50, 65, 87, 0.05);
+  border-radius: 8px;
+  border: 1px solid rgba(50, 65, 87, 0.1);
+}
+
+.analyse-stepped-metrics-hint code {
+  font-size: 0.78rem;
+  background: rgba(0, 0, 0, 0.04);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+}
+
 .analyse-page {
   width: 100%;
   background: #ffffff;
@@ -238,25 +256,32 @@
 
 .analyse-loading-phase-strip {
   display: grid;
-  grid-template-columns: repeat(8, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(5.2rem, 1fr));
   gap: 0.4rem;
 }
 
-@media (max-width: 1200px) {
-  .analyse-loading-phase-strip {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-}
-
 @media (max-width: 640px) {
-  .analyse-loading-phase-strip {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
   .analyse-loading-phase {
     font-size: 0.72rem;
     padding: 0.55rem 0.55rem;
   }
+}
+
+.analyse-stepped-strip-wrap {
+  margin: 0 0 var(--space-md);
+  max-width: 100%;
+}
+
+.analyse-stepped-strip-caption {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  color: rgba(55, 48, 40, 0.85);
+  line-height: 1.45;
+}
+
+.analyse-stepped-strip-inline .analyse-loading-phase {
+  padding: 0.4rem 0.5rem;
+  font-size: 0.72rem;
 }
 
 .analyse-loading-phase {
@@ -964,8 +989,21 @@
   font-size: 0.82rem;
 }
 
+.draft-document-title {
+  font-weight: 600;
+  font-size: 1.02rem;
+  color: rgba(30, 41, 59, 0.95);
+  margin-top: 0.15rem;
+}
+
 .draft-structured-view .draft-structured-para {
-  margin: 0.5em 0;
+  margin: 0.55em 0;
+  max-width: 72ch;
+  line-height: 1.62;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  hyphens: auto;
+  color: rgba(35, 32, 28, 0.94);
 }
 
 .draft-structured-view .draft-structured-list {
@@ -2212,6 +2250,11 @@
   color: var(--text-tertiary, rgba(100, 116, 139, 0.65));
 }
 
+.flag-metrics-filter-label {
+  color: var(--text-secondary, #6b7280);
+  font-weight: 500;
+}
+
 .flag-metrics-pending {
   font-weight: 500;
   color: var(--text-secondary);
@@ -2868,5 +2911,96 @@
   max-width: 280px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.finding-agent-rationale-btn {
+  align-self: flex-end;
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+
+.finding-rationale-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10050;
+  background: rgba(15, 23, 42, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-lg);
+}
+
+.finding-rationale-modal {
+  width: min(560px, 100%);
+  max-height: min(80vh, 640px);
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.18);
+  border: 1px solid var(--border-card);
+}
+
+.finding-rationale-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.finding-rationale-modal-header h3 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.finding-rationale-close {
+  border: none;
+  background: transparent;
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+  color: var(--text-secondary);
+  padding: 0 4px;
+}
+
+.finding-rationale-modal-body {
+  padding: var(--space-md) var(--space-lg);
+  overflow: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.finding-rationale-pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.8125rem;
+  line-height: 1.5;
+  font-family: ui-monospace, monospace;
+}
+
+.finding-rationale-status,
+.finding-rationale-muted {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+}
+
+.finding-rationale-error {
+  margin: 0;
+  color: #b91c1c;
+  font-size: 0.875rem;
+}
+
+.finding-rationale-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-sm);
+  padding: var(--space-md) var(--space-lg);
+  border-top: 1px solid var(--border-subtle);
 }
 

@@ -1,0 +1,29 @@
+{
+  "standard_title": "Cranswick Group Representation & Notation Standard",
+  "document_type": "Group Standard",
+  "appendix": "A",
+  "version": "v1.0",
+  "effective_date": "TBC",
+  "summary": "Normative representation classes for controlled documents. Automated cleansing checks implement a subset; full standard requires HITL and Formatter governance.",
+  "classes": [
+    { "id": "A1", "name": "Numeric Quantity", "notes": "Numerals for quantities; words must not replace numerals in operational steps." },
+    { "id": "A2", "name": "Inequality", "notes": "Symbols < > ≤ ≥ must be accompanied by words." },
+    { "id": "A3", "name": "Range", "notes": "Hyphenated numeric ranges prohibited; use words with numerals." },
+    { "id": "A4", "name": "Temperature", "notes": "First use: words + symbol; then °C consistently." },
+    { "id": "A5", "name": "Time Duration", "notes": "Do not abbreviate minutes, hours, days (min, hr, etc.)." },
+    { "id": "A6", "name": "Time Frequency", "notes": "Explicit wording; vague regularly/periodically prohibited." },
+    { "id": "A7", "name": "Percentage", "notes": "First use words + %; consistent thereafter." },
+    { "id": "A8", "name": "Weight / Mass", "notes": "First-use rule for kg/g/t." },
+    { "id": "A9", "name": "Volume", "notes": "First-use rule for L/ml." },
+    { "id": "A10", "name": "Tolerance / Approximation", "notes": "Prefer explicit words; ± / approx. symbols risky alone." },
+    { "id": "A11", "name": "Zero / None", "notes": "Explicit zero/none wording." },
+    { "id": "A12", "name": "Mathematical Operators", "notes": "Operators need explanatory words." },
+    { "id": "A13", "name": "Tables", "notes": "Action must be in text." },
+    { "id": "A14", "name": "Diagrams / Images", "notes": "Text explains action; not image-only instruction." },
+    { "id": "A15", "name": "Icons / Colour", "notes": "Meaning in text." },
+    { "id": "A16", "name": "Formatting Reliance", "notes": "Bold/colour must not sole carrier of meaning." },
+    { "id": "A17", "name": "Step References", "notes": "Avoid above/below; use explicit step numbers." },
+    { "id": "A18", "name": "Conditional Logic", "notes": "Clear if/unless; avoid double negatives." },
+    { "id": "A19", "name": "Abbreviations (Non-units)", "notes": "Glossary discipline; not min/hr for time." }
+  ]
+}

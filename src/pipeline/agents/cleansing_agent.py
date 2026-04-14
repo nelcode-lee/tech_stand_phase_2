@@ -9,6 +9,7 @@ from src.pipeline.context_limits import slice_document_for_agent
 from src.pipeline.domain import get_glossary_block
 from src.pipeline.llm import completion, parse_json_array
 from src.pipeline.models import CleanserFlag, ContentIntegrityFlag, PipelineContext, StructureFlag
+from src.pipeline.representation_lint import hits_to_cleanser_payloads, lint_representation_notation
 
 _CLEANSER_ISSUE_CATEGORIES = frozenset({
     "readability",
@@ -115,6 +116,8 @@ These are **hard execution principles** for procedure text (not optional “styl
 Flag violations when they could cause **mis-execution or hesitation at point of use**, not for minor stylistic preference. Recommendations should show how to apply (1)–(3), without inventing specification content.
 
 SYMBOL, RANGE, AND REPRESENTATION COMPREHENSION (v2.1 — RISK CONTROL)
+Align findings where appropriate with the **Cranswick Group Representation & Notation Standard** (Appendix A, classes **A1–A19**): numerals for quantities, first-use rules for units/symbols, **no** hyphenated numeric ranges (use words, e.g. “between 3 and 5”), **no** `min`/`hr` for time durations, inequalities paired with words, no sole reliance on diagrams/colour/formatting, avoid “above/below” for navigation. You surface comprehension risk; **HITL** approves exceptions and standard updates. When describing an issue, you may cite the relevant **class ID** (e.g. “Class A3 (Range)”) in the issue text for traceability — do not invent class IDs for issues outside that standard.
+
 Do **not** assume that “language clarity alone” is enough where numbers, symbols, or visuals carry meaning. Treat these as **tacit-assumption risks** for operators (ESL, point-of-use stress), **not** as specification authority: you are not judging whether the **correct** limit or unit is chosen — that is Specifier / control context. You **are** flagging when **how** limits, ranges, or cues are written or shown could be **misread or assumed without a fair chance to understand**.
 
 Cover explicitly:
@@ -945,10 +948,35 @@ class CleansingAgent(BaseAgent):
                             issue=str(item["issue"]),
                             recommendation=str(item["recommendation"]),
                             issue_category=_normalize_cleanser_issue_category(item.get("issue_category")),
+                            representation_class_id=str(item.get("representation_class_id") or "").strip(),
+                            representation_standard_ref=str(item.get("representation_standard_ref") or "").strip(),
                         )
                     )
         except Exception as e:
             self._add_error(ctx, f"Cleansing specification analysis failed: {e}", "high")
+
+        # --- Pass 1b: Representation & Notation Standard (Appendix A) — deterministic lint ---
+        try:
+            _snippet_key = lambda s: " ".join(str(s or "").split())[:320]
+            existing_keys = {_snippet_key(f.current_text) for f in ctx.cleanser_flags}
+            for payload in hits_to_cleanser_payloads(lint_representation_notation(ctx.cleansed_content)):
+                k = _snippet_key(payload.get("current_text"))
+                if k in existing_keys:
+                    continue
+                existing_keys.add(k)
+                ctx.cleanser_flags.append(
+                    CleanserFlag(
+                        location=str(payload["location"]),
+                        current_text=str(payload["current_text"]),
+                        issue=str(payload["issue"]),
+                        recommendation=str(payload["recommendation"]),
+                        issue_category="tacit_assumption",
+                        representation_class_id=str(payload.get("representation_class_id") or ""),
+                        representation_standard_ref=str(payload.get("representation_standard_ref") or ""),
+                    )
+                )
+        except Exception as e:
+            self._add_error(ctx, f"Representation notation lint failed: {e}", "low")
 
         # --- Pass 2: structure / template compliance analysis (rule-based) ---
         try:

@@ -58,7 +58,10 @@ function Sidebar() {
     <aside className="app-sidebar">
       <div className="sidebar-brand" onClick={() => navigate('/dashboard')} role="button" title="Go to Dashboard">
         <img src="/cranswick.png" alt="Cranswick" className="sidebar-logo" />
-        <span className="sidebar-brand-sub">Technical Standards Agent</span>
+        <div className="sidebar-brand-product">
+          <span className="sidebar-system-name">Harmoniq</span>
+          <span className="sidebar-system-tagline">Technical Standards Agent</span>
+        </div>
       </div>
 
       <div className="sidebar-site-select">
@@ -88,12 +91,6 @@ function Sidebar() {
         <NavLink to="/harmonisation" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
           <Target size={16} />
           Harmonisation
-        </NavLink>
-
-        <span className="sidebar-section-label">Demo</span>
-        <NavLink to="/demo/hitl" className={({ isActive }) => `sidebar-link ${isActive ? 'active' : ''}`}>
-          <ClipboardCheck size={16} />
-          HITL review (demo)
         </NavLink>
 
         <span className="sidebar-section-label">Workflows</span>
@@ -180,14 +177,14 @@ function SessionSteps({ mode, path }) {
     ? [
         { to: `${base}/configure`, label: 'Configure', icon: Database, title: null },
         { to: `${base}/analyse/overview`, label: 'Analyse', icon: FlaskConical, title: null },
-        { to: govTo, label: 'Governance & sign-off', icon: ClipboardCheck, title: 'Dispositions, hazard tags, notes, and formal sign-off for this session.' },
+        { to: govTo, label: 'Governance & sign-off', icon: ClipboardCheck, title: 'Accept / edit / ignore responses, notes, and formal sign-off for this session.' },
         { to: `${base}/analyse/draft`, label: draftLabel, icon: FilePlus2, title: DRAFT_STEP_TITLE_ATTR },
         { to: `${base}/finalize`, label: 'Submit to Library', icon: CheckCircle2, title: 'Staging area — not a controlled release without local process.' },
       ]
     : [
         { to: `${base}/configure`, label: 'Configure', icon: Database, title: null },
         { to: `${base}/analyse/overview`, label: 'Analyse', icon: FlaskConical, title: null },
-        { to: govTo, label: 'Governance & sign-off', icon: ClipboardCheck, title: 'Dispositions, hazard tags, notes, and formal sign-off for this session.' },
+        { to: govTo, label: 'Governance & sign-off', icon: ClipboardCheck, title: 'Accept / edit / ignore responses, notes, and formal sign-off for this session.' },
         { to: `${base}/analyse/draft`, label: draftLabel, icon: FilePlus2, title: DRAFT_STEP_TITLE_ATTR },
         { to: `${base}/finalize`, label: 'Submit to Library', icon: CheckCircle2, title: 'Staging area — not a controlled release without local process.' },
       ];

@@ -446,7 +446,7 @@ export default function ConfigurePage({ mode = 'review' }) {
           <span className="workflow-hint-text">
             {mode === 'create'
               ? <>You are here: <strong>Configure</strong>. Next: <strong>Analyse</strong> → <strong>Governance &amp; sign-off</strong> → optional <strong>Draft for HITL</strong> (assistive text only) → <strong>Submit to Library</strong> as a staging step. {isDraftBeta && <em> Create flow is labelled beta.</em>}</>
-              : <>You are here: <strong>Configure</strong>. Primary path: <strong>Analyse</strong> for findings, then <strong>Governance &amp; sign-off</strong> for dispositions and formal review. Draft and submit remain optional assistive steps — not a controlled document release.</>}
+              : <>You are here: <strong>Configure</strong>. Primary path: <strong>Analyse</strong> for findings, then <strong>Governance &amp; sign-off</strong> for accept / edit / ignore responses and formal review. Draft and submit remain optional assistive steps — not a controlled document release.</>}
           </span>
         </div>
         <p className="configure-subtitle">

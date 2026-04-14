@@ -13,6 +13,9 @@ import {
   validateSolution,
   docLayerForApi,
   downloadAuditPackDocx,
+  fetchFindingRationale,
+  getSteppedRun,
+  getSteppedRunByTracking,
 } from '../api';
 import mammoth from 'mammoth';
 import { useAnalysis } from '../context/AnalysisContext';
@@ -21,10 +24,43 @@ import { Save, ChevronDown, ChevronUp } from 'lucide-react';
 import { draftSessionStepLabel, DRAFT_ASSISTIVE_LINE } from '../config/productPhase';
 import { PhasePositioningBanner } from '../components/PhasePositioningBanner';
 import { AnalysisScopeStrip } from '../components/AnalysisScopeStrip';
-import { stableFindingId, DISPOSITION_OPTIONS, HAZARD_CONTROL_OPTIONS } from '../utils/findingGovernance';
+import { stableFindingId, FINDING_RESPONSE_OPTIONS } from '../utils/findingGovernance';
 import './AnalysePage.css';
 
 const findingId = stableFindingId;
+
+const STEPPED_PERSIST_PREFIX = 'tech-standards-stepped-v1:';
+
+function readSteppedPersisted(trackingId) {
+  if (!trackingId) return null;
+  try {
+    const raw = sessionStorage.getItem(`${STEPPED_PERSIST_PREFIX}${trackingId}`);
+    if (!raw) return null;
+    const o = JSON.parse(raw);
+    if (!o || typeof o.runId !== 'string') return null;
+    return o;
+  } catch {
+    return null;
+  }
+}
+
+function writeSteppedPersisted(trackingId, payload) {
+  if (!trackingId || !payload?.runId) return;
+  try {
+    sessionStorage.setItem(`${STEPPED_PERSIST_PREFIX}${trackingId}`, JSON.stringify(payload));
+  } catch (_) {
+    /* quota / private mode */
+  }
+}
+
+function clearSteppedPersisted(trackingId) {
+  if (!trackingId) return;
+  try {
+    sessionStorage.removeItem(`${STEPPED_PERSIST_PREFIX}${trackingId}`);
+  } catch (_) {
+    /* ignore */
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -206,96 +242,194 @@ function buildSessionMetadata(session, fallbackResult = null) {
   };
 }
 
-/** Eight named agents — strip order: Cleansor → Risk-Assessor → Conflictor → Specifier → Sequencer → Terminator → Formatter → Validator */
-const ANALYSIS_LOADING_STEPS = [
-  {
-    key: 'cleansor',
+/** Total findings across all agent buckets (for comparing analysis snapshots). */
+function totalFlagCountFromResult(r) {
+  if (!r || typeof r !== 'object') return 0;
+  return (
+    (r.risk_gaps?.length || 0)
+    + (r.cleanser_flags?.length || 0)
+    + (r.specifying_flags?.length || 0)
+    + (r.structure_flags?.length || 0)
+    + (r.content_integrity_flags?.length || 0)
+    + (r.sequencing_flags?.length || 0)
+    + (r.formatting_flags?.length || 0)
+    + (r.compliance_flags?.length || 0)
+    + (r.terminology_flags?.length || 0)
+    + (r.conflicts?.length || 0)
+  );
+}
+
+/**
+ * During stepped analysis, autosave can persist an early snapshot to the DB; getAnalysisSession then
+ * returns fewer agents_run than the in-memory / navigate state. Prefer the richer snapshot.
+ */
+function pickRicherAnalysisResult(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  const la = Array.isArray(a.agents_run) ? a.agents_run.length : 0;
+  const lb = Array.isArray(b.agents_run) ? b.agents_run.length : 0;
+  if (la !== lb) return la > lb ? a : b;
+  const fa = totalFlagCountFromResult(a);
+  const fb = totalFlagCountFromResult(b);
+  if (fa !== fb) return fa > fb ? a : b;
+  return a;
+}
+
+const PIPELINE_AGENT_KEYS = new Set([
+  'cleansing',
+  'draft_layout',
+  'terminology',
+  'conflict',
+  'specifying',
+  'sequencing',
+  'formatting',
+  'risk',
+  'validation',
+]);
+
+/**
+ * Backend agent order for the loading strip — aligned with PipelineRouter._select_agents (sequential review).
+ */
+function expectedPipelineBackendOrder(requestType, docLayer, agentsOverride) {
+  const override =
+    Array.isArray(agentsOverride) && agentsOverride.length > 0
+      ? agentsOverride.filter((n) => PIPELINE_AGENT_KEYS.has(n))
+      : null;
+  if (override && override.length) return override;
+
+  const layer = String(docLayer || 'sop').toLowerCase();
+  let names;
+  if (['new_document', 'update_existing', 'single_document_review'].includes(requestType)) {
+    names = [
+      'cleansing',
+      'draft_layout',
+      'terminology',
+      'conflict',
+      'specifying',
+      'sequencing',
+      'formatting',
+      'risk',
+      'validation',
+    ];
+  } else if (requestType === 'harmonisation_review') {
+    names = ['cleansing', 'draft_layout', 'terminology', 'conflict', 'risk', 'validation'];
+  } else if (requestType === 'principle_layer_review') {
+    names = [
+      'cleansing',
+      'draft_layout',
+      'terminology',
+      'conflict',
+      'specifying',
+      'formatting',
+      'risk',
+      'validation',
+    ];
+  } else {
+    names = ['cleansing', 'draft_layout', 'terminology', 'conflict', 'risk', 'validation'];
+  }
+  if ((layer === 'policy' || layer === 'principle') && names.includes('sequencing')) {
+    names = names.filter((x) => x !== 'sequencing');
+  }
+  return names;
+}
+
+/** Display copy per backend agent — strip order follows pipeline, not marketing order. */
+const BACKEND_AGENT_STEP_META = {
+  cleansing: {
     label: 'Cleansor',
     flowSlot: 'source',
     title: 'Cleansor: normalising the document',
     message: 'Cleaning structure, headings, and noise so downstream agents see a consistent SOP.',
     detail: 'Text hygiene and layout passes are running on the working document',
   },
-  {
-    key: 'risk-assessor',
-    label: 'Risk-Assessor',
-    flowSlot: 'output',
-    title: 'Risk-Assessor: operational risk',
-    message: 'Scoring severity, likelihood, and detectability to rank the most important issues.',
-    detail: 'HACCP score (Severity × Likelihood × Detectability) ranks gaps; food-safety and CCP issues use higher severity floors from domain rules',
-  },
-  {
-    key: 'conflictor',
-    label: 'Conflictor',
+  draft_layout: {
+    label: 'Layout',
     flowSlot: 'reasoning',
-    title: 'Conflictor: contradictions',
-    message: 'Looking for conflicting instructions, duplicated rules, and incompatible requirements.',
-    detail: 'Conflictor is cross-referencing sections for logical clashes',
+    title: 'Layout: draft structure',
+    message: 'Building section structure and layout scaffolding before specialist reviews.',
+    detail: 'Draft layout is establishing headings and flow for downstream agents',
   },
-  {
-    key: 'specifier',
-    label: 'Specifier',
-    flowSlot: 'policy',
-    title: 'Specifier: requirements and clarity',
-    message: 'Checking that instructions are specific, testable, and free of vague language.',
-    detail: 'Specifier is comparing clauses against good-practice specifying patterns',
-  },
-  {
-    key: 'sequencer',
-    label: 'Sequencer',
-    flowSlot: 'policy',
-    title: 'Sequencer: flow and order',
-    message: 'Reviewing step order, dependencies, and whether the sequence can be followed safely.',
-    detail: 'Sequencer is tracing procedural logic across the document',
-  },
-  {
-    key: 'terminator',
+  terminology: {
     label: 'Terminator',
     flowSlot: 'reasoning',
     title: 'Terminator: terminology',
     message: 'Aligning terms with the glossary and flagging inconsistent or undefined vocabulary.',
     detail: 'Terminator is normalising language against controlled terms',
   },
-  {
-    key: 'formatter',
+  conflict: {
+    label: 'Conflictor',
+    flowSlot: 'reasoning',
+    title: 'Conflictor: contradictions',
+    message: 'Looking for conflicting instructions, duplicated rules, and incompatible requirements.',
+    detail: 'Conflictor is cross-referencing sections for logical clashes',
+  },
+  specifying: {
+    label: 'Specifier',
+    flowSlot: 'policy',
+    title: 'Specifier: requirements and clarity',
+    message: 'Checking that instructions are specific, testable, and free of vague language.',
+    detail: 'Specifier is comparing clauses against good-practice specifying patterns',
+  },
+  sequencing: {
+    label: 'Sequencer',
+    flowSlot: 'policy',
+    title: 'Sequencer: flow and order',
+    message: 'Reviewing step order, dependencies, and whether the sequence can be followed safely.',
+    detail: 'Sequencer is tracing procedural logic across the document',
+  },
+  formatting: {
     label: 'Formatter',
     flowSlot: 'reasoning',
     title: 'Formatter: presentation and structure',
     message: 'Checking tables, lists, numbering, and visual structure for readability.',
     detail: 'Formatter is validating how the content is laid out on the page',
   },
-  {
-    key: 'validator',
+  risk: {
+    label: 'Risk-Assessor',
+    flowSlot: 'output',
+    title: 'Risk-Assessor: operational risk',
+    message: 'Scoring severity, likelihood, and detectability to rank the most important issues.',
+    detail:
+      'HACCP score (Severity × Likelihood × Detectability) ranks gaps; food-safety and CCP issues use higher severity floors from domain rules',
+  },
+  validation: {
     label: 'Validator',
     flowSlot: 'output',
     title: 'Validator: consolidation',
     message: 'Cross-checking outputs and packaging results for the review screen.',
     detail: 'Final validation before results are returned to the dashboard',
   },
-];
+};
 
-/** Map backend pipeline agent name → loading strip index (ANALYSIS_LOADING_STEPS). */
-function backendAgentToStripIndex(agentName) {
-  const m = {
-    cleansing: 0,
-    draft_layout: 3,
-    terminology: 5,
-    conflict: 2,
-    specifying: 3,
-    sequencing: 4,
-    formatting: 6,
-    risk: 1,
-    validation: 7,
-  };
-  return m[agentName] ?? 0;
+function stripStepsFromBackends(backendNames) {
+  if (!backendNames?.length) return [];
+  return backendNames.map((b) => {
+    const meta = BACKEND_AGENT_STEP_META[b];
+    return {
+      key: b,
+      backend: b,
+      label: meta?.label ?? b,
+      flowSlot: meta?.flowSlot ?? 'reasoning',
+      title: meta?.title ?? b,
+      message: meta?.message ?? 'Running…',
+      detail: meta?.detail ?? '',
+    };
+  });
 }
 
-function AnalysisLoadingPanel({ activeIndex, progressPercent }) {
-  const currentStep = ANALYSIS_LOADING_STEPS[activeIndex] || ANALYSIS_LOADING_STEPS[0];
+function AnalysisLoadingPanel({ activeIndex, progressPercent, orderedSteps }) {
+  const steps =
+    orderedSteps && orderedSteps.length > 0
+      ? orderedSteps
+      : stripStepsFromBackends(expectedPipelineBackendOrder('single_document_review', 'sop', null));
+  const safeActive = Math.min(Math.max(0, activeIndex), Math.max(0, steps.length - 1));
+  const currentStep = steps[safeActive] || steps[0];
   const barPct =
     progressPercent != null && !Number.isNaN(progressPercent)
       ? Math.min(100, Math.max(0, progressPercent))
-      : ((activeIndex + 1) / ANALYSIS_LOADING_STEPS.length) * 100;
+      : steps.length > 0
+        ? ((safeActive + 1) / steps.length) * 100
+        : 0;
 
   return (
     <div className="analyse-loading-overlay analyse-loading-panel" role="status" aria-live="polite">
@@ -314,8 +448,8 @@ function AnalysisLoadingPanel({ activeIndex, progressPercent }) {
       </div>
 
       <div className="analyse-loading-phase-strip">
-        {ANALYSIS_LOADING_STEPS.map((step, index) => {
-          const state = index < activeIndex ? 'done' : index === activeIndex ? 'active' : 'pending';
+        {steps.map((step, index) => {
+          const state = index < safeActive ? 'done' : index === safeActive ? 'active' : 'pending';
           return (
             <div key={step.key} className={`analyse-loading-phase analyse-loading-phase-${state}`}>
               <span className="analyse-loading-phase-dot" />
@@ -606,12 +740,72 @@ function applyFindingToDraft(draft, search, replacement) {
   };
 }
 
+/**
+ * Fix common Word/mammoth gluing: missing space after punctuation or between words.
+ */
+function normalizeDraftPlainText(s) {
+  if (!s || typeof s !== 'string') return '';
+  let t = s.replace(/\r\n/g, '\n');
+  // Table / tab-separated cells from DOCX often arrive as tabs — break for readability
+  t = t.replace(/\t+/g, '\n');
+  // Missing space after full stop before capital (e.g. "paperwork.Area")
+  t = t.replace(/\.([A-Z])/g, '. $1');
+  // Missing space after colon before capital when not part of URL/time (e.g. "frequency:Technical")
+  t = t.replace(/(?<![/:]):([A-Z])/g, ': $1');
+  // Lowercase run then capitalised word (e.g. "ResponsibilityLine")
+  t = t.replace(/([a-z])([A-Z][a-z])/g, '$1 $2');
+  return t.replace(/\n{3,}/g, '\n\n').trim();
+}
+
 function htmlToPlainText(html) {
   if (!html || typeof html !== 'string') return '';
   try {
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
-    return (doc.body?.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
+    const SKIP = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT']);
+    const BLOCK_TAIL = new Set([
+      'P',
+      'DIV',
+      'LI',
+      'TR',
+      'SECTION',
+      'ARTICLE',
+      'H1',
+      'H2',
+      'H3',
+      'H4',
+      'H5',
+      'H6',
+      'UL',
+      'OL',
+      'TABLE',
+      'BLOCKQUOTE',
+      'PRE',
+      'TD',
+      'TH',
+    ]);
+
+    function walk(node, out) {
+      if (!node) return;
+      if (node.nodeType === 3) {
+        out.push(node.textContent || '');
+        return;
+      }
+      if (node.nodeType !== 1) return;
+      if (SKIP.has(node.tagName)) return;
+      if (node.tagName === 'BR') {
+        out.push('\n');
+        return;
+      }
+      for (const c of node.childNodes) walk(c, out);
+      if (BLOCK_TAIL.has(node.tagName)) out.push('\n');
+    }
+
+    const parts = [];
+    walk(doc.body, parts);
+    let raw = parts.join('');
+    raw = raw.replace(/\n{3,}/g, '\n\n').replace(/[ \t]+\n/g, '\n').trim();
+    return normalizeDraftPlainText(raw);
   } catch {
     return '';
   }
@@ -655,9 +849,7 @@ function FindingActions({
   onDispositionChange,
   governanceNoteValue,
   onGovernanceNoteChange,
-  hazardControlValue,
-  onHazardControlChange,
-  modelHazardHint,
+  onRequestAgentRationale,
 }) {
   const [noteModalOpen, setNoteModalOpen] = useState(false);
   const [noteText, setNoteText] = useState('');
@@ -737,38 +929,27 @@ function FindingActions({
         <div className="finding-disposition-row" onKeyDown={e => e.stopPropagation()}>
           <div className="finding-disposition-controls-row">
             <div className="finding-disposition-field-group">
-              <label htmlFor={`finding-disp-${id}`} className="finding-disposition-label">Disposition</label>
+              <label htmlFor={`finding-disp-${id}`} className="finding-disposition-label">Response</label>
               <select
                 id={`finding-disp-${id}`}
                 className="finding-disposition-select-inline"
                 value={dispositionValue || ''}
                 onChange={(e) => onDispositionChange(id, e.target.value)}
               >
-                {DISPOSITION_OPTIONS.map((opt) => (
+                {FINDING_RESPONSE_OPTIONS.map((opt) => (
                   <option key={opt.value || 'unset'} value={opt.value}>{opt.label}</option>
                 ))}
               </select>
             </div>
-            {onHazardControlChange && (
-              <div className="finding-hazard-control-field-group">
-                <label htmlFor={`finding-hazard-${id}`} className="finding-disposition-label">Hazard control</label>
-                <select
-                  id={`finding-hazard-${id}`}
-                  className="finding-disposition-select-inline"
-                  value={hazardControlValue || ''}
-                  onChange={(e) => onHazardControlChange(id, e.target.value)}
-                >
-                  {HAZARD_CONTROL_OPTIONS.map((opt) => (
-                    <option key={opt.value || 'hz-unset'} value={opt.value}>{opt.label}</option>
-                  ))}
-                </select>
-                {modelHazardHint ? (
-                  <span className="finding-hazard-model-hint" title="Model classification for this gap (stored in analysis result)">
-                    Model: {HAZARD_CONTROL_OPTIONS.find((o) => o.value === modelHazardHint)?.label || modelHazardHint}
-                  </span>
-                ) : null}
-              </div>
-            )}
+            {onRequestAgentRationale ? (
+              <button
+                type="button"
+                className="finding-agent-rationale-btn doc-btn"
+                onClick={() => onRequestAgentRationale(id, agentKey, item)}
+              >
+                How did the agent decide this?
+              </button>
+            ) : null}
           </div>
           {onGovernanceNoteChange && (
             <label className="finding-governance-note-wrap">
@@ -892,6 +1073,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
   const documentIdFromUrl = searchParams.get('documentId');
   const titleFromUrl = searchParams.get('title');
   const trackingIdFromUrl = searchParams.get('trackingId');
+  const steppedRunQuery = searchParams.get('steppedRun') || '';
   const steppedMode =
     mode === 'review' && (searchParams.get('stepped') === '1' || location.state?.stepped === true);
   const storedResultFromState = location.state?.storedResult;
@@ -941,6 +1123,10 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
   const [loadingStepIndex, setLoadingStepIndex] = useState(0);
   /** Backend stream: done/total progress events (drives progress bar when total > 0). */
   const [streamProgress, setStreamProgress] = useState({ done: 0, total: 0 });
+  /** Pipeline agent order for loading strip when stepped sequence is not yet known (matches current configure). */
+  const [stripOrderForCurrentRun, setStripOrderForCurrentRun] = useState(() =>
+    expectedPipelineBackendOrder('single_document_review', 'sop', null),
+  );
   const [steppedRunId, setSteppedRunId] = useState(null);
   const [steppedSequence, setSteppedSequence] = useState([]);
   const [steppedNextIdx, setSteppedNextIdx] = useState(0);
@@ -948,13 +1134,14 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
   const [governancePolicyRef, setGovernancePolicyRef] = useState('');
   const [findingDispositions, setFindingDispositions] = useState({});
   const [findingGovernanceNotes, setFindingGovernanceNotes] = useState({});
-  const [findingHazardControlTags, setFindingHazardControlTags] = useState({});
   const findingDispositionsRef = useRef(findingDispositions);
   const findingGovernanceNotesRef = useRef(findingGovernanceNotes);
-  const findingHazardControlTagsRef = useRef(findingHazardControlTags);
   findingDispositionsRef.current = findingDispositions;
   findingGovernanceNotesRef.current = findingGovernanceNotes;
-  findingHazardControlTagsRef.current = findingHazardControlTags;
+  const [rationaleModalOpen, setRationaleModalOpen] = useState(false);
+  const [rationaleLoading, setRationaleLoading] = useState(false);
+  const [rationaleText, setRationaleText] = useState('');
+  const [rationaleError, setRationaleError] = useState(null);
   const governanceAutosaveDebounceRef = useRef(null);
   const [dispositionAutosaveStatus, setDispositionAutosaveStatus] = useState(null); // null | 'saving' | 'saved' | 'error'
 
@@ -966,6 +1153,100 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
       setSteppedComplete(false);
     }
   }, [steppedMode]);
+
+  // Rehydrate stepped run metadata after navigate/reload. In-memory state was often lost while
+  // `result` was restored from URL + storedResult — leaving steppedRunId null and "Run next" a no-op.
+  useEffect(() => {
+    if (!steppedMode || !trackingIdFromUrl) return undefined;
+    const st = location.state;
+    if (st?.steppedRunId) {
+      setSteppedRunId(st.steppedRunId);
+      setSteppedSequence(Array.isArray(st.steppedSequence) ? st.steppedSequence : []);
+      setSteppedNextIdx(typeof st.steppedNextIdx === 'number' ? st.steppedNextIdx : 0);
+      setSteppedComplete(!!st.steppedComplete);
+      return undefined;
+    }
+    const runFromQuery = steppedRunQuery.trim();
+    if (runFromQuery) {
+      let cancelled = false;
+      getSteppedRun(runFromQuery)
+        .then((data) => {
+          if (cancelled) return;
+          setSteppedRunId(data.run_id);
+          setSteppedSequence(data.agent_sequence || []);
+          setSteppedNextIdx(data.next_step_index ?? 0);
+          const done = data.status === 'completed' || data.status === 'failed';
+          setSteppedComplete(done);
+          writeSteppedPersisted(trackingIdFromUrl, {
+            runId: data.run_id,
+            sequence: data.agent_sequence || [],
+            nextIdx: data.next_step_index ?? 0,
+            complete: done,
+          });
+        })
+        .catch(() => {});
+      return () => {
+        cancelled = true;
+      };
+    }
+    const cached = readSteppedPersisted(trackingIdFromUrl);
+    if (cached?.runId) {
+      let cancelled = false;
+      getSteppedRun(cached.runId)
+        .then((data) => {
+          if (cancelled) return;
+          setSteppedRunId(data.run_id);
+          setSteppedSequence(data.agent_sequence || []);
+          setSteppedNextIdx(data.next_step_index ?? 0);
+          const done = data.status === 'completed' || data.status === 'failed';
+          setSteppedComplete(done);
+          writeSteppedPersisted(trackingIdFromUrl, {
+            runId: data.run_id,
+            sequence: data.agent_sequence || [],
+            nextIdx: data.next_step_index ?? 0,
+            complete: done,
+          });
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setSteppedRunId(cached.runId);
+          setSteppedSequence(cached.sequence || []);
+          setSteppedNextIdx(cached.nextIdx ?? 0);
+          setSteppedComplete(!!cached.complete);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }
+    let cancelledBt = false;
+    getSteppedRunByTracking(trackingIdFromUrl)
+      .then((data) => {
+        if (cancelledBt) return;
+        setSteppedRunId(data.run_id);
+        setSteppedSequence(data.agent_sequence || []);
+        setSteppedNextIdx(data.next_step_index ?? 0);
+        const done = data.status === 'completed' || data.status === 'failed';
+        setSteppedComplete(done);
+        writeSteppedPersisted(trackingIdFromUrl, {
+          runId: data.run_id,
+          sequence: data.agent_sequence || [],
+          nextIdx: data.next_step_index ?? 0,
+          complete: done,
+        });
+      })
+      .catch(() => {});
+    return () => {
+      cancelledBt = true;
+    };
+  }, [
+    steppedMode,
+    trackingIdFromUrl,
+    steppedRunQuery,
+    location.key,
+    location.state?.steppedRunId,
+    location.state?.steppedNextIdx,
+    location.state?.steppedComplete,
+  ]);
 
   function logInteraction(actionType, metadata = {}) {
     addInteractionLog({
@@ -1117,6 +1398,8 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
   const effectiveResultJson = result ? {
     ...result,
     draft_content: draftContent || result.draft_content || '',
+    finding_dispositions: findingDispositions,
+    finding_governance_notes: findingGovernanceNotes,
   } : {};
 
   // If the user navigates to Analyse for a different document, clear any prior result
@@ -1241,11 +1524,6 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
             ? { ...session.findingGovernanceNotes }
             : {},
         );
-        setFindingHazardControlTags(
-          session.findingHazardControlTags && typeof session.findingHazardControlTags === 'object'
-            ? { ...session.findingHazardControlTags }
-            : {},
-        );
         const res = session?.result;
         if (res) {
           if (!resultMatchesDocument(res, sessionMeta?.documentId || documentIdFromUrl)) {
@@ -1255,10 +1533,20 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
             setDraftContent('');
             return;
           }
-          setResult(res);
-          setDraftContent(res.draft_content || '');
+          const navRes = location.state?.storedResult;
+          const toShow = steppedMode && navRes
+            ? pickRicherAnalysisResult(res, navRes)
+            : res;
+          setResult(toShow);
+          setDraftContent(toShow.draft_content || '');
         } else if (session) {
-          setError('Results not stored for this session. Run a new analysis to see findings.');
+          const navRes = location.state?.storedResult;
+          if (steppedMode && navRes) {
+            setResult(navRes);
+            setDraftContent(navRes.draft_content || '');
+          } else {
+            setError('Results not stored for this session. Run a new analysis to see findings.');
+          }
         }
         if (sessionMeta && !documentIdFromUrl) {
           setConfig(c => ({
@@ -1311,7 +1599,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         if (latestTrackingRequestRef.current !== trackingIdFromUrl) return;
         setLoadingStored(false);
       });
-  }, [trackingIdFromUrl, documentIdFromUrl, location.key, location.state, setResult, setConfig]);
+  }, [trackingIdFromUrl, documentIdFromUrl, location.key, location.state, steppedMode, setResult, setConfig]);
 
   // Fetch original document for split view — DOCX→HTML for procedures, else plain text. For Create WI, use generated content.
   useEffect(() => {
@@ -1341,16 +1629,30 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
     async function load() {
       try {
         if (isProcedure) {
+          const metaPromise = getDocumentContent(effectiveDocId).catch(() => null);
           const blob = await getDocumentFile(effectiveDocId);
           if (blob) {
             const arrayBuffer = await blob.arrayBuffer();
-            const { value: html } = await mammoth.convertToHtml({ arrayBuffer });
+            const [{ value: html }, rawRes, meta] = await Promise.all([
+              mammoth.convertToHtml({ arrayBuffer }),
+              mammoth.extractRawText({ arrayBuffer }),
+              metaPromise,
+            ]);
             setDocumentHtml(html || null);
-            const plain = htmlToPlainText(html || '');
+            const plainFromDocx = normalizeDraftPlainText((rawRes?.value || '').trim());
+            const plainFromHtml = htmlToPlainText(html || '');
+            const plain = plainFromDocx || plainFromHtml;
             if (plain) setDocumentContent(plain);
+            if (Array.isArray(meta?.sections) && meta.sections.length > 0) {
+              setDocumentSections(meta.sections);
+            }
             setDocumentSourceType('html');
             setLoadingContent(false);
             return;
+          }
+          const metaOnly = await metaPromise;
+          if (Array.isArray(metaOnly?.sections) && metaOnly.sections.length > 0) {
+            setDocumentSections(metaOnly.sections);
           }
         }
         const data = await getDocumentContent(effectiveDocId);
@@ -1465,6 +1767,14 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
     }
     try {
       const sitesArr = Array.isArray(config.sites) ? config.sites : (config.sites ? String(config.sites).split(/[,\s]+/).filter(Boolean) : []);
+      const requestTypeForStrip =
+        mode === 'create' && generatedContent ? 'new_document' : (config.requestType || 'single_document_review');
+      const stripOrder = expectedPipelineBackendOrder(
+        requestTypeForStrip,
+        docLayerForApi(config.docLayer),
+        config?.mode && config.mode !== 'full' ? config.agents : undefined,
+      );
+      setStripOrderForCurrentRun(stripOrder);
       if (steppedMode) {
         const rid =
           globalThis.crypto && typeof globalThis.crypto.randomUUID === 'function'
@@ -1490,8 +1800,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
           tracking_id: steppedBody.tracking_id,
           request_type: steppedBody.request_type,
         });
-        setLoadingStepIndex(backendAgentToStripIndex('cleansing'));
-        setStreamProgress({ done: 0, total: 9 });
+        setStreamProgress({ done: 0, total: Math.max(1, stripOrder.length) });
         const sres = await analyseSteppedStart(steppedBody);
         const res = sres.result;
         const totalSt = Math.max(1, sres.total_steps || 1);
@@ -1499,7 +1808,6 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
           done: Math.min(sres.next_step_index ?? 0, totalSt),
           total: totalSt,
         });
-        setLoadingStepIndex(backendAgentToStripIndex(sres.step_agent || 'cleansing'));
         setResult(res);
         setSteppedRunId(sres.run_id);
         setSteppedSequence(sres.agent_sequence || []);
@@ -1509,7 +1817,6 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         setGovernancePolicyRef(freshPolicyRefS);
         setFindingDispositions({});
         setFindingGovernanceNotes({});
-        setFindingHazardControlTags({});
         if (mode === 'review' && documentContent) setDraftContent(documentContent);
         else setDraftContent(res.draft_content || '');
         if (sres.complete) {
@@ -1569,15 +1876,30 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         const sitesNavS = Array.isArray(config.sites)
           ? (config.sites.includes('all') ? 'All Sites' : config.sites.join(','))
           : (config.sites || '');
+        if (sres.complete) {
+          clearSteppedPersisted(res.tracking_id);
+        } else {
+          writeSteppedPersisted(res.tracking_id, {
+            runId: sres.run_id,
+            sequence: sres.agent_sequence || [],
+            nextIdx: sres.next_step_index ?? 0,
+            complete: false,
+          });
+        }
         const navParams = new URLSearchParams();
         navParams.set('trackingId', res.tracking_id);
         if (effectiveDocId) navParams.set('documentId', effectiveDocId);
         navParams.set('stepped', '1');
+        if (!sres.complete) navParams.set('steppedRun', sres.run_id);
         navigate(`${base}/analyse/overview?${navParams.toString()}`, {
           replace: true,
           state: {
             storedResult: res,
             stepped: true,
+            steppedRunId: sres.run_id,
+            steppedSequence: sres.agent_sequence || [],
+            steppedNextIdx: sres.next_step_index ?? 0,
+            steppedComplete: !!sres.complete,
             session: {
               documentId: effectiveDocId || res.document_id || '',
               title: effectiveTitle || res.title || res.document_id || '',
@@ -1616,16 +1938,23 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         if (msg.type === 'start') {
           setStreamProgress({
             done: 0,
-            total: Math.max(1, msg.total || ANALYSIS_LOADING_STEPS.length),
+            total: Math.max(1, msg.total || stripOrder.length + 1),
           });
         }
         if (msg.type === 'progress') {
           setStreamProgress((prev) => {
-            const total = prev.total || ANALYSIS_LOADING_STEPS.length;
+            const total = prev.total || Math.max(1, stripOrder.length + 1);
             return { total, done: Math.min(total, prev.done + 1) };
           });
-          const idx = ANALYSIS_LOADING_STEPS.findIndex((s) => s.key === msg.step_key);
-          if (idx >= 0) setLoadingStepIndex(idx);
+          if (msg.agent === 'context') {
+            setLoadingStepIndex(0);
+          } else if (msg.agent === 'finding_verification') {
+            const vi = stripOrder.indexOf('validation');
+            if (vi >= 0) setLoadingStepIndex(vi);
+          } else if (msg.agent) {
+            const ai = stripOrder.indexOf(msg.agent);
+            if (ai >= 0) setLoadingStepIndex(ai);
+          }
         }
       });
       setStreamProgress((prev) =>
@@ -1636,7 +1965,6 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
       setGovernancePolicyRef(freshPolicyRef);
       setFindingDispositions({});
       setFindingGovernanceNotes({});
-      setFindingHazardControlTags({});
       // In review mode, preserve source document integrity as the draft baseline.
       if (mode === 'review' && documentContent) setDraftContent(documentContent);
       else setDraftContent(res.draft_content || '');
@@ -1720,18 +2048,82 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
   }
 
   async function handleSteppedNext() {
-    if (!steppedRunId || steppedComplete) return;
+    let runId = steppedRunId;
+    let seq = steppedSequence;
+    let nextIdx = steppedNextIdx;
+    let complete = steppedComplete;
+    const tid = (result?.tracking_id || trackingIdFromUrl || '').trim();
+    const fromQuery = (searchParams.get('steppedRun') || '').trim();
+    if (!runId && fromQuery) {
+      runId = fromQuery;
+    }
+    if ((!runId || !seq?.length) && tid) {
+      const cached = readSteppedPersisted(tid);
+      if (cached?.runId) {
+        runId = cached.runId;
+        seq = cached.sequence || [];
+        nextIdx = cached.nextIdx ?? 0;
+        complete = !!cached.complete;
+        setSteppedRunId(runId);
+        setSteppedSequence(seq);
+        setSteppedNextIdx(nextIdx);
+        setSteppedComplete(complete);
+      }
+    }
+    if ((!runId || !seq?.length) && tid) {
+      try {
+        const data = await getSteppedRunByTracking(tid);
+        runId = data.run_id;
+        seq = data.agent_sequence || [];
+        nextIdx = data.next_step_index ?? 0;
+        complete = data.status === 'completed' || data.status === 'failed';
+        setSteppedRunId(runId);
+        setSteppedSequence(seq);
+        setSteppedNextIdx(nextIdx);
+        setSteppedComplete(complete);
+        writeSteppedPersisted(tid, { runId, sequence: seq, nextIdx, complete });
+      } catch (_) {
+        /* fall through to error below */
+      }
+    }
+    if (runId && (!seq || seq.length === 0)) {
+      try {
+        const data = await getSteppedRun(runId);
+        seq = data.agent_sequence || [];
+        nextIdx = data.next_step_index ?? nextIdx;
+        complete = data.status === 'completed' || data.status === 'failed';
+        setSteppedSequence(seq);
+        setSteppedNextIdx(nextIdx);
+        setSteppedComplete(complete);
+        if (tid) {
+          writeSteppedPersisted(tid, {
+            runId: data.run_id,
+            sequence: seq,
+            nextIdx,
+            complete,
+          });
+        }
+      } catch (_) {
+        /* optional hydration */
+      }
+    }
+    if (!runId || complete) {
+      if (!runId) {
+        setError(
+          'Stepped run could not be resumed. The server has no in-progress stepped session for this tracking id (it may have finished, expired, or the API was restarted). Start again from Configure → Stepped analysis, or use the same browser tab without refreshing.',
+        );
+      }
+      return;
+    }
     setLoading(true);
     setError(null);
-    const nextAgent = steppedSequence[steppedNextIdx];
-    if (nextAgent) setLoadingStepIndex(backendAgentToStripIndex(nextAgent));
     setStreamProgress({
-      done: steppedNextIdx,
-      total: Math.max(1, steppedSequence.length || 1),
+      done: nextIdx,
+      total: Math.max(1, seq.length || 1),
     });
     try {
       const sres = await analyseSteppedNext({
-        run_id: steppedRunId,
+        run_id: runId,
         edited_document_text: (draftContent || result?.draft_content || documentContent || '').trim() || null,
       });
       const res = sres.result;
@@ -1740,7 +2132,6 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         done: Math.min(sres.next_step_index ?? 0, totalSt),
         total: totalSt,
       });
-      setLoadingStepIndex(backendAgentToStripIndex(sres.step_agent || 'cleansing'));
       setResult(res);
       setSteppedNextIdx(sres.next_step_index ?? 0);
       setSteppedComplete(!!sres.complete);
@@ -1752,6 +2143,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         setDraftContent(res.draft_content);
       }
       if (sres.complete) {
+        clearSteppedPersisted(res.tracking_id);
         recordSession(res, { ...config, documentId: effectiveDocId, title: effectiveTitle }, workflowMode);
         logInteraction('analysis_run_completed', {
           tracking_id: res.tracking_id,
@@ -1759,6 +2151,13 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
             (res.risk_gaps?.length || 0) + (res.cleanser_flags?.length || 0) + (res.specifying_flags?.length || 0) +
             (res.structure_flags?.length || 0) + (res.content_integrity_flags?.length || 0) + (res.sequencing_flags?.length || 0) +
             (res.formatting_flags?.length || 0) + (res.compliance_flags?.length || 0) + (res.terminology_flags?.length || 0) + (res.conflicts?.length || 0),
+        });
+      } else {
+        writeSteppedPersisted(res.tracking_id, {
+          runId: sres.run_id,
+          sequence: sres.agent_sequence || [],
+          nextIdx: sres.next_step_index ?? 0,
+          complete: false,
         });
       }
       if (res.session_saved === false) setSessionNotPersisted(true);
@@ -1812,11 +2211,16 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
       navParamsN.set('trackingId', res.tracking_id);
       if (effectiveDocId) navParamsN.set('documentId', effectiveDocId);
       navParamsN.set('stepped', '1');
+      if (!sres.complete) navParamsN.set('steppedRun', sres.run_id);
       navigate(`${base}/analyse/overview?${navParamsN.toString()}`, {
         replace: true,
         state: {
           storedResult: res,
           stepped: true,
+          steppedRunId: sres.run_id,
+          steppedSequence: sres.agent_sequence || [],
+          steppedNextIdx: sres.next_step_index ?? 0,
+          steppedComplete: !!sres.complete,
           session: {
             documentId: effectiveDocId || res.document_id || '',
             title: effectiveTitle || res.title || res.document_id || '',
@@ -1835,6 +2239,19 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
       setLoading(false);
     }
   }
+
+  const loadingStripBackends =
+    steppedMode && steppedSequence.length > 0 ? steppedSequence : stripOrderForCurrentRun;
+  const loadingOrderedSteps = stripStepsFromBackends(loadingStripBackends);
+  const loadingStripActiveIndex = steppedMode
+    ? steppedSequence.length > 0
+      ? steppedNextIdx
+      : 0
+    : loadingStepIndex;
+
+  const steppedStripSteps =
+    steppedMode && steppedSequence.length > 0 ? stripStepsFromBackends(steppedSequence) : [];
+  const steppedAgentsRunCount = Array.isArray(result?.agents_run) ? result.agents_run.length : 0;
 
   const flagCounts = result ? {
     'risk gaps':         result.risk_gaps?.length || 0,
@@ -1874,9 +2291,10 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
 
   const runGovernanceAutosave = useCallback(async () => {
     if (!result?.tracking_id) return;
+    // Avoid persisting partial stepped snapshots that overwrite fresher in-memory state on reload.
+    if (steppedMode && !steppedComplete) return;
     const disp = findingDispositionsRef.current;
     const notes = findingGovernanceNotesRef.current;
-    const hzTags = findingHazardControlTagsRef.current;
     const agentFindings = {};
     if (result.risk_gaps?.length) agentFindings.risk = result.risk_gaps.length;
     if (result.cleanser_flags?.length) agentFindings.cleansing = (agentFindings.cleansing || 0) + result.cleanser_flags.length;
@@ -1905,7 +2323,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         corrections_implemented: totalApplied,
         finding_dispositions: disp,
         finding_governance_notes: notes,
-        finding_hazard_control_tags: hzTags,
+        finding_hazard_control_tags: {},
         governance_save_mode: 'dispositions_only',
         result_json: effectiveResultJson,
       });
@@ -1922,6 +2340,8 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
     }
   }, [
     result,
+    steppedMode,
+    steppedComplete,
     effectiveDocId,
     effectiveTitle,
     effectiveRequester,
@@ -1931,7 +2351,31 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
     totalFindings,
     totalApplied,
     effectiveResultJson,
+    findingDispositions,
+    findingGovernanceNotes,
   ]);
+
+  async function handleRequestAgentRationale(findingId, agentKey, item) {
+    setRationaleModalOpen(true);
+    setRationaleLoading(true);
+    setRationaleText('');
+    setRationaleError(null);
+    try {
+      const data = await fetchFindingRationale({
+        tracking_id: result?.tracking_id || '',
+        document_id: effectiveDocId || '',
+        finding_id: findingId,
+        agent_key: agentKey,
+        finding_item: item && typeof item === 'object' ? item : { raw: String(item) },
+      });
+      setRationaleText(data.rationale || '');
+      logInteraction('finding_rationale_request', { finding_id: findingId, agent_key: agentKey });
+    } catch (e) {
+      setRationaleError(e.message || 'Request failed');
+    } finally {
+      setRationaleLoading(false);
+    }
+  }
 
   function scheduleGovernanceAutosave() {
     if (governanceAutosaveDebounceRef.current) clearTimeout(governanceAutosaveDebounceRef.current);
@@ -1964,19 +2408,6 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
       const next = { ...prev, [fid]: text };
       if (!String(text || '').trim()) delete next[fid];
       findingGovernanceNotesRef.current = next;
-      return next;
-    });
-    scheduleGovernanceAutosave();
-  }
-
-  function handleHazardControlChange(fid, value, gap) {
-    const model = String(gap?.hazard_control_type || '').trim();
-    const v = String(value || '').trim();
-    setFindingHazardControlTags((prev) => {
-      const next = { ...prev };
-      if (!v || v === model) delete next[fid];
-      else next[fid] = v;
-      findingHazardControlTagsRef.current = next;
       return next;
     });
     scheduleGovernanceAutosave();
@@ -2031,7 +2462,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         corrections_implemented: totalApplied,
         finding_dispositions: findingDispositions,
         finding_governance_notes: findingGovernanceNotes,
-        finding_hazard_control_tags: findingHazardControlTags,
+        finding_hazard_control_tags: {},
         governance_save_mode: 'dispositions_only',
         result_json: effectiveResultJson,
       });
@@ -2069,7 +2500,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         policy_ref: (governancePolicyRef || '').trim(),
         finding_dispositions: findingDispositions,
         finding_governance_notes: findingGovernanceNotes,
-        finding_hazard_control_tags: findingHazardControlTags,
+        finding_hazard_control_tags: {},
       };
       const { blob, filename } = await downloadAuditPackDocx(payload);
       const safeName = String(filename || 'audit-pack.docx').replace(/[/\\?%*:|"<>]/g, '-').trim() || 'audit-pack.docx';
@@ -2130,7 +2561,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         corrections_implemented: totalApplied,
         finding_dispositions: findingDispositions,
         finding_governance_notes: findingGovernanceNotes,
-        finding_hazard_control_tags: findingHazardControlTags,
+        finding_hazard_control_tags: {},
         governance_save_mode: 'dispositions_only',
         result_json: effectiveResultJson,
       });
@@ -2216,6 +2647,32 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
       {mode === 'review' && step === 'overview' && (
         <PhasePositioningBanner variant="compact" className="analyse-phase-banner" />
       )}
+      {step === 'overview' && steppedMode && result && steppedStripSteps.length > 0 && (
+        <div className="analyse-stepped-strip-wrap" aria-label="Stepped pipeline progress">
+          <p className="analyse-stepped-strip-caption">
+            Agents run in pipeline order — highlighted steps have finished; the rest run when you choose “Run next agent”.
+          </p>
+          <div className="analyse-loading-phase-strip analyse-stepped-strip-inline">
+            {steppedStripSteps.map((stepRow, index) => {
+              const state =
+                index < steppedAgentsRunCount
+                  ? 'done'
+                  : loading && index === steppedNextIdx
+                    ? 'active'
+                    : 'pending';
+              return (
+                <div
+                  key={stepRow.key}
+                  className={`analyse-loading-phase analyse-loading-phase-${state}`}
+                >
+                  <span className="analyse-loading-phase-dot" />
+                  <span className="analyse-loading-phase-label">{stepRow.label}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
       <form id="analyse-form" onSubmit={handleRun} className="analyse-form" style={{ display: step === 'overview' ? 'flex' : 'none' }}>
         {!effectiveDocId && (
           <div className="analyse-no-doc-warning">
@@ -2233,7 +2690,8 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
 
       {loading && (
         <AnalysisLoadingPanel
-          activeIndex={loadingStepIndex}
+          activeIndex={loadingStripActiveIndex}
+          orderedSteps={loadingOrderedSteps}
           progressPercent={
             streamProgress.total > 0
               ? (streamProgress.done / streamProgress.total) * 100
@@ -2255,6 +2713,16 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
         <div className="analyse-results-wrapper">
           {flagCounts && (
             <div className="flag-metrics-top">
+              {steppedMode && Array.isArray(result.agents_run) && result.agents_run.length > 0 && (
+                <p className="analyse-stepped-metrics-hint">
+                  <strong>Stepped pipeline:</strong>{' '}
+                  {result.agents_run.length} agent step{result.agents_run.length !== 1 ? 's' : ''} completed so far —{' '}
+                  <code>{result.agents_run.join(' → ')}</code>.
+                  The nine tiles are <em>finding categories</em>, not one-to-one with steps: many agents can add zero flags,
+                  and <strong>risk gaps</strong>, <strong>sequencing</strong>, <strong>formatting</strong>, and{' '}
+                  <strong>compliance</strong> usually populate only after those agents run in later steps.
+                </p>
+              )}
               <div className="metrics-grid">
                 {Object.entries(flagCounts)
                   .filter(([key]) => key !== 'content integrity')
@@ -2299,6 +2767,8 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 {selectedMetricFilter ? (
                   <>
                     Showing {(flagCounts[selectedMetricFilter] ?? 0) - (appliedCountByFlag[selectedMetricFilter] || 0)} remaining
+                    {' '}
+                    <span className="flag-metrics-filter-label">in {selectedMetricFilter}</span>
                     {appliedCountByFlag[selectedMetricFilter] > 0 && (
                       <span className="flag-metrics-pending"> ({appliedCountByFlag[selectedMetricFilter]} accepted)</span>
                     )}
@@ -2348,7 +2818,6 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                     state: {
                       findingDispositions,
                       findingGovernanceNotes,
-                      findingHazardControlTags,
                       governancePolicyRef: (governancePolicyRef || '').trim(),
                     },
                   });
@@ -2357,7 +2826,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 Governance summary & sign-off →
               </button>
               <span className="governance-summary-link-hint">
-                Dispositions, hazard control tags, and governance notes save automatically (and once more when you open the summary). Record formal sign-off on the next step.
+                Accept / edit / ignore responses and governance notes save automatically (and once more when you open the summary). Record formal sign-off on the next step.
               </span>
               {dispositionAutosaveStatus === 'saving' && (
                 <span className="disposition-autosave-pill" aria-live="polite">Saving…</span>
@@ -2440,7 +2909,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 className="doc-btn"
                 onClick={handleDownloadAuditPackDocx}
                 disabled={!result || auditPackDocxDownloading}
-                title="Download audit pack (Word .docx — includes governance dispositions and notes)"
+                title="Download audit pack (Word .docx — includes governance responses and notes)"
               >
                 {auditPackDocxDownloading ? 'Preparing pack…' : 'Download audit pack'}
               </button>
@@ -2475,15 +2944,14 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 onCheckWithAgent={handleCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId}
                 findingDispositions={findingDispositions}
                 findingGovernanceNotes={findingGovernanceNotes}
-                findingHazardControlTags={findingHazardControlTags}
                 onDispositionChange={handleDispositionChange}
                 onGovernanceNoteChange={handleGovernanceNoteChange}
-                onHazardControlChange={handleHazardControlChange}
+                onRequestAgentRationale={handleRequestAgentRationale}
               /></div>
             )}
             {result.cleanser_flags?.length > 0 && selectedMetricFilter === 'cleanser' && (
               <div id="agent-card-cleanser"><AgentCard title="Cleanser" items={result.cleanser_flags} agentKey="cleanser"
-                keys={['location', 'issue_category', 'current_text', 'issue', 'recommendation']} searchTextKeys={['current_text', 'location']}
+                keys={['location', 'representation_class_id', 'representation_standard_ref', 'issue_category', 'current_text', 'issue', 'recommendation']} searchTextKeys={['current_text', 'location']}
                 onFindingClick={effectiveDocId ? setHighlightSearch : undefined}
                 onApplyChange={handleApplyFinding} onAddNote={handleAddNote}
                 appliedFindings={appliedFindings} findingId={findingId}
@@ -2493,6 +2961,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 findingGovernanceNotes={findingGovernanceNotes}
                 onDispositionChange={handleDispositionChange}
                 onGovernanceNoteChange={handleGovernanceNoteChange}
+                onRequestAgentRationale={handleRequestAgentRationale}
               /></div>
             )}
             {result.structure_flags?.length > 0 && selectedMetricFilter === 'structure' && (
@@ -2506,6 +2975,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 findingGovernanceNotes={findingGovernanceNotes}
                 onDispositionChange={handleDispositionChange}
                 onGovernanceNoteChange={handleGovernanceNoteChange}
+                onRequestAgentRationale={handleRequestAgentRationale}
               /></div>
             )}
             {result.content_integrity_flags?.length > 0 && selectedMetricFilter === 'content integrity' && (
@@ -2519,6 +2989,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 findingGovernanceNotes={findingGovernanceNotes}
                 onDispositionChange={handleDispositionChange}
                 onGovernanceNoteChange={handleGovernanceNoteChange}
+                onRequestAgentRationale={handleRequestAgentRationale}
               /></div>
             )}
             {result.specifying_flags?.length > 0 && selectedMetricFilter === 'specifying' && (
@@ -2533,6 +3004,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 findingGovernanceNotes={findingGovernanceNotes}
                 onDispositionChange={handleDispositionChange}
                 onGovernanceNoteChange={handleGovernanceNoteChange}
+                onRequestAgentRationale={handleRequestAgentRationale}
               /></div>
             )}
             {result.sequencing_flags?.length > 0 && selectedMetricFilter === 'sequencing' && (
@@ -2547,6 +3019,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 findingGovernanceNotes={findingGovernanceNotes}
                 onDispositionChange={handleDispositionChange}
                 onGovernanceNoteChange={handleGovernanceNoteChange}
+                onRequestAgentRationale={handleRequestAgentRationale}
               /></div>
             )}
             {result.formatting_flags?.length > 0 && selectedMetricFilter === 'formatting' && (
@@ -2561,6 +3034,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 findingGovernanceNotes={findingGovernanceNotes}
                 onDispositionChange={handleDispositionChange}
                 onGovernanceNoteChange={handleGovernanceNoteChange}
+                onRequestAgentRationale={handleRequestAgentRationale}
               /></div>
             )}
             {result.compliance_flags?.length > 0 && selectedMetricFilter === 'compliance' && (
@@ -2575,6 +3049,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 findingGovernanceNotes={findingGovernanceNotes}
                 onDispositionChange={handleDispositionChange}
                 onGovernanceNoteChange={handleGovernanceNoteChange}
+                onRequestAgentRationale={handleRequestAgentRationale}
               /></div>
             )}
             {result.terminology_flags?.length > 0 && selectedMetricFilter === 'terminology' && (
@@ -2589,6 +3064,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 findingGovernanceNotes={findingGovernanceNotes}
                 onDispositionChange={handleDispositionChange}
                 onGovernanceNoteChange={handleGovernanceNoteChange}
+                onRequestAgentRationale={handleRequestAgentRationale}
               /></div>
             )}
             {result.conflicts?.length > 0 && selectedMetricFilter === 'conflicts' && (
@@ -2603,6 +3079,7 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 findingGovernanceNotes={findingGovernanceNotes}
                 onDispositionChange={handleDispositionChange}
                 onGovernanceNoteChange={handleGovernanceNoteChange}
+                onRequestAgentRationale={handleRequestAgentRationale}
               /></div>
             )}
           </div>
@@ -2673,9 +3150,57 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
                 placeholder="Draft content will appear here after analysis…"
               />
             ) : (
-              <DraftStructuredView value={displayDraft} lastAppliedRange={lastAppliedRange} />
+              <DraftStructuredView
+                value={displayDraft}
+                documentTitle={effectiveTitle}
+                documentId={effectiveDocId}
+                documentSections={documentSections}
+              />
             )}
           </section>
+        </div>
+      )}
+
+      {rationaleModalOpen && (
+        <div
+          className="finding-rationale-modal-overlay"
+          onClick={() => setRationaleModalOpen(false)}
+          onKeyDown={(e) => { if (e.key === 'Escape') setRationaleModalOpen(false); }}
+          role="presentation"
+        >
+          <div
+            className="finding-rationale-modal"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="finding-rationale-title"
+          >
+            <div className="finding-rationale-modal-header">
+              <h3 id="finding-rationale-title">Agent rationale</h3>
+              <button type="button" className="finding-rationale-close" onClick={() => setRationaleModalOpen(false)} aria-label="Close">×</button>
+            </div>
+            <div className="finding-rationale-modal-body">
+              {rationaleLoading && <p className="finding-rationale-status">Generating explanation…</p>}
+              {rationaleError && <p className="finding-rationale-error" role="alert">{rationaleError}</p>}
+              {!rationaleLoading && rationaleText ? (
+                <pre className="finding-rationale-pre">{rationaleText}</pre>
+              ) : null}
+              {!rationaleLoading && !rationaleError && !rationaleText ? (
+                <p className="finding-rationale-muted">No text returned.</p>
+              ) : null}
+            </div>
+            <div className="finding-rationale-modal-footer">
+              <button
+                type="button"
+                className="doc-btn"
+                onClick={() => { if (rationaleText) navigator.clipboard.writeText(rationaleText); }}
+                disabled={!rationaleText}
+              >
+                Copy for training
+              </button>
+              <button type="button" className="doc-btn primary" onClick={() => setRationaleModalOpen(false)}>Close</button>
+            </div>
+          </div>
         </div>
       )}
       </div>
@@ -2687,23 +3212,171 @@ export default function AnalysePage({ mode = 'review', step = 'overview' }) {
 // Parse plain draft text into sections, numbered lists, bullet lists, paragraphs
 // (so we can render FSP003-style layout: section headings, numbered steps, bullets)
 // ---------------------------------------------------------------------------
+const DRAFT_SECTION_ALIASES = {
+  title: ['title', 'document title', 'sop name', 'name', 'subject'],
+  scope: ['scope'],
+  references: ['reference documents', 'references', 'related documents'],
+  responsibility: ['responsibility', 'responsibilities'],
+  frequency: ['frequency'],
+  procedure: ['procedure', 'procedures', 'method', 'methods'],
+};
+
+function matchDraftSectionKey(heading) {
+  const t = String(heading || '').trim().toLowerCase();
+  if (!t) return null;
+  for (const [key, aliases] of Object.entries(DRAFT_SECTION_ALIASES)) {
+    if (aliases.some((a) => t === a || t.startsWith(`${a}:`))) return key;
+  }
+  return null;
+}
+
+/** Split SOP text that glues "Responsibility Line Leaders - … FST - …" into parseable chunks. */
+function preprocessDraftForSections(raw) {
+  let s = normalizeDraftPlainText(raw);
+  s = s.replace(/^Responsibility\s+(?=[A-Z][a-z])/im, 'Responsibility\n');
+  s = s.replace(
+    /([.!?\n])\s*(Scope|Reference documents?|References|Related documents|Responsibility|Responsibilities|Frequency|Procedure|Procedures|Definitions|Overview|Introduction)\b\s*[:.\-–—]?\s*/gi,
+    (_, punct, name) => `${punct}\n\n${name}\n`,
+  );
+  return s;
+}
+
+/** "Line Leaders - … FST - …" → bullet items for structured view */
+function tryRoleDashBulletBlock(joined) {
+  if (!joined || !/[-–—]\s/.test(joined)) return null;
+  const splitRe =
+    /\s+(?=(?:[A-Z][A-Za-z]+(?:\s+[A-Z][a-z]+){0,3}|[A-Z]{2,12})\s*[-–—]\s+)/;
+  if (!splitRe.test(joined)) return null;
+  const items = joined.split(splitRe).map((x) => x.trim()).filter(Boolean);
+  if (items.length < 2) return null;
+  return { type: 'bullet', items };
+}
+
+function buildSectionModelFromDocumentSections(sections) {
+  const sectionModel = {
+    title: [],
+    scope: [],
+    references: [],
+    responsibility: [],
+    frequency: [],
+    procedure: [],
+  };
+  for (const sec of sections || []) {
+    if (!sec) continue;
+    let heading = String(sec.heading || '').trim();
+    const content = String(sec.content || '').trim();
+    heading = heading.replace(/^\((.+)\)$/, '$1').trim();
+    const key = matchDraftSectionKey(heading);
+    if (key === 'title') {
+      if (content) sectionModel.title.push({ type: 'paragraph', content });
+      continue;
+    }
+    if (!key) {
+      const blob = [heading, content].filter(Boolean).join('\n\n');
+      if (blob) sectionModel.procedure.push({ type: 'paragraph', content: blob });
+      continue;
+    }
+    for (const para of content.split(/\n\n+/).map((p) => p.trim()).filter(Boolean)) {
+      sectionModel[key].push({ type: 'paragraph', content: para });
+    }
+  }
+  return sectionModel;
+}
+
+function buildSectionModelFromParsedBlocks(blocks) {
+  const sectionModel = {
+    title: [],
+    scope: [],
+    references: [],
+    responsibility: [],
+    frequency: [],
+    procedure: [],
+  };
+  let currentKey = 'procedure';
+  for (const block of blocks) {
+    if (block.type === 'section') {
+      const key = matchDraftSectionKey(block.content);
+      if (key) {
+        currentKey = key;
+      } else {
+        currentKey = 'procedure';
+        const line = String(block.content || '').trim();
+        if (line) sectionModel.procedure.push({ type: 'paragraph', content: line });
+      }
+      continue;
+    }
+    sectionModel[currentKey].push(block);
+  }
+  return sectionModel;
+}
+
+function draftBlocksRichness(blocks) {
+  if (!blocks?.length) return 0;
+  return blocks.reduce((acc, bl) => {
+    if (bl.type === 'bullet' || bl.type === 'numbered') {
+      return acc + 12 + (bl.items?.length || 0);
+    }
+    return acc + 1 + Math.min(4, String(bl.content || '').length / 800);
+  }, 0);
+}
+
+function mergeDraftSectionModels(fromReg, fromParse) {
+  const keys = ['title', 'scope', 'references', 'responsibility', 'frequency', 'procedure'];
+  const out = {};
+  for (const k of keys) {
+    const a = fromReg[k] || [];
+    const b = fromParse[k] || [];
+    if (k === 'procedure') {
+      if (!a.length) out[k] = b;
+      else if (!b.length) out[k] = a;
+      else out[k] = draftBlocksRichness(b) > draftBlocksRichness(a) + 0.5 ? b : a;
+      continue;
+    }
+    out[k] = a.length > 0 ? a : b;
+  }
+  return out;
+}
+
 const STANDARD_SECTION_NAMES = [
-  'Scope', 'Reference documents', 'References', 'Responsibility', 'Responsibilities',
+  'Title', 'Document title', 'Scope', 'Reference documents', 'References', 'Responsibility', 'Responsibilities',
   'Frequency', 'Procedure', 'Procedures', 'Method', 'Methods',
   'Record Keeping', 'Corrective Actions', 'Picking orders', 'Loading Procedure',
   'Trailer information', 'Definitions', 'Overview', 'Introduction',
-  'Related documents', 'Revision history', 'History of Change'
+  'Related documents', 'Revision history', 'History of Change',
 ];
 
 function parseDraftStructure(text) {
   if (!text || typeof text !== 'string') return [];
-  const lines = text.split(/\r?\n/);
+  const normalized = preprocessDraftForSections(text);
+  const lines = normalized.split(/\r?\n/);
   const blocks = [];
   let i = 0;
 
   function flushParagraph(paraLines) {
     const joined = paraLines.map((l) => l.trim()).join(' ').trim();
-    if (joined) blocks.push({ type: 'paragraph', content: joined });
+    if (!joined) return;
+    const dashBullets = tryRoleDashBulletBlock(joined);
+    if (dashBullets) {
+      blocks.push(dashBullets);
+      return;
+    }
+    const minLen = 360;
+    if (joined.length >= minLen && !/\n/.test(joined)) {
+      const sentences = joined
+        .split(/(?<=[.!?])\s+(?=[A-Z0-9(])/)
+        .map((x) => x.trim())
+        .filter(Boolean);
+      if (sentences.length > 1) {
+        for (const p of sentences) blocks.push({ type: 'paragraph', content: p });
+        return;
+      }
+      const clauses = joined.split(/;\s+(?=[A-Z])/).map((x) => x.trim()).filter(Boolean);
+      if (clauses.length > 1) {
+        for (const p of clauses) blocks.push({ type: 'paragraph', content: p });
+        return;
+      }
+    }
+    blocks.push({ type: 'paragraph', content: joined });
   }
 
   function isSectionHeading(line) {
@@ -2767,53 +3440,38 @@ function parseDraftStructure(text) {
 // ---------------------------------------------------------------------------
 // Structured draft view — FSP003-style layout (section headings, lists)
 // ---------------------------------------------------------------------------
-function DraftStructuredView({ value, lastAppliedRange }) {
-  const blocks = parseDraftStructure(value || '');
-  if (blocks.length === 0) {
+function DraftStructuredView({ value, documentTitle, documentId, documentSections }) {
+  const fromRegistry = buildSectionModelFromDocumentSections(documentSections);
+  const parsedBlocks = parseDraftStructure(value || '');
+  const fromParse = buildSectionModelFromParsedBlocks(parsedBlocks);
+  const merged = mergeDraftSectionModels(fromRegistry, fromParse);
+
+  const titleFromBlocks = () => {
+    const p = merged.title.find((b) => b.type === 'paragraph' && String(b.content || '').trim());
+    return p ? String(p.content).trim() : '';
+  };
+  const resolvedTitle =
+    String(documentTitle || '').trim()
+    || titleFromBlocks()
+    || String(documentId || '').trim();
+
+  const extraTitleBlocks = merged.title.filter((b) => {
+    if (b.type !== 'paragraph') return true;
+    const c = String(b.content || '').trim();
+    return c && c !== resolvedTitle && c !== String(documentTitle || '').trim();
+  });
+
+  const hasAnySignal =
+    !!(value && value.trim())
+    || (Array.isArray(documentSections) && documentSections.length > 0)
+    || !!resolvedTitle;
+
+  if (!hasAnySignal) {
     return (
       <div className="draft-structured-view draft-structured-view--empty">
         <p className="draft-structured-empty">No draft content to display.</p>
       </div>
     );
-  }
-  const SECTION_ALIASES = {
-    scope: ['scope'],
-    references: ['reference documents', 'references', 'related documents'],
-    responsibility: ['responsibility', 'responsibilities'],
-    frequency: ['frequency'],
-    procedure: ['procedure', 'procedures', 'method', 'methods'],
-  };
-
-  const sectionModel = {
-    scope: [],
-    references: [],
-    responsibility: [],
-    frequency: [],
-    procedure: [],
-  };
-
-  const matchSectionKey = (heading) => {
-    const t = String(heading || '').trim().toLowerCase();
-    if (!t) return null;
-    for (const [key, aliases] of Object.entries(SECTION_ALIASES)) {
-      if (aliases.some((a) => t === a || t.startsWith(`${a}:`))) return key;
-    }
-    return null;
-  };
-
-  let currentKey = 'procedure';
-  for (const block of blocks) {
-    if (block.type === 'section') {
-      const key = matchSectionKey(block.content);
-      if (key) {
-        currentKey = key;
-      } else {
-        currentKey = 'procedure';
-        sectionModel.procedure.push({ type: 'paragraph', content: String(block.content || '').trim() });
-      }
-      continue;
-    }
-    sectionModel[currentKey].push(block);
   }
 
   const isAmendment = (text) => /^\s*amendment\s*:/i.test(String(text || '').trim());
@@ -2858,12 +3516,20 @@ function DraftStructuredView({ value, lastAppliedRange }) {
 
   return (
     <div className="draft-structured-view">
-      <section className="draft-section-card"><h3 className="draft-structured-section">Title</h3><p className="draft-template-empty">Preserved from source document metadata.</p></section>
-      <section className="draft-section-card"><h3 className="draft-structured-section">Scope</h3>{renderBlocks('scope', sectionModel.scope)}</section>
-      <section className="draft-section-card"><h3 className="draft-structured-section">Reference Documents</h3>{renderBlocks('references', sectionModel.references)}</section>
-      <section className="draft-section-card"><h3 className="draft-structured-section">Responsibility</h3>{renderBlocks('responsibility', sectionModel.responsibility)}</section>
-      <section className="draft-section-card"><h3 className="draft-structured-section">Frequency</h3>{renderBlocks('frequency', sectionModel.frequency)}</section>
-      <section className="draft-section-card"><h3 className="draft-structured-section">Procedure</h3>{renderBlocks('procedure', sectionModel.procedure)}</section>
+      <section className="draft-section-card">
+        <h3 className="draft-structured-section">Title</h3>
+        {resolvedTitle ? (
+          <p className="draft-structured-para draft-document-title">{resolvedTitle}</p>
+        ) : (
+          <p className="draft-template-empty">No title — set it in Configure or re-ingest with a document title.</p>
+        )}
+        {extraTitleBlocks.length > 0 ? renderBlocks('title-extra', extraTitleBlocks) : null}
+      </section>
+      <section className="draft-section-card"><h3 className="draft-structured-section">Scope</h3>{renderBlocks('scope', merged.scope)}</section>
+      <section className="draft-section-card"><h3 className="draft-structured-section">Reference Documents</h3>{renderBlocks('references', merged.references)}</section>
+      <section className="draft-section-card"><h3 className="draft-structured-section">Responsibility</h3>{renderBlocks('responsibility', merged.responsibility)}</section>
+      <section className="draft-section-card"><h3 className="draft-structured-section">Frequency</h3>{renderBlocks('frequency', merged.frequency)}</section>
+      <section className="draft-section-card"><h3 className="draft-structured-section">Procedure</h3>{renderBlocks('procedure', merged.procedure)}</section>
       <section className="draft-section-card">
         <h3 className="draft-structured-section">History of document change</h3>
         <p className="draft-template-empty">Populate change log at approval stage (date, issue number, reason, training required, authorised by).</p>
@@ -3080,7 +3746,7 @@ function OriginalDocumentPanel({ htmlContent, content, sections = [], sourceType
 // ---------------------------------------------------------------------------
 // Risk Gap card — sorted by HACCP RPN score, shows score bar inline
 // ---------------------------------------------------------------------------
-function RiskGapCard({ items, agentKey, onFindingClick, onApplyChange, onAddNote, appliedFindings, findingId, customSolutionByFindingId, onCustomSolutionChange, onCheckWithAgent, validateSolutionResult, validatingFindingId, findingDispositions, findingGovernanceNotes, findingHazardControlTags, onDispositionChange, onGovernanceNoteChange, onHazardControlChange }) {
+function RiskGapCard({ items, agentKey, onFindingClick, onApplyChange, onAddNote, appliedFindings, findingId, customSolutionByFindingId, onCustomSolutionChange, onCheckWithAgent, validateSolutionResult, validatingFindingId, findingDispositions, findingGovernanceNotes, onDispositionChange, onGovernanceNoteChange, onRequestAgentRationale }) {
   const [expanded, setExpanded] = useState(false);
   const sorted = [...items].sort((a, b) => (b.fmea_score || 0) - (a.fmea_score || 0));
   const display = expanded ? sorted : sorted.slice(0, 3);
@@ -3095,10 +3761,6 @@ function RiskGapCard({ items, agentKey, onFindingClick, onApplyChange, onAddNote
         {display.map((gap, i) => {
           const id = findingId(agentKey, gap);
           const isApplied = appliedFindings?.has(id);
-          const modelHz = String(gap.hazard_control_type || '').trim();
-          const hzSelectValue = findingHazardControlTags && Object.prototype.hasOwnProperty.call(findingHazardControlTags, id)
-            ? findingHazardControlTags[id]
-            : modelHz;
           return (
           <li
             key={i}
@@ -3146,9 +3808,7 @@ function RiskGapCard({ items, agentKey, onFindingClick, onApplyChange, onAddNote
               onCheckWithAgent={onCheckWithAgent} validateFeedback={validateSolutionResult?.findingId === id ? validateSolutionResult.feedback : null} isChecking={validatingFindingId === id}
               dispositionValue={findingDispositions?.[id]} onDispositionChange={onDispositionChange}
               governanceNoteValue={findingGovernanceNotes?.[id]} onGovernanceNoteChange={onGovernanceNoteChange}
-              hazardControlValue={hzSelectValue}
-              onHazardControlChange={onHazardControlChange ? (fid, v) => onHazardControlChange(fid, v, gap) : undefined}
-              modelHazardHint={modelHz || null}
+              onRequestAgentRationale={onRequestAgentRationale}
             />
           </li>
           );
@@ -3166,7 +3826,7 @@ function RiskGapCard({ items, agentKey, onFindingClick, onApplyChange, onAddNote
 // ---------------------------------------------------------------------------
 // Structure flag card — omission/ordering, shows severity pill
 // ---------------------------------------------------------------------------
-function StructureCard({ items, agentKey, onFindingClick, onApplyChange, onAddNote, appliedFindings, findingId, customSolutionByFindingId, onCustomSolutionChange, onCheckWithAgent, validateSolutionResult, validatingFindingId, findingDispositions, findingGovernanceNotes, onDispositionChange, onGovernanceNoteChange }) {
+function StructureCard({ items, agentKey, onFindingClick, onApplyChange, onAddNote, appliedFindings, findingId, customSolutionByFindingId, onCustomSolutionChange, onCheckWithAgent, validateSolutionResult, validatingFindingId, findingDispositions, findingGovernanceNotes, onDispositionChange, onGovernanceNoteChange, onRequestAgentRationale }) {
   const [expanded, setExpanded] = useState(false);
   // Required-section omissions first, then ordering, then optional omissions
   const sorted = [...items].sort((a, b) => {
@@ -3212,7 +3872,8 @@ function StructureCard({ items, agentKey, onFindingClick, onApplyChange, onAddNo
               customSolution={customSolutionByFindingId?.[id]} onCustomSolutionChange={onCustomSolutionChange}
               onCheckWithAgent={onCheckWithAgent} validateFeedback={validateSolutionResult?.findingId === id ? validateSolutionResult.feedback : null} isChecking={validatingFindingId === id}
               dispositionValue={findingDispositions?.[id]} onDispositionChange={onDispositionChange}
-              governanceNoteValue={findingGovernanceNotes?.[id]} onGovernanceNoteChange={onGovernanceNoteChange} />
+              governanceNoteValue={findingGovernanceNotes?.[id]} onGovernanceNoteChange={onGovernanceNoteChange}
+              onRequestAgentRationale={onRequestAgentRationale} />
           </li>
           );
         })}
@@ -3229,7 +3890,7 @@ function StructureCard({ items, agentKey, onFindingClick, onApplyChange, onAddNo
 // ---------------------------------------------------------------------------
 // Content integrity card — grouped by flag_type sub-section
 // ---------------------------------------------------------------------------
-function ContentIntegrityCard({ items, agentKey, onFindingClick, onApplyChange, onAddNote, appliedFindings, findingId, customSolutionByFindingId, onCustomSolutionChange, onCheckWithAgent, validateSolutionResult, validatingFindingId, findingDispositions, findingGovernanceNotes, onDispositionChange, onGovernanceNoteChange }) {
+function ContentIntegrityCard({ items, agentKey, onFindingClick, onApplyChange, onAddNote, appliedFindings, findingId, customSolutionByFindingId, onCustomSolutionChange, onCheckWithAgent, validateSolutionResult, validatingFindingId, findingDispositions, findingGovernanceNotes, onDispositionChange, onGovernanceNoteChange, onRequestAgentRationale }) {
   const [expanded, setExpanded] = useState(false);
   const grouped = groupBy(items, 'flag_type');
 
@@ -3259,7 +3920,8 @@ function ContentIntegrityCard({ items, agentKey, onFindingClick, onApplyChange, 
                 customSolutionByFindingId={customSolutionByFindingId} onCustomSolutionChange={onCustomSolutionChange}
                 onCheckWithAgent={onCheckWithAgent} validateSolutionResult={validateSolutionResult} validatingFindingId={validatingFindingId}
                 findingDispositions={findingDispositions} findingGovernanceNotes={findingGovernanceNotes}
-                onDispositionChange={onDispositionChange} onGovernanceNoteChange={onGovernanceNoteChange} />
+                onDispositionChange={onDispositionChange} onGovernanceNoteChange={onGovernanceNoteChange}
+                onRequestAgentRationale={onRequestAgentRationale} />
             );
           })}
         </div>
@@ -3293,7 +3955,7 @@ function ContentIntegrityCard({ items, agentKey, onFindingClick, onApplyChange, 
   );
 }
 
-function IntegrityGroup({ ftype, items, agentKey, onFindingClick, onApplyChange, onAddNote, appliedFindings, findingId, customSolutionByFindingId, onCustomSolutionChange, onCheckWithAgent, validateSolutionResult, validatingFindingId, findingDispositions, findingGovernanceNotes, onDispositionChange, onGovernanceNoteChange }) {
+function IntegrityGroup({ ftype, items, agentKey, onFindingClick, onApplyChange, onAddNote, appliedFindings, findingId, customSolutionByFindingId, onCustomSolutionChange, onCheckWithAgent, validateSolutionResult, validatingFindingId, findingDispositions, findingGovernanceNotes, onDispositionChange, onGovernanceNoteChange, onRequestAgentRationale }) {
   const [open, setOpen] = useState(false);
   const label = INTEGRITY_TYPE_LABELS[ftype] || ftype.replace(/_/g, ' ');
   const display = open ? items : items.slice(0, 2);
@@ -3343,7 +4005,8 @@ function IntegrityGroup({ ftype, items, agentKey, onFindingClick, onApplyChange,
               customSolution={customSolutionByFindingId?.[id]} onCustomSolutionChange={onCustomSolutionChange}
               onCheckWithAgent={onCheckWithAgent} validateFeedback={validateSolutionResult?.findingId === id ? validateSolutionResult.feedback : null} isChecking={validatingFindingId === id}
               dispositionValue={findingDispositions?.[id]} onDispositionChange={onDispositionChange}
-              governanceNoteValue={findingGovernanceNotes?.[id]} onGovernanceNoteChange={onGovernanceNoteChange} />
+              governanceNoteValue={findingGovernanceNotes?.[id]} onGovernanceNoteChange={onGovernanceNoteChange}
+              onRequestAgentRationale={onRequestAgentRationale} />
           </li>
           );
         })}
@@ -3360,7 +4023,7 @@ function IntegrityGroup({ ftype, items, agentKey, onFindingClick, onApplyChange,
 // ---------------------------------------------------------------------------
 // Generic agent card — supports click-to-highlight via searchTextKey or searchTextKeys (array, try in order)
 // ---------------------------------------------------------------------------
-function AgentCard({ title, items, keys, agentKey, searchTextKey = 'location', searchTextKeys, onFindingClick, onApplyChange, onAddNote, appliedFindings, findingId, customSolutionByFindingId, onCustomSolutionChange, onCheckWithAgent, validateSolutionResult, validatingFindingId, findingDispositions, findingGovernanceNotes, onDispositionChange, onGovernanceNoteChange }) {
+function AgentCard({ title, items, keys, agentKey, searchTextKey = 'location', searchTextKeys, onFindingClick, onApplyChange, onAddNote, appliedFindings, findingId, customSolutionByFindingId, onCustomSolutionChange, onCheckWithAgent, validateSolutionResult, validatingFindingId, findingDispositions, findingGovernanceNotes, onDispositionChange, onGovernanceNoteChange, onRequestAgentRationale }) {
   const [expanded, setExpanded] = useState(false);
   const displayItems = expanded ? items : items.slice(0, 3);
   const hasMore = items.length > 3;
@@ -3486,7 +4149,8 @@ function AgentCard({ title, items, keys, agentKey, searchTextKey = 'location', s
               customSolution={customSolutionByFindingId?.[id]} onCustomSolutionChange={onCustomSolutionChange}
               onCheckWithAgent={onCheckWithAgent} validateFeedback={validateSolutionResult?.findingId === id ? validateSolutionResult.feedback : null} isChecking={validatingFindingId === id}
               dispositionValue={findingDispositions?.[id]} onDispositionChange={onDispositionChange}
-              governanceNoteValue={findingGovernanceNotes?.[id]} onGovernanceNoteChange={onGovernanceNoteChange} />
+              governanceNoteValue={findingGovernanceNotes?.[id]} onGovernanceNoteChange={onGovernanceNoteChange}
+              onRequestAgentRationale={onRequestAgentRationale} />
           </li>
           );
         })}

@@ -16,6 +16,8 @@ _FINDING_ID_HASH_SKIP = frozenset({
     "requirement_reference",
     "clause_mapping",
     "hazard_control_type",
+    "representation_class_id",
+    "representation_standard_ref",
 })
 
 
@@ -50,30 +52,24 @@ def stable_finding_id(agent_key: str, item: dict | None) -> str:
     return f"{agent_key}:{_js_string_hash(payload)}"
 
 
-def hazard_control_label(val: str) -> str:
-    """Normalize stored tag to display label; empty if unset."""
-    v = (val or "").strip().lower()
-    if v == "ccp":
-        return "CCP"
-    if v == "oprp":
-        return "oPRP"
-    if v == "prp":
-        return "PRP"
-    return ""
-
-
-def effective_hazard_control_for_risk_gap(gap: dict, fht: dict) -> str:
-    """User map (`finding_hazard_control_tags`) overrides model `hazard_control_type`."""
-    if not isinstance(gap, dict):
-        return ""
-    fid = stable_finding_id("risk", gap)
-    raw = fht.get(fid) if isinstance(fht, dict) else None
-    if raw is None:
-        raw = fht.get(str(fid)) if isinstance(fht, dict) else None
-    user = (str(raw).strip() if raw is not None else "")
-    if user:
-        return user
-    return str(gap.get("hazard_control_type") or "").strip()
+def finding_response_label(value: str | None) -> str:
+    """User QA response — matches frontend `formatFindingResponseLabel` (incl. legacy dispositions)."""
+    v = str(value or "").strip().lower()
+    if not v:
+        return "—"
+    if v == "accept":
+        return "Accept"
+    if v == "edit":
+        return "Edit"
+    if v == "ignore":
+        return "Ignore"
+    if v == "must_fix":
+        return "Must-fix (legacy)"
+    if v == "advisory":
+        return "Advisory (legacy)"
+    if v == "info":
+        return "Info (legacy)"
+    return str(value).strip() or "—"
 
 
 def _h(title: str, level: int = 2) -> str:
@@ -185,25 +181,18 @@ def export_from_dict(data: dict, *, audit_pack: bool = False) -> str:
             lines.append(_divider())
         fd = data.get("finding_dispositions") if isinstance(data.get("finding_dispositions"), dict) else {}
         fgn = data.get("finding_governance_notes") if isinstance(data.get("finding_governance_notes"), dict) else {}
-        fht = data.get("finding_hazard_control_tags") if isinstance(data.get("finding_hazard_control_tags"), dict) else {}
-        risk_hz_model: dict[str, str] = {}
-        for _g in data.get("risk_gaps") or []:
-            if isinstance(_g, dict):
-                rid = stable_finding_id("risk", _g)
-                risk_hz_model[rid] = str(_g.get("hazard_control_type") or "").strip()
-        row_ids = sorted(set(fd.keys()) | set(fgn.keys()) | set(fht.keys()), key=lambda x: str(x))
+        row_ids = sorted(set(fd.keys()) | set(fgn.keys()), key=lambda x: str(x))
         if row_ids:
-            lines.append(_h("Finding disposition (QA)", 2))
-            lines.append("| Finding ID | Disposition | Governance note | Hazard control |")
-            lines.append("|---|---|---|---|")
+            lines.append(_h("Finding responses (QA)", 2))
+            lines.append("| Finding ID | Response | Governance note |")
+            lines.append("|---|---|---|")
             for fid in row_ids:
                 disp = fd.get(fid, "")
                 note = (fgn.get(fid) or "").strip()
                 if isinstance(disp, dict):
                     disp = str(disp)
-                hz_raw = str(fht.get(fid) or "").strip() or risk_hz_model.get(str(fid), "")
-                hz = hazard_control_label(hz_raw) or "—"
-                lines.append(f"| `{fid}` | {disp or '—'} | {note or '—'} | {hz} |")
+                resp = finding_response_label(str(disp) if disp else "")
+                lines.append(f"| `{fid}` | {resp} | {note or '—'} |")
             lines.append("")
             lines.append(_divider())
     else:
@@ -273,7 +262,6 @@ def export_from_dict(data: dict, *, audit_pack: bool = False) -> str:
         lines.append("")
 
     gaps = data.get("risk_gaps", []) or []
-    fht_all = data.get("finding_hazard_control_tags") if isinstance(data.get("finding_hazard_control_tags"), dict) else {}
     lines.append(_h("Risk Gaps", 2))
     lines.append(f"**Count:** {len(gaps)}\n")
     gaps_sorted = sorted(gaps, key=lambda g: g.get("fmea_score", 0) or 0, reverse=True)
@@ -290,10 +278,6 @@ def export_from_dict(data: dict, *, audit_pack: bool = False) -> str:
             else "*(not scored)*"
         )
         lines.append(f"- **{g.get('location', '—')}** — {rpn_str}")
-        if isinstance(g, dict):
-            hz_l = hazard_control_label(effective_hazard_control_for_risk_gap(g, fht_all))
-            if hz_l:
-                lines.append(f"  - *Hazard control (CCP / oPRP / PRP):* {hz_l}")
         lines.append(f"  - *Issue:* {g.get('issue', '')}")
         lines.append(f"  - *Risk:* {g.get('risk', '')}")
         lines.append(f"  - *Recommendation:* {g.get('recommendation', '')}")

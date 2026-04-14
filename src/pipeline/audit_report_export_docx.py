@@ -12,11 +12,7 @@ from io import BytesIO
 from docx import Document
 from docx.shared import Inches
 
-from src.pipeline.audit_report_export import (
-    effective_hazard_control_for_risk_gap,
-    hazard_control_label,
-    stable_finding_id,
-)
+from src.pipeline.audit_report_export import finding_response_label
 
 
 def _sites_display(data: dict) -> str:
@@ -108,34 +104,25 @@ def export_docx_bytes(data: dict, *, audit_pack: bool = True) -> bytes:
     if audit_pack:
         fd = data.get("finding_dispositions") if isinstance(data.get("finding_dispositions"), dict) else {}
         fgn = data.get("finding_governance_notes") if isinstance(data.get("finding_governance_notes"), dict) else {}
-        fht = data.get("finding_hazard_control_tags") if isinstance(data.get("finding_hazard_control_tags"), dict) else {}
-        risk_hz_model: dict[str, str] = {}
-        for _g in data.get("risk_gaps") or []:
-            if isinstance(_g, dict):
-                rid = stable_finding_id("risk", _g)
-                risk_hz_model[rid] = str(_g.get("hazard_control_type") or "").strip()
-        row_ids = sorted(set(fd.keys()) | set(fgn.keys()) | set(fht.keys()), key=lambda x: str(x))
+        row_ids = sorted(set(fd.keys()) | set(fgn.keys()), key=lambda x: str(x))
         if row_ids:
-            doc.add_heading("Finding disposition (QA)", level=1)
-            table = doc.add_table(rows=1, cols=4)
+            doc.add_heading("Finding responses (QA)", level=1)
+            table = doc.add_table(rows=1, cols=3)
             table.style = "Table Grid"
             hdr = table.rows[0].cells
             hdr[0].text = "Finding ID"
-            hdr[1].text = "Disposition"
+            hdr[1].text = "Response"
             hdr[2].text = "Governance note"
-            hdr[3].text = "Hazard control"
             for fid in row_ids:
                 disp = fd.get(fid, "")
                 note = (fgn.get(fid) or "").strip()
                 if isinstance(disp, dict):
                     disp = str(disp)
-                hz_raw = str(fht.get(fid) or "").strip() or risk_hz_model.get(str(fid), "")
-                hz = hazard_control_label(hz_raw) or "—"
+                resp = finding_response_label(str(disp) if disp else "")
                 r = table.add_row().cells
                 r[0].text = str(fid)
-                r[1].text = disp or "—"
+                r[1].text = resp
                 r[2].text = note or "—"
-                r[3].text = hz
             doc.add_paragraph("")
 
     # Flag summary
@@ -200,7 +187,6 @@ def export_docx_bytes(data: dict, *, audit_pack: bool = True) -> bytes:
 
     # Risk gaps (top by score)
     gaps = data.get("risk_gaps", []) or []
-    fht_gaps = data.get("finding_hazard_control_tags") if isinstance(data.get("finding_hazard_control_tags"), dict) else {}
     doc.add_heading("Risk Gaps", level=1)
     doc.add_paragraph(f"Count: {len(gaps)}")
     gaps_sorted = sorted(
@@ -227,9 +213,6 @@ def export_docx_bytes(data: dict, *, audit_pack: bool = True) -> bytes:
             rpn_lines.append("Dimensions: " + " × ".join(dims))
         if rpn_lines:
             doc.add_paragraph(" | ".join(rpn_lines))
-        hz_l = hazard_control_label(effective_hazard_control_for_risk_gap(g, fht_gaps))
-        if hz_l:
-            doc.add_paragraph(f"Hazard control (CCP / oPRP / PRP): {hz_l}")
         issue = _safe_str(g.get("issue", "")).strip()
         if issue:
             doc.add_paragraph(f"Issue: {issue}")
